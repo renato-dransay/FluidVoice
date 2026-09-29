@@ -254,7 +254,7 @@ struct MeetingFloatingCaptionsContent: View {
         HStack(spacing: 8) {
             Image(nsImage: Self.fluidVoiceIcon)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
+                .scaledToFit()
                 .frame(width: 18, height: 18)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .accessibilityHidden(true)

@@ -522,7 +522,7 @@ private struct MeetingDetectionPromptContent: View {
                 if let icon = self.controller.appIcon {
                     Image(nsImage: icon)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .scaledToFit()
                         .frame(width: 34, height: 34)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else {

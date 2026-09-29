@@ -761,7 +761,7 @@ extension VoiceEngineSettingsView {
             } else if let imageName {
                 Image(imageName)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .scaledToFit()
                     // NVIDIA logo larger to fill more of the container
                     .frame(width: isNvidia ? 24 : 18, height: isNvidia ? 24 : 18)
             } else {
