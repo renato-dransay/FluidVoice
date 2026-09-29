@@ -1,12 +1,14 @@
 # OpenRouter transcription
 
-The personal app starts with local speech recognition and AI enhancement off. In **AI Settings > Voice Engine**, select **OpenRouter**, save a key, choose the dictation mode, and validate it. The key is stored in the personal app's macOS Keychain service. Existing settings retain **Transcription only** until you explicitly select **Transcribe + style**.
+The personal app starts with local speech recognition and AI enhancement off. In **AI Settings > Voice Engine**, the **Local** and **OpenRouter** tabs only show settings; browsing a tab does not activate its provider. The active voice engine is shown above the tabs. To enable OpenRouter, open its tab, save a key, choose the dictation mode, validate it, and turn on **Use OpenRouter for transcription**. Turn the switch off to return to the selected local model, or activate a model in the Local tab. Removing the key also turns OpenRouter off. The key is stored in the personal app's macOS Keychain service. Existing settings retain **Transcription only** until you explicitly select **Transcribe + style**.
 
 Key validation checks authentication and supported models for the selected dictation mode. Audio dictation models must support audio input, text output, and structured output. Validation cannot guarantee that your account permits a provider serving every listed model. For example, an account allowing only OpenAI, Anthropic, and Google cannot currently use the Whisper models served by Groq or DeepInfra. Review your own [OpenRouter provider permissions](https://openrouter.ai/settings/privacy) when the app reports that no provider is available. The app never changes these account restrictions, pins an underlying host, or silently switches providers.
 
 ## Dictation
 
-Dictation uploads audio after recording stops; it does not send cloud preview requests. Each operation keeps its model, language, instructions, and credentials together so changing settings does not alter an in-progress request.
+Dictation uploads audio after recording stops; it does not send cloud preview requests. Dictation and imported files detect language automatically. Optional **Primary language** and **Secondary language** preferences describe languages you commonly speak without forcing either language or excluding other supported languages. Leave both empty for detection without hints. A previous manual language selection becomes a primary hint instead of forcing recognition. Each operation keeps its provider, model, hints, instructions, and credentials together so changing settings does not alter an in-progress request.
+
+Combined mode sends language hints with the audio instructions. For the transcription endpoint, OpenRouter ignores top-level multipart `prompt` fields, so requests with hints use its documented JSON `provider.options` mechanism. Prompts are provided for OpenAI, Groq, and Together, without pinning a host or changing account permissions. DeepInfra prompt forwarding has not been verified and receives no prompt. The serving provider may ignore hints; language coverage and mixed-language accuracy still depend on the model. See the [OpenRouter speech-to-text contract](https://openrouter.ai/docs/guides/overview/multimodal/stt).
 
 ### Transcribe + style
 
@@ -20,7 +22,7 @@ Combined dictation is limited to **120 seconds per recording**. A longer recordi
 
 ### Transcription only
 
-The transcription provider and optional text enhancement provider are independent in this mode. The default model is `openai/whisper-large-v3-turbo`. GPT-4o Transcribe and GPT-4o Mini Transcribe are available for plain-text output. Automatic language detection omits the language hint; a manual selection supplies a two-letter hint. Cleanup Styles can apply a second text AI request after transcription; **Off** skips that request.
+The transcription provider and optional text enhancement provider are independent in this mode. The default model is `openai/whisper-large-v3-turbo`. GPT-4o Transcribe and GPT-4o Mini Transcribe are available for plain-text output. Language detection stays automatic, with optional hints described above. Cleanup Styles can apply a second text AI request after transcription; **Off** skips that request.
 
 On a dictation failure, Voice Engine offers explicit **Retry and copy**, **Transcribe locally and copy**, and **Discard recording** actions. Retry uses the captured dictation settings with the current saved key. The failed recording stays in memory until retried, discarded, replaced by another failed recording, or the app exits. Local retry may need the selected local model to be downloaded. It never activates automatically. Cancellation stops requests and prevents delayed text insertion.
 
@@ -28,7 +30,7 @@ On a dictation failure, Voice Engine offers explicit **Retry and copy**, **Trans
 
 Imported audio and video use the **File transcription model** setting in combined mode, or **Dictation and file model** in transcription-only mode. File transcription remains a speech recognition operation and does not send Cleanup Styles. Audio is converted to mono 16 kHz WAV and uploaded in chunks of at most 120 seconds. Requests requiring word timestamps use a one-second overlap and timestamp ownership to avoid duplicate words. Plain-text requests use non-overlapping chunks. Full decoded audio is currently held in memory, so very long imports can use substantial RAM even though each upload is bounded.
 
-Completed file chunks are saved locally using an audio fingerprint and the complete transcription configuration. Retrying the same file and settings reuses completed chunks. Changing the model or language starts a distinct transcription. The cache contains transcript text and follows the personal app's local data backups. Short dictation does not persist this chunk cache.
+Completed file chunks are saved locally using an audio fingerprint and the complete transcription configuration. Retrying the same file and settings reuses completed chunks. Changing the model or language hints starts a distinct transcription. The cache contains transcript text and follows the personal app's local data backups. Short dictation does not persist this chunk cache.
 
 ## Completed meetings
 
@@ -44,6 +46,6 @@ Cloud recognition preserves the returned transcript. Dictation history stores op
 
 Voice Engine shows recorded request costs and processing times, including combined dictation. Combined requests can charge for audio input and text output; a single request does not guarantee a lower price than transcription plus cleanup. Missing costs appear as **unknown**, and totals identify requests with unavailable costs. These are provider-reported amounts, not a billing guarantee. Cached chunks do not create new usage entries. Request diagnostics include metadata only, never API keys, audio bodies, or transcript content.
 
-Audio leaves the Mac only when a cloud operation is selected. Combined dictation also sends your selected instructions and any context included in them. OpenRouter routes requests according to account eligibility and available providers. Its transcription endpoint does not currently honor per-request provider-pinning controls. Transcripts, styled text, resumable chunks, usage metadata, and recordings stay under the personal app's isolated local storage. See [maintenance and rollback](maintenance.md) for backup locations.
+Audio leaves the Mac only when a cloud operation is selected. Combined dictation also sends your selected instructions. App/window context and preceding text are sent only when the selected custom style enables context; they are omitted by default and in prompt tests. OpenRouter routes requests according to account eligibility and available providers. Its transcription endpoint does not currently honor per-request provider-pinning controls. Transcripts, styled text, resumable chunks, usage metadata, and recordings stay under the personal app's isolated local storage. See [maintenance and rollback](maintenance.md) for backup locations.
 
 The public source build excludes the private Fluid Intelligence runtime. Existing optional external enhancement remains available. Direct OpenAI/Groq clients, custom speech endpoints, cloud live captions, iPhone support, and public binary distribution are outside this release.

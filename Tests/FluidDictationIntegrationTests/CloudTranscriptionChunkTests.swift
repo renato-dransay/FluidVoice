@@ -75,6 +75,11 @@ final class CloudTranscriptionChunkTests: XCTestCase {
         differentAudio[0] = 0.3
         _ = try await resumedEngine.transcribe(samples: differentAudio, configuration: configuration, apiKey: "test-key", wordTimings: false)
         XCTAssertEqual(recorder.requests.count, 9)
+        let hintedConfiguration = CloudTranscriptionConfiguration(modelID: configuration.modelID, primaryLanguageCode: "pt", secondaryLanguageCode: "en")
+        _ = try await resumedEngine.transcribe(samples: samples, configuration: hintedConfiguration, apiKey: "test-key", wordTimings: false)
+        XCTAssertEqual(recorder.requests.count, 11, "Language hints must be included in the resumable cache identity")
+        _ = try await resumedEngine.transcribe(samples: samples, configuration: hintedConfiguration, apiKey: "test-key", wordTimings: false)
+        XCTAssertEqual(recorder.requests.count, 11, "Unchanged hints must reuse completed chunks")
         let cacheFiles = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         XCTAssertFalse(cacheFiles.isEmpty)
         for file in cacheFiles {

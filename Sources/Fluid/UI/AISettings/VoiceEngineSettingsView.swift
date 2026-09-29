@@ -23,14 +23,20 @@ struct VoiceEngineSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Picker("Transcription", selection: self.$settings.speechExecutionSource) {
+            Label("Active voice engine: \(self.settings.speechExecutionSource.displayName)", systemImage: "checkmark.circle.fill")
+                .font(.callout)
+                .accessibilityIdentifier("active-voice-engine")
+            Picker("Provider settings", selection: self.$viewModel.browsedSpeechExecutionSource) {
                 ForEach(SpeechExecutionSource.allCases) { source in
                     Text(source.displayName).tag(source)
                 }
             }
             .pickerStyle(.segmented)
-            .disabled(self.viewModel.areSpeechModelActionsBlocked)
-            if self.settings.usesCloudTranscription {
+            .accessibilityIdentifier("voice-engine-provider-tabs")
+            Text("Tabs show provider settings. Use the OpenRouter switch or activate a local model to change the voice engine.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if self.viewModel.browsedSpeechExecutionSource == .openRouter {
                 OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
             } else {
                 self.speechRecognitionCard

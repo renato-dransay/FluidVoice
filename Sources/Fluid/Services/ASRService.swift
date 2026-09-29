@@ -3628,6 +3628,8 @@ final class ASRService: ObservableObject {
                 let combinedConfiguration = CloudTranscriptionConfiguration(
                     modelID: configuration.modelID,
                     languageCode: configuration.languageCode,
+                    primaryLanguageCode: configuration.primaryLanguageCode,
+                    secondaryLanguageCode: configuration.secondaryLanguageCode,
                     audioDictation: instructions
                 )
                 self.frozenCloudConfiguration = combinedConfiguration

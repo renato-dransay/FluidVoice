@@ -48,30 +48,49 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
     let modelID: String
     let languageCode: String?
     let audioDictation: CloudAudioDictationInstructions?
+    let primaryLanguageCode: String?
+    let secondaryLanguageCode: String?
 
-    init(modelID: String = CloudTranscriptionModel.defaultDictationID, languageCode: String? = nil, audioDictation: CloudAudioDictationInstructions? = nil) {
+    init(modelID: String = CloudTranscriptionModel.defaultDictationID, languageCode: String? = nil, primaryLanguageCode: String? = nil, secondaryLanguageCode: String? = nil, audioDictation: CloudAudioDictationInstructions? = nil) {
         self.modelID = modelID
-        let language = languageCode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.languageCode = language?.isEmpty == false ? language : nil
         self.audioDictation = audioDictation
+        self.languageCode = Self.normalizedLanguageCode(languageCode)
+        self.primaryLanguageCode = Self.normalizedLanguageCode(primaryLanguageCode)
+        let secondary = Self.normalizedLanguageCode(secondaryLanguageCode)
+        self.secondaryLanguageCode = secondary != self.primaryLanguageCode ? secondary : nil
     }
 
     static let meetingDefault = CloudTranscriptionConfiguration(modelID: CloudTranscriptionModel.defaultMeetingID)
 
     func validate(wordTimings: Bool) throws {
+        for code in [self.languageCode, self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) {
+            if !Self.supportedLanguageCodes.contains(code) { throw CloudTranscriptionError.invalidLanguage }
+        }
         if let audioDictation {
             guard CloudAudioDictationModel.catalog.contains(where: { $0.id == audioDictation.modelID }) else {
                 throw CloudTranscriptionError.unsupportedModel
             }
             if wordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
-            if let languageCode, !Self.supportedLanguageCodes.contains(languageCode) { throw CloudTranscriptionError.invalidLanguage }
             return
         }
         guard let model = CloudTranscriptionModel.catalog.first(where: { $0.id == self.modelID }) else {
             throw CloudTranscriptionError.unsupportedModel
         }
         if wordTimings, !model.supportsWordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
-        if let languageCode, !Self.supportedLanguageCodes.contains(languageCode) { throw CloudTranscriptionError.invalidLanguage }
+    }
+
+    var languageHintPrompt: String? {
+        let locale = Locale(identifier: "en_US")
+        let languages = [self.primaryLanguageCode, self.secondaryLanguageCode].compactMap { code in
+            code.map { locale.localizedString(forLanguageCode: $0) ?? $0 }
+        }
+        guard !languages.isEmpty else { return nil }
+        return "The speaker commonly uses \(languages.joined(separator: " and ")). Other languages may also be spoken."
+    }
+
+    private static func normalizedLanguageCode(_ value: String?) -> String? {
+        let code = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return code?.isEmpty == false && code != "auto" && code != "none" ? code : nil
     }
 
     // OpenRouter accepts ISO-639-1 hints; model language coverage is provider-dependent.
@@ -82,6 +101,12 @@ nonisolated struct CloudTranscriptionModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let supportsWordTimings: Bool
+
+    // Provider tags and prompt support verified against the provider and OpenRouter STT docs.
+    // DeepInfra is deliberately omitted: its prompt forwarding has not been verified.
+    var languageHintProviderTags: [String] {
+        self.supportsWordTimings ? ["groq", "together"] : ["openai"]
+    }
 
     static let defaultDictationID = "openai/whisper-large-v3-turbo"
     static let defaultMeetingID = "openai/whisper-large-v3"

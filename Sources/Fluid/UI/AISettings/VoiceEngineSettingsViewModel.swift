@@ -25,12 +25,11 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var englishOnlyFilter: Bool = false
     @Published var installedOnlyFilter: Bool = false
     @Published var showSpeechFilters: Bool = false
+    @Published var browsedSpeechExecutionSource: SpeechExecutionSource
 
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
     @Published var showAdvancedSpeechInfo: Bool = false
-    @Published var suppressSpeechProviderSync: Bool = false
-    @Published var skipNextSpeechModelSync: Bool = false
 
     var downloadingModel: SettingsStore.SpeechModel? {
         guard let modelID = self.asr.downloadingModelId else { return nil }
@@ -48,6 +47,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     init(settings: SettingsStore, appServices: AppServices) {
         self.settings = settings
         self.appServices = appServices
+        self.browsedSpeechExecutionSource = settings.speechExecutionSource
         self.previewSpeechModel = settings.selectedSpeechModel
         self.selectedSpeechProvider = settings.selectedSpeechModel.provider
         appServices.objectWillChange
@@ -60,6 +60,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func onAppear() {
+        self.browsedSpeechExecutionSource = self.settings.speechExecutionSource
         self.previewSpeechModel = self.settings.selectedSpeechModel
         self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
 
@@ -69,11 +70,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func handleSelectedSpeechModelChange(_ newValue: SettingsStore.SpeechModel) {
-        if self.skipNextSpeechModelSync {
-            self.skipNextSpeechModelSync = false
-            return
-        }
-        guard !self.suppressSpeechProviderSync else { return }
         self.previewSpeechModel = newValue
         self.setSelectedSpeechProvider(newValue.provider)
     }
@@ -121,6 +117,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func activateSpeechModel(_ model: SettingsStore.SpeechModel) {
         guard !self.areSpeechModelActionsBlocked else { return }
         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            self.settings.speechExecutionSource = .local
             self.settings.selectedSpeechModel = model
             self.previewSpeechModel = model
             self.setSelectedSpeechProvider(model.provider)
@@ -169,37 +166,35 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func deleteSpeechModel(_ model: SettingsStore.SpeechModel) {
         guard !self.areSpeechModelActionsBlocked else { return }
-        let previousActive = self.settings.selectedSpeechModel
+        Task { await self.deleteSpeechModelCache(model) }
+    }
 
-        Task {
-            let shouldRestore = previousActive != model
-            await MainActor.run {
-                if shouldRestore {
-                    self.suppressSpeechProviderSync = true
-                }
-                self.settings.selectedSpeechModel = model
+    func deleteModels() async {
+        await self.deleteSpeechModelCache(self.settings.selectedSpeechModel)
+    }
+
+    private func deleteSpeechModelCache(_ model: SettingsStore.SpeechModel) async {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        do {
+            // Browsing Local while cloud is active must still target the local model cache.
+            try await self.asr.clearModelCache(for: model)
+            if !self.settings.usesCloudTranscription, self.settings.selectedSpeechModel == model {
                 self.asr.resetTranscriptionProvider()
             }
-
-            defer {
-                Task { @MainActor in
-                    guard shouldRestore else { return }
-                    self.skipNextSpeechModelSync = true
-                    self.settings.selectedSpeechModel = previousActive
-                    self.asr.resetTranscriptionProvider()
-                    if self.previewSpeechModel == model {
-                        self.previewSpeechModel = model
-                    }
-                    self.suppressSpeechProviderSync = false
-                }
-            }
-
-            await self.deleteModels()
+        } catch {
+            DebugLogger.shared.error("Failed to delete model \(model.displayName): \(error)", source: "VoiceEngineVM")
         }
     }
 
     func isActiveSpeechModel(_ model: SettingsStore.SpeechModel) -> Bool {
-        self.settings.selectedSpeechModel == model
+        !self.settings.usesCloudTranscription && self.settings.selectedSpeechModel == model
+    }
+
+    func setCloudTranscriptionEnabled(_ enabled: Bool) {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        guard !enabled || !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
+        self.settings.speechExecutionSource = enabled ? .openRouter : .local
+        self.asr.resetTranscriptionProvider()
     }
 
     var modelDescriptionText: String {
@@ -238,19 +233,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             self.asr.errorTitle = "Model Download Failed"
             self.asr.errorMessage = error.localizedDescription
             self.asr.showError = true
-        }
-    }
-
-    func deleteModels() async {
-        do {
-            try await self.asr.clearModelCache()
-            let model = self.settings.selectedSpeechModel
-            if model.requiresExternalArtifacts {
-                self.settings.setExternalCoreMLArtifactsDirectory(nil, for: model)
-                self.asr.resetTranscriptionProvider()
-            }
-        } catch {
-            DebugLogger.shared.error("Failed to delete models: \(error)", source: "AISettingsView")
         }
     }
 

@@ -18,6 +18,8 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertEqual(preferences.dictationMode, .transcriptionOnly)
         XCTAssertEqual(preferences.dictationModelID, CloudAudioDictationModel.defaultID)
         XCTAssertNil(preferences.configuration.audioDictation)
+        XCTAssertNil(preferences.primaryLanguageCode)
+        XCTAssertNil(preferences.secondaryLanguageCode)
     }
 
     func testCapturedConfigurationDoesNotFollowLaterPreferenceChanges() throws {
@@ -27,14 +29,71 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
         preferences.source = .openRouter
         preferences.modelID = "openai/whisper-large-v3"
-        preferences.languageCode = "pt"
+        preferences.primaryLanguageCode = "pt"
+        preferences.secondaryLanguageCode = "en"
         let snapshot = preferences.configuration
         preferences.modelID = "openai/gpt-4o-transcribe"
-        preferences.languageCode = "de"
+        preferences.primaryLanguageCode = "de"
+        preferences.secondaryLanguageCode = "fr"
         XCTAssertEqual(snapshot.modelID, "openai/whisper-large-v3")
-        XCTAssertEqual(snapshot.languageCode, "pt")
-        XCTAssertEqual(preferences.configuration.languageCode, "de")
+        XCTAssertEqual(snapshot.primaryLanguageCode, "pt")
+        XCTAssertEqual(snapshot.secondaryLanguageCode, "en")
+        XCTAssertNil(snapshot.languageCode)
+        XCTAssertEqual(preferences.configuration.primaryLanguageCode, "de")
+        XCTAssertEqual(preferences.configuration.secondaryLanguageCode, "fr")
+        XCTAssertNil(preferences.configuration.languageCode)
         XCTAssertTrue(preferences.source == .openRouter)
+    }
+
+    func testFormerManualLanguageBecomesOptionalHintWithoutForcingDetection() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("pt", forKey: "CloudTranscriptionLanguage")
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.primaryLanguageCode, "pt")
+        XCTAssertNil(preferences.configuration.languageCode)
+        preferences.primaryLanguageCode = nil
+        XCTAssertNil(CloudTranscriptionPreferences(defaults: defaults).primaryLanguageCode)
+        XCTAssertNil(preferences.configuration.languageHintPrompt)
+    }
+
+    func testHintsPersistWithoutActivatingCloudAndCannotDuplicate() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        preferences.primaryLanguageCode = " PT "
+        preferences.secondaryLanguageCode = "en"
+        var restored = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(restored.primaryLanguageCode, "pt")
+        XCTAssertEqual(restored.secondaryLanguageCode, "en")
+        XCTAssertEqual(restored.source, .local)
+        XCTAssertNil(restored.configuration.languageCode)
+        restored.primaryLanguageCode = "en"
+        XCTAssertNil(restored.secondaryLanguageCode)
+        restored.primaryLanguageCode = "pt"
+        XCTAssertNil(restored.secondaryLanguageCode, "A cleared duplicate must not reappear after changing the primary hint")
+        restored.secondaryLanguageCode = "pt"
+        XCTAssertNil(restored.secondaryLanguageCode)
+        restored.secondaryLanguageCode = "de"
+        restored.primaryLanguageCode = nil
+        XCTAssertNil(restored.primaryLanguageCode)
+        XCTAssertNil(restored.secondaryLanguageCode)
+    }
+
+    func testInvalidStoredHintsAreIgnored() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("unsupported-language", forKey: "CloudTranscriptionPrimaryLanguage")
+        defaults.set("en", forKey: "CloudTranscriptionSecondaryLanguage")
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertNil(preferences.primaryLanguageCode)
+        XCTAssertNil(preferences.secondaryLanguageCode)
+        preferences.primaryLanguageCode = "de"
+        preferences.primaryLanguageCode = "bad-code"
+        XCTAssertEqual(preferences.primaryLanguageCode, "de")
     }
 
     func testUnknownModelCannotBecomeSelectedAndCredentialsAreNotPreferences() throws {
