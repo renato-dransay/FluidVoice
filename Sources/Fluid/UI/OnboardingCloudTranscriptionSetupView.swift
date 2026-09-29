@@ -19,7 +19,7 @@ struct OnboardingCloudTranscriptionSetupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Set up OpenRouter").font(.title2)
-            OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
+            OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel, showsActivationControl: false)
                 .disabled(self.isActivating)
             if let errorMessage {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)

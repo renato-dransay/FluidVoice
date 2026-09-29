@@ -16,6 +16,9 @@ cp "$ROOT"/Sources/Fluid/Services/CloudTranscription/*.swift "$HARNESS/Sources/C
 cp "$ROOT/Sources/Fluid/Services/TranscriptionProvider.swift" "$HARNESS/Sources/CloudTranscriptionHarness/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionChunkTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionSettingsTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+# The preferences have no app boundary; omit the SettingsStore adapter from this harness.
+sed '/^extension SettingsStore {/,$d' "$ROOT/Sources/Fluid/Persistence/SettingsStore+CloudTranscription.swift" > "$HARNESS/Sources/CloudTranscriptionHarness/CloudTranscriptionPreferences.swift"
 cat > "$HARNESS/Sources/CloudTranscriptionHarness/AppBoundaryStubs.swift" <<'SWIFT'
 import Foundation
 struct PronunciationEnrollmentCapture {}

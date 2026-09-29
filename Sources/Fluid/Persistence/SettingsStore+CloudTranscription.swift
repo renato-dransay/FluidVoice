@@ -29,13 +29,46 @@ struct CloudTranscriptionPreferences {
         }
     }
 
-    var languageCode: String? {
-        get { SettingsStore.whisperLanguageCode(fromStoredValue: self.defaults.string(forKey: "CloudTranscriptionLanguage")) }
-        set { self.defaults.set(newValue ?? "auto", forKey: "CloudTranscriptionLanguage") }
+    var primaryLanguageCode: String? {
+        get {
+            // Preserve a former manual selection as an optional hint, never as a forced language.
+            Self.validLanguageCode(self.defaults.string(forKey: "CloudTranscriptionPrimaryLanguage")
+                ?? self.defaults.string(forKey: "CloudTranscriptionLanguage"))
+        }
+        set {
+            guard newValue == nil || Self.validLanguageCode(newValue) != nil else { return }
+            let code = Self.validLanguageCode(newValue)
+            let previousSecondary = self.secondaryLanguageCode
+            self.defaults.set(code ?? "none", forKey: "CloudTranscriptionPrimaryLanguage")
+            if code == nil || code == previousSecondary {
+                self.defaults.set("none", forKey: "CloudTranscriptionSecondaryLanguage")
+            }
+        }
+    }
+
+    var secondaryLanguageCode: String? {
+        get {
+            guard let primary = self.primaryLanguageCode,
+                  let secondary = Self.validLanguageCode(self.defaults.string(forKey: "CloudTranscriptionSecondaryLanguage")),
+                  secondary != primary else { return nil }
+            return secondary
+        }
+        set {
+            guard newValue == nil || Self.validLanguageCode(newValue) != nil else { return }
+            let code = Self.validLanguageCode(newValue)
+            guard code == nil || (self.primaryLanguageCode != nil && code != self.primaryLanguageCode) else { return }
+            self.defaults.set(code ?? "none", forKey: "CloudTranscriptionSecondaryLanguage")
+        }
     }
 
     var configuration: CloudTranscriptionConfiguration {
-        CloudTranscriptionConfiguration(modelID: self.modelID, languageCode: self.languageCode)
+        CloudTranscriptionConfiguration(modelID: self.modelID, primaryLanguageCode: self.primaryLanguageCode, secondaryLanguageCode: self.secondaryLanguageCode)
+    }
+
+    private static func validLanguageCode(_ value: String?) -> String? {
+        guard let code = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              CloudTranscriptionConfiguration.supportedLanguageCodes.contains(code) else { return nil }
+        return code
     }
 }
 
@@ -62,12 +95,21 @@ extension SettingsStore {
         }
     }
 
-    var cloudTranscriptionLanguageCode: String? {
-        get { CloudTranscriptionPreferences(defaults: .standard).languageCode }
+    var cloudTranscriptionPrimaryLanguageCode: String? {
+        get { CloudTranscriptionPreferences(defaults: .standard).primaryLanguageCode }
         set {
             self.objectWillChange.send()
             var preferences = CloudTranscriptionPreferences(defaults: .standard)
-            preferences.languageCode = newValue
+            preferences.primaryLanguageCode = newValue
+        }
+    }
+
+    var cloudTranscriptionSecondaryLanguageCode: String? {
+        get { CloudTranscriptionPreferences(defaults: .standard).secondaryLanguageCode }
+        set {
+            self.objectWillChange.send()
+            var preferences = CloudTranscriptionPreferences(defaults: .standard)
+            preferences.secondaryLanguageCode = newValue
         }
     }
 

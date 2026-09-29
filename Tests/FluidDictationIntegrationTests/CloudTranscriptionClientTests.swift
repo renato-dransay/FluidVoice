@@ -64,6 +64,62 @@ final class CloudTranscriptionClientTests: XCTestCase {
         }
     }
 
+    func testOptionalLanguageHintsUseProviderOptionsWithoutForcingLanguageOrRouting() async throws {
+        for model in CloudTranscriptionModel.catalog {
+            let recorder = CloudRequestRecorder()
+            CloudURLProtocol.install { request in
+                recorder.append(request)
+                return (200, [:], Data(#"{"text":"Bonjour.","words":[{"word":"Bonjour.","start":0,"end":0.4}]}"#.utf8))
+            }
+            let configuration = CloudTranscriptionConfiguration(modelID: model.id, primaryLanguageCode: "pt", secondaryLanguageCode: "en")
+            _ = try await self.client().transcribe(
+                samples: [Float](repeating: 0.1, count: 16_000), configuration: configuration, apiKey: "test-key", wordTimings: model.supportsWordTimings
+            )
+            let request = try XCTUnwrap(recorder.requests.first)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            XCTAssertEqual(body["model"] as? String, model.id)
+            XCTAssertNil(body["language"], "Hints must allow a third language to be detected")
+            XCTAssertNil(body["prompt"], "OpenRouter ignores top-level prompts")
+            let provider = try XCTUnwrap(body["provider"] as? [String: Any])
+            XCTAssertNil(provider["only"])
+            XCTAssertNil(provider["order"])
+            let options = try XCTUnwrap(provider["options"] as? [String: [String: String]])
+            let expectedProviders: Set<String> = model.supportsWordTimings ? ["groq", "together"] : ["openai"]
+            XCTAssertEqual(Set(options.keys), expectedProviders)
+            for hint in options.values {
+                XCTAssertTrue(hint["prompt"]?.contains("Portuguese and English") == true)
+                XCTAssertTrue(hint["prompt"]?.contains("Other languages") == true)
+            }
+            let audio = try XCTUnwrap(body["input_audio"] as? [String: String])
+            XCTAssertEqual(audio["format"], "wav")
+            let wav = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(audio["data"])))
+            XCTAssertEqual(String(data: wav.prefix(4), encoding: .utf8), "RIFF")
+            XCTAssertEqual(body["response_format"] as? String, model.supportsWordTimings ? "verbose_json" : "json")
+            XCTAssertEqual(body["timestamp_granularities"] as? [String], model.supportsWordTimings ? ["word"] : nil)
+        }
+    }
+
+    func testInvalidHintDoesNotSendAudioAndLegacyConfigurationStillDecodes() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"text":"unexpected"}"#.utf8))
+        }
+        do {
+            _ = try await self.client().transcribe(samples: [0.1], configuration: .init(primaryLanguageCode: "invalid"), apiKey: "test-key", wordTimings: false)
+            XCTFail("Invalid hints must fail before uploading audio")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .invalidLanguage)
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
+        let oldConfiguration = Data(#"{"modelID":"openai/whisper-large-v3","languageCode":"de"}"#.utf8)
+        let restored = try JSONDecoder().decode(CloudTranscriptionConfiguration.self, from: oldConfiguration)
+        XCTAssertEqual(restored.languageCode, "de")
+        XCTAssertNil(restored.primaryLanguageCode)
+        XCTAssertNil(restored.secondaryLanguageCode)
+    }
+
     func testMissingKeyAndUnsupportedModelDoNotSendAudio() async throws {
         let recorder = CloudRequestRecorder()
         CloudURLProtocol.install { request in
