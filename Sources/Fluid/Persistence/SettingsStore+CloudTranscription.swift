@@ -61,6 +61,24 @@ struct CloudTranscriptionPreferences {
         }
     }
 
+    /// An absent or unavailable choice keeps automatic detection. A user may
+    /// explicitly choose a configured language during recording.
+    var dictationLanguageCode: String? {
+        get {
+            let stored = self.defaults.string(forKey: "CloudDictationLanguageSelection")
+            if stored == "auto" { return nil }
+            let primary = self.primaryLanguageCode
+            if let code = Self.validLanguageCode(stored), code == primary || code == self.secondaryLanguageCode {
+                return code
+            }
+            return nil
+        }
+        set {
+            guard newValue == nil || (newValue == self.primaryLanguageCode || newValue == self.secondaryLanguageCode) else { return }
+            self.defaults.set(newValue ?? "auto", forKey: "CloudDictationLanguageSelection")
+        }
+    }
+
     var dictationMode: CloudDictationMode {
         get { CloudDictationMode(rawValue: self.defaults.string(forKey: "CloudDictationMode") ?? "") ?? .transcriptionOnly }
         set { self.defaults.set(newValue.rawValue, forKey: "CloudDictationMode") }
@@ -79,6 +97,16 @@ struct CloudTranscriptionPreferences {
 
     var configuration: CloudTranscriptionConfiguration {
         CloudTranscriptionConfiguration(modelID: self.modelID, primaryLanguageCode: self.primaryLanguageCode, secondaryLanguageCode: self.secondaryLanguageCode)
+    }
+
+    var dictationConfiguration: CloudTranscriptionConfiguration {
+        let selectedLanguage = self.dictationLanguageCode
+        return CloudTranscriptionConfiguration(
+            modelID: self.modelID,
+            languageCode: selectedLanguage,
+            primaryLanguageCode: self.primaryLanguageCode,
+            secondaryLanguageCode: self.secondaryLanguageCode
+        )
     }
 
     private static func validLanguageCode(_ value: String?) -> String? {
@@ -149,8 +177,22 @@ extension SettingsStore {
         }
     }
 
+    var cloudDictationLanguageCode: String? {
+        get { CloudTranscriptionPreferences(defaults: .standard).dictationLanguageCode }
+        set {
+            var preferences = CloudTranscriptionPreferences(defaults: .standard)
+            guard newValue == nil || newValue == preferences.primaryLanguageCode || newValue == preferences.secondaryLanguageCode else { return }
+            self.objectWillChange.send()
+            preferences.dictationLanguageCode = newValue
+        }
+    }
+
     var cloudTranscriptionConfiguration: CloudTranscriptionConfiguration {
         CloudTranscriptionPreferences(defaults: .standard).configuration
+    }
+
+    var cloudDictationConfiguration: CloudTranscriptionConfiguration {
+        CloudTranscriptionPreferences(defaults: .standard).dictationConfiguration
     }
 
     var openRouterTranscriptionAPIKey: String {

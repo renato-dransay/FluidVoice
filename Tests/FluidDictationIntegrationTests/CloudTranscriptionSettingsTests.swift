@@ -20,6 +20,7 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertNil(preferences.configuration.audioDictation)
         XCTAssertNil(preferences.primaryLanguageCode)
         XCTAssertNil(preferences.secondaryLanguageCode)
+        XCTAssertNil(preferences.dictationLanguageCode)
     }
 
     func testCapturedConfigurationDoesNotFollowLaterPreferenceChanges() throws {
@@ -52,9 +53,12 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         defaults.set("pt", forKey: "CloudTranscriptionLanguage")
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
         XCTAssertEqual(preferences.primaryLanguageCode, "pt")
+        XCTAssertNil(preferences.dictationConfiguration.languageCode)
+        XCTAssertEqual(preferences.dictationConfiguration.primaryLanguageCode, "pt")
         XCTAssertNil(preferences.configuration.languageCode)
         preferences.primaryLanguageCode = nil
         XCTAssertNil(CloudTranscriptionPreferences(defaults: defaults).primaryLanguageCode)
+        XCTAssertNil(preferences.dictationConfiguration.languageCode)
         XCTAssertNil(preferences.configuration.languageHintPrompt)
     }
 
@@ -80,6 +84,35 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         restored.primaryLanguageCode = nil
         XCTAssertNil(restored.primaryLanguageCode)
         XCTAssertNil(restored.secondaryLanguageCode)
+    }
+
+    func testDictationLanguageDefaultsToAutomaticAndRemembersManualChoice() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        preferences.primaryLanguageCode = "pt"
+        preferences.secondaryLanguageCode = "en"
+
+        XCTAssertNil(preferences.dictationLanguageCode)
+        XCTAssertNil(preferences.dictationConfiguration.languageCode)
+        XCTAssertEqual(preferences.dictationConfiguration.primaryLanguageCode, "pt")
+        XCTAssertEqual(preferences.dictationConfiguration.secondaryLanguageCode, "en")
+        XCTAssertNil(preferences.configuration.languageCode, "Imported files keep automatic detection")
+
+        preferences.dictationLanguageCode = "en"
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: defaults).dictationLanguageCode, "en")
+        XCTAssertEqual(preferences.dictationConfiguration.languageCode, "en")
+        preferences.dictationLanguageCode = nil
+        XCTAssertNil(CloudTranscriptionPreferences(defaults: defaults).dictationLanguageCode)
+        XCTAssertNil(preferences.dictationConfiguration.languageCode)
+        XCTAssertNotNil(preferences.dictationConfiguration.languageHintPrompt, "Configured languages remain optional hints")
+
+        preferences.dictationLanguageCode = "de"
+        XCTAssertNil(preferences.dictationLanguageCode, "Unconfigured languages must not replace Automatic")
+        preferences.dictationLanguageCode = "en"
+        preferences.secondaryLanguageCode = nil
+        XCTAssertNil(preferences.dictationLanguageCode, "Removed secondary falls back to automatic detection")
     }
 
     func testInvalidStoredHintsAreIgnored() throws {
