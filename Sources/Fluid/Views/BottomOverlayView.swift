@@ -1820,10 +1820,10 @@ private struct BottomOverlayPromptMenuView: View {
             self.onDismissRequested()
         }) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Basic")
+                Text(self.settings.usesCloudTranscription ? "No cleanup" : "Basic")
                 Spacer(minLength: 12)
                 if !self.isCompact {
-                    Text("No cleanup")
+                    Text(self.settings.usesCloudTranscription ? "OpenRouter voice" : "No cleanup")
                         .font(.fluidSystem(size: 10, weight: .medium))
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -1965,7 +1965,7 @@ private struct BottomOverlayPromptMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             if self.promptMode.normalized == .dictate {
                 if !self.isCompact {
-                    Text("ON-DEVICE")
+                    Text(self.settings.usesCloudTranscription ? "OPENROUTER" : "ON-DEVICE")
                         .font(.fluidSystem(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.4))
                         .padding(.horizontal, 8)
@@ -1986,7 +1986,9 @@ private struct BottomOverlayPromptMenuView: View {
             }
 
             if !self.isCompact {
-                Text("EXTERNAL")
+                Text(self.promptMode.normalized == .dictate
+                    ? (self.settings.usesCombinedCloudDictation ? "CLEANUP STYLES · SAME REQUEST" : "EXTERNAL CLEANUP")
+                    : "PROMPTS")
                     .font(.fluidSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.horizontal, 8)
@@ -2669,7 +2671,7 @@ struct BottomOverlayView: View {
         if activePromptMode.normalized == .dictate {
             switch self.settings.resolvedDictationPromptSelection(for: self.activeDictationShortcutSlot, appBundleID: self.promptResolutionBundleID) {
             case .off:
-                return "Basic"
+                return self.settings.usesCloudTranscription ? "No cleanup" : "Basic"
             case .privateAI:
                 return self.isAppPromptOverrideActive ? nil : SettingsStore.DictationModeLabels.smart
             case .default:
@@ -2767,7 +2769,7 @@ struct BottomOverlayView: View {
             + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
         let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
         return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4
-            - (self.showsCloudLanguageSelector ? 52 : 0))
+            - (self.showsCloudLanguageSelector ? 72 : 0))
     }
 
     private var showsCloudLanguageSelector: Bool {
