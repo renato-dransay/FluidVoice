@@ -40,13 +40,29 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         var request = try self.request(path: "audio/transcriptions", apiKey: apiKey)
         let wav = try CloudWAVEncoder.encode(samples: samples)
         guard wav.count <= 25_000_000 else { throw CloudTranscriptionError.oversizedAudio }
-        let boundary = "FluidVoice-\(UUID().uuidString)"
-        var fields = [("model", configuration.modelID), ("response_format", wordTimings ? "verbose_json" : "json")]
-        if let language = configuration.languageCode { fields.append(("language", language)) }
-        if wordTimings { fields.append(("timestamp_granularities[]", "word")) }
         request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.multipart(boundary: boundary, fields: fields, wav: wav)
+        if let prompt = configuration.languageHintPrompt,
+           let model = CloudTranscriptionModel.catalog.first(where: { $0.id == configuration.modelID }) {
+            // OpenRouter ignores top-level multipart prompts. Its JSON provider options
+            // forward hints only to the provider serving the request, without pinning it.
+            var body: [String: Any] = [
+                "model": configuration.modelID,
+                "input_audio": ["data": wav.base64EncodedString(), "format": "wav"],
+                "response_format": wordTimings ? "verbose_json" : "json",
+                "provider": ["options": Dictionary(uniqueKeysWithValues: model.languageHintProviderTags.map { ($0, ["prompt": prompt]) })],
+            ]
+            if let language = configuration.languageCode { body["language"] = language }
+            if wordTimings { body["timestamp_granularities"] = ["word"] }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } else {
+            let boundary = "FluidVoice-\(UUID().uuidString)"
+            var fields = [("model", configuration.modelID), ("response_format", wordTimings ? "verbose_json" : "json")]
+            if let language = configuration.languageCode { fields.append(("language", language)) }
+            if wordTimings { fields.append(("timestamp_granularities[]", "word")) }
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Self.multipart(boundary: boundary, fields: fields, wav: wav)
+        }
         let started = ProcessInfo.processInfo.systemUptime
         let (data, response) = try await self.send(request)
         struct Response: Decodable {
