@@ -102,10 +102,14 @@ struct OpenRouterTranscriptionSettingsView: View {
                 set: { self.settings.cloudTranscriptionPrimaryLanguageCode = $0 == "none" ? nil : $0 }
             ))
             .accessibilityIdentifier("cloud-primary-language")
-            self.languageHintPicker("Secondary language", selection: Binding(
-                get: { self.settings.cloudTranscriptionSecondaryLanguageCode ?? "none" },
-                set: { self.settings.cloudTranscriptionSecondaryLanguageCode = $0 == "none" ? nil : $0 }
-            ), excluding: self.settings.cloudTranscriptionPrimaryLanguageCode)
+            self.languageHintPicker(
+                "Secondary language",
+                selection: Binding(
+                    get: { self.settings.cloudTranscriptionSecondaryLanguageCode ?? "none" },
+                    set: { self.settings.cloudTranscriptionSecondaryLanguageCode = $0 == "none" ? nil : $0 }
+                ),
+                excluding: self.settings.cloudTranscriptionPrimaryLanguageCode
+            )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
             Text("Hints help providers that support them; other providers may ignore them. Leave both empty for unrestricted automatic detection.")

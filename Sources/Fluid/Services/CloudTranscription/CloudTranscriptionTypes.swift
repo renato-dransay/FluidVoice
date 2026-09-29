@@ -22,8 +22,8 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         }
         if wordTimings, !model.supportsWordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
         if let languageCode, !Self.supportedLanguageCodes.contains(languageCode) { throw CloudTranscriptionError.invalidLanguage }
-        for code in [self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) {
-            if !Self.supportedLanguageCodes.contains(code) { throw CloudTranscriptionError.invalidLanguage }
+        for code in [self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) where !Self.supportedLanguageCodes.contains(code) {
+            throw CloudTranscriptionError.invalidLanguage
         }
     }
 
