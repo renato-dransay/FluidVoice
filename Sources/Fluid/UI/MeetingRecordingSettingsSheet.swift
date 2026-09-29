@@ -138,7 +138,7 @@ struct MeetingRecordingSettingsSheet: View {
             Text("FluidMeet settings")
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
-            Text("Audio and transcripts stay on this Mac.")
+            Text("Configure recording, transcription, and storage.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }

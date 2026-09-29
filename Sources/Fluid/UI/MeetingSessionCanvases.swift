@@ -219,7 +219,7 @@ struct MeetingProcessingCanvas: View {
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 MeetingDocumentTitle(title: self.session.title)
-                Text("You can close this window. Processing continues on this Mac.")
+                Text("You can close this window. Processing continues in FluidVoice.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
