@@ -2769,7 +2769,7 @@ struct BottomOverlayView: View {
             + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
         let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
         return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4
-            - (self.showsCloudLanguageSelector ? 72 : 0))
+            - (self.showsCloudLanguageSelector && !self.isCompactControls ? 72 : 0))
     }
 
     private var showsCloudLanguageSelector: Bool {
@@ -3676,13 +3676,18 @@ struct BottomOverlayView: View {
                 .frame(maxWidth: self.isPillSize ? nil : .infinity, alignment: .center)
                 .overlay(alignment: .leading) {
                     if self.layout.showsTopControls {
-                        self.leadingAppContextView
+                        HStack(spacing: 8) {
+                            self.leadingAppContextView
+                            if self.isCompactControls, self.showsCloudLanguageSelector {
+                                CloudDictationLanguageSelector()
+                            }
+                        }
                     }
                 }
                 .overlay(alignment: .trailing) {
                     if self.layout.showsTopControls {
                         HStack(spacing: 4) {
-                            if self.showsCloudLanguageSelector {
+                            if !self.isCompactControls, self.showsCloudLanguageSelector {
                                 CloudDictationLanguageSelector()
                             }
                             self.promptSelectorView
