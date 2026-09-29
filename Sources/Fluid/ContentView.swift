@@ -1032,9 +1032,10 @@ struct ContentView: View {
         dictationSlot: SettingsStore.DictationShortcutSlot?,
         appBundleID: String,
         snapshot: DictationStopSnapshot? = nil,
+        combinedOutput: CloudAudioDictationOutput? = nil,
         transcriptionModelInfo: (provider: String, model: String)
     ) -> (provider: String?, model: String?) {
-        let postProcessing = snapshot.map { (provider: Optional($0.route.providerKey), model: Optional($0.route.model)) } ?? self.currentDictationAIModelInfo(
+        let postProcessing = combinedOutput.map { (provider: Optional("openrouter"), model: Optional($0.modelID)) } ?? snapshot.map { (provider: Optional($0.route.providerKey), model: Optional($0.route.model)) } ?? self.currentDictationAIModelInfo(
             dictationSlot: dictationSlot,
             appBundleID: appBundleID
         )
@@ -2939,7 +2940,7 @@ struct ContentView: View {
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         let pipelineStartedAt = ProcessInfo.processInfo.systemUptime
-        let transcriptionModelInfo = self.currentTranscriptionModelInfo()
+        var transcriptionModelInfo = self.currentTranscriptionModelInfo()
         let expectedOverlayLifecycleID = self.overlayLifecycleID
         self.appBench("pipeline_begin id=\(pipelineID) route=\(route.rawValue) toggleStopRequestedAt=\(toggleStopRequestedAt.map { String($0) } ?? "nil") loadAvg1m=\(self.benchmarkLoadAverage())")
         defer {
@@ -2959,9 +2960,17 @@ struct ContentView: View {
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
         var stopSnapshot = route == .normal && !wasRewriteMode && !wasCommandMode && !promptTest.isActive
             ? self.captureDictationStopSnapshot(slot: activeDictationSlot ?? .primary) : nil
+        let usesCombinedDictation = !wasRewriteMode && !wasCommandMode && self.asr.isUsingCombinedCloudDictation
+        let combinedModelID = self.asr.activeCloudDictationModelID
+        let promptAppID = self.recordingAppInfo?.bundleId
+        let combinedStyleEnabled = promptTest.isActive || (stopSnapshot?.styleEnabled ??
+            (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot ?? .primary, appBundleID: promptAppID) != .off))
+        let combinedPromptText = promptTest.isActive ? promptTest.draftPromptText :
+            (promptOverride ?? stopSnapshot?.systemPrompt ?? self.settings.effectiveDictationSystemPrompt(for: activeDictationSlot ?? .primary, appBundleID: promptAppID))
+        let combinedSpokenSendPhrase = route == .normal && !promptTest.isActive && self.settings.spokenSendEnabled ? self.settings.spokenSendPhrase : nil
         let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
-            DictationAIPostProcessingGate.isConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
-        } ?? DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
+            DictationAIPostProcessingGate.isStyleConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
+        } ?? DictationAIPostProcessingGate.isStyleConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
         let shouldHideOverlayOnStop = route == .normal && !wasRewriteMode && !wasCommandMode
             && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled
         DebugLogger.shared.info(
@@ -2984,12 +2993,26 @@ struct ContentView: View {
         let transcribedText = await asr.stop(
             onCaptureStopped: {
                 TranscriptionSoundPlayer.shared.playStopSound()
+                if usesCombinedDictation { self.completeDictationStopSnapshot(&stopSnapshot) }
             },
-            onFinalTranscriptionStarted: stopOverlay.onFinalTranscriptionStarted
+            onFinalTranscriptionStarted: stopOverlay.onFinalTranscriptionStarted,
+            cloudDictationInstructions: {
+                guard usesCombinedDictation else { return nil }
+                let context = stopSnapshot?.appInfo ?? self.recordingAppInfo ?? self.getCurrentAppInfo()
+                return CloudAudioDictationInstructions(
+                    modelID: combinedModelID,
+                    promptText: combinedStyleEnabled ? combinedPromptText : nil,
+                    appContext: stopSnapshot?.includesCloudContext == true ? "App: \(context.name)\nBundle: \(context.bundleId)\nWindow: \(context.windowTitle)" : "",
+                    precedingText: stopSnapshot?.includesCloudContext == true ? (stopSnapshot?.precedingText ?? self.recordingPrecedingText) : "",
+                    spokenSendPhrase: combinedSpokenSendPhrase
+                )
+            }
         )
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
         guard !Task.isCancelled else { return }
-        self.completeDictationStopSnapshot(&stopSnapshot)
+        if !usesCombinedDictation { self.completeDictationStopSnapshot(&stopSnapshot) }
+        let combinedOutput = self.asr.consumeLastCompletedCloudDictationOutput()
+        if let combinedOutput { transcriptionModelInfo = (provider: "openrouter", model: combinedOutput.modelID) }
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
         let transcriptionDurationMilliseconds = self.asr.consumeLastFinalTranscriptionDurationMs()
@@ -2998,6 +3021,11 @@ struct ContentView: View {
             "Stop transcription result | chars=\(transcribedText.count) | empty=\(transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)",
             source: "ContentView"
         )
+
+        if await self.routePromptTestResult(
+            transcribedText, sessionID: promptTestSessionID, lifecycleID: expectedOverlayLifecycleID,
+            combinedOutput: combinedOutput, combinedRequest: usesCombinedDictation
+        ) { return }
 
         guard transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             // Empty results have no delivery callback, so clear their stale
@@ -3021,11 +3049,6 @@ struct ContentView: View {
             if !stopOverlay.didRequestHide {
                 await self.menuBarManager.finishProcessingAndHideOverlay()
             }
-            return
-        }
-
-        // Prompt Test Mode: reroute dictation hotkey output into the prompt editor (no typing/clipboard/history).
-        if await self.routePromptTestResult(transcribedText, sessionID: promptTestSessionID, lifecycleID: expectedOverlayLifecycleID) {
             return
         }
 
@@ -3071,32 +3094,39 @@ struct ContentView: View {
             bundleID: appInfo.bundleId,
             windowTitle: appInfo.windowTitle
         )
-        let spokenSendParse = SpokenSendParser.parseArmed(
-            punctuationFormattedText,
-            phrase: self.settings.spokenSendPhrase,
-            enabled: route == .normal && self.settings.spokenSendEnabled,
-            wasArmed: self.spokenSendArming.wasArmed
-        )
-        self.updateSpokenSendIndicatorForFinalParse(shouldSend: spokenSendParse.shouldSend)
-        let normalizedTranscribedText = spokenSendParse.text
-        let sendsExistingDraft = spokenSendParse.shouldSend &&
-            normalizedTranscribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
         let practiceModelID = route == .onboardingSandbox && self.settings.onboardingCurrentStep == 5
             ? PrivateAIProviderPromptFormat.verifiedModelID(settings: self.settings) : nil
-        let shouldUseAI = !sendsExistingDraft && (practiceModelID != nil || (stopSnapshot?.usesAI ?? DictationAIPostProcessingGate.isConfigured(
+        let cleanupConfigured = practiceModelID != nil || (stopSnapshot?.usesAI ?? DictationAIPostProcessingGate.isStyleConfigured(
             for: activeDictationSlot ?? .primary,
             appBundleID: appInfo.bundleId
-        )))
+        ))
+        let delivery = CloudDictationDeliveryPolicy.resolve(
+            transcript: punctuationFormattedText,
+            combinedText: combinedOutput?.text,
+            cleanupConfigured: cleanupConfigured,
+            spokenSendPhrase: combinedSpokenSendPhrase ?? self.settings.spokenSendPhrase,
+            spokenSendEnabled: usesCombinedDictation ? combinedSpokenSendPhrase != nil : route == .normal && self.settings.spokenSendEnabled,
+            wasArmed: self.spokenSendArming.wasArmed
+        )
+        let spokenSendParse = SpokenSendParseResult(text: delivery.transcript, shouldSend: delivery.shouldSend)
+        self.updateSpokenSendIndicatorForFinalParse(shouldSend: delivery.shouldSend)
+        let normalizedTranscribedText = delivery.transcript
+        let sendsExistingDraft = delivery.sendsExistingDraft
+        let shouldUseAI = !sendsExistingDraft && (combinedOutput?.styleApplied == true || delivery.requiresSeparateCleanup)
         let postProcessingModelInfo = self.recordDictationUsage(
             shouldUseAI: shouldUseAI,
             dictationSlot: activeDictationSlot,
             appBundleID: appInfo.bundleId,
             snapshot: stopSnapshot,
+            combinedOutput: combinedOutput,
             transcriptionModelInfo: transcriptionModelInfo
         )
 
-        if shouldUseAI {
+        if let combinedOutput {
+            finalText = delivery.text
+            postProcessingModel = combinedOutput.styleApplied && !sendsExistingDraft ? combinedOutput.modelID : nil
+            // This inference is already included in the transcription duration and cloud usage.
+        } else if delivery.requiresSeparateCleanup {
             DebugLogger.shared.debug("Routing transcription through AI post-processing", source: "ContentView")
             postProcessingModel = postProcessingModelInfo.model
             let postProcessingInputChars = normalizedTranscribedText.count
@@ -3468,10 +3498,26 @@ struct ContentView: View {
         }
     }
 
-    private func routePromptTestResult(_ text: String, sessionID: UUID?, lifecycleID: UInt64) async -> Bool {
+    private func routePromptTestResult(
+        _ text: String,
+        sessionID: UUID?,
+        lifecycleID: UInt64,
+        combinedOutput: CloudAudioDictationOutput? = nil,
+        combinedRequest: Bool = false
+    ) async -> Bool {
         guard let sessionID else { return false }
         // A closed/replaced practice session must never fall through to external typing.
         guard DictationPromptTestCoordinator.shared.acceptsResult(for: sessionID) else {
+            if self.overlayLifecycleID == lifecycleID { self.menuBarManager.setProcessing(false) }
+            return true
+        }
+        if combinedRequest {
+            let promptTest = DictationPromptTestCoordinator.shared
+            promptTest.lastTranscriptionText = text
+            promptTest.lastOutputText = combinedOutput.map { ASRService.applyGAAVFormatting($0.text) } ?? ""
+            promptTest.lastError = combinedOutput == nil && self.asr.lastStopOutcome == .failed
+                ? (self.asr.errorMessage.isEmpty ? "OpenRouter dictation failed. Retry the recording." : self.asr.errorMessage) : ""
+            promptTest.isProcessing = false
             if self.overlayLifecycleID == lifecycleID { self.menuBarManager.setProcessing(false) }
             return true
         }

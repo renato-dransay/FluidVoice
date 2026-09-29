@@ -34,6 +34,22 @@ struct CloudTranscriptionPreferences {
         set { self.defaults.set(newValue ?? "auto", forKey: "CloudTranscriptionLanguage") }
     }
 
+    var dictationMode: CloudDictationMode {
+        get { CloudDictationMode(rawValue: self.defaults.string(forKey: "CloudDictationMode") ?? "") ?? .transcriptionOnly }
+        set { self.defaults.set(newValue.rawValue, forKey: "CloudDictationMode") }
+    }
+
+    var dictationModelID: String {
+        get {
+            let stored = self.defaults.string(forKey: "CloudDictationModel") ?? ""
+            return CloudAudioDictationModel.catalog.contains { $0.id == stored } ? stored : CloudAudioDictationModel.defaultID
+        }
+        set {
+            guard CloudAudioDictationModel.catalog.contains(where: { $0.id == newValue }) else { return }
+            self.defaults.set(newValue, forKey: "CloudDictationModel")
+        }
+    }
+
     var configuration: CloudTranscriptionConfiguration {
         CloudTranscriptionConfiguration(modelID: self.modelID, languageCode: self.languageCode)
     }
@@ -52,6 +68,26 @@ extension SettingsStore {
     }
 
     var usesCloudTranscription: Bool { self.speechExecutionSource == .openRouter }
+
+    var usesCombinedCloudDictation: Bool { self.usesCloudTranscription && self.cloudDictationMode == .transcribeAndStyle }
+
+    var cloudDictationMode: CloudDictationMode {
+        get { CloudTranscriptionPreferences(defaults: .standard).dictationMode }
+        set {
+            self.objectWillChange.send()
+            var preferences = CloudTranscriptionPreferences(defaults: .standard)
+            preferences.dictationMode = newValue
+        }
+    }
+
+    var cloudDictationModelID: String {
+        get { CloudTranscriptionPreferences(defaults: .standard).dictationModelID }
+        set {
+            self.objectWillChange.send()
+            var preferences = CloudTranscriptionPreferences(defaults: .standard)
+            preferences.dictationModelID = newValue
+        }
+    }
 
     var cloudTranscriptionModelID: String {
         get { CloudTranscriptionPreferences(defaults: .standard).modelID }

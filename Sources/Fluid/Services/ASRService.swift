@@ -627,6 +627,9 @@ final class ASRService: ObservableObject {
     private var frozenSpeechExecutionSource: SpeechExecutionSource?
     private var cloudSpeechProvider: CloudTranscriptionProvider?
     private var frozenCloudConfiguration: CloudTranscriptionConfiguration?
+    private var frozenCloudAPIKey: String?
+    private var frozenCloudDictationModelID: String?
+    private var lastCompletedCloudDictationOutput: CloudAudioDictationOutput?
     private var failedCloudDictation: (samples: [Float], configuration: CloudTranscriptionConfiguration)?
     @Published private(set) var hasFailedCloudDictation = false
     private var dictationActivityLease: ASRActivityLease?
@@ -673,9 +676,12 @@ final class ASRService: ObservableObject {
                 if SettingsStore.shared.usesCloudTranscription {
                     let configuration = SettingsStore.shared.cloudTranscriptionConfiguration
                     self.frozenCloudConfiguration = configuration
+                    self.frozenCloudAPIKey = SettingsStore.shared.openRouterTranscriptionAPIKey
+                    self.frozenCloudDictationModelID = activity == .dictation && SettingsStore.shared.usesCombinedCloudDictation
+                        ? SettingsStore.shared.cloudDictationModelID : nil
                     self.frozenTranscriptionProvider = CloudTranscriptionProvider(
                         configuration: configuration,
-                        apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
+                        apiKey: self.frozenCloudAPIKey ?? "",
                         persistChunks: activity != .dictation
                     )
                 } else {
@@ -706,6 +712,8 @@ final class ASRService: ObservableObject {
         self.frozenTranscriptionProvider = nil
         self.frozenSpeechExecutionSource = nil
         self.frozenCloudConfiguration = nil
+        self.frozenCloudAPIKey = nil
+        self.frozenCloudDictationModelID = nil
         DictionaryAudioLearningService.shared.activityDidEnd()
 
         guard self.providerResetPending else { return }
@@ -1241,6 +1249,20 @@ final class ASRService: ObservableObject {
 
     var isUsingCloudTranscription: Bool {
         (self.frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
+    }
+
+    var isUsingCombinedCloudDictation: Bool {
+        self.isUsingCloudTranscription && (self.activeActivityLease != nil
+            ? self.frozenCloudDictationModelID != nil : SettingsStore.shared.usesCombinedCloudDictation)
+    }
+
+    var activeCloudDictationModelID: String {
+        self.frozenCloudDictationModelID ?? SettingsStore.shared.cloudDictationModelID
+    }
+
+    func consumeLastCompletedCloudDictationOutput() -> CloudAudioDictationOutput? {
+        defer { self.lastCompletedCloudDictationOutput = nil }
+        return self.lastCompletedCloudDictationOutput
     }
 
     /// Exposes the transcription provider for file transcription (MeetingTranscriptionService)
@@ -3372,13 +3394,15 @@ final class ASRService: ObservableObject {
         onFinalTranscriptionStarted: (@MainActor () -> Void)? = nil,
         forDictionaryTraining: Bool = false,
         captureDictionaryPronunciation: Bool? = nil,
-        forDictionaryTesting: Bool = false
+        forDictionaryTesting: Bool = false,
+        cloudDictationInstructions: (@MainActor () -> CloudAudioDictationInstructions?)? = nil
     ) async -> String {
         guard !forDictionaryTesting || self.isDictionaryTrainingCaptureActive else { return "" }
         DebugLogger.shared.info("🛑 STOP() called - beginning shutdown sequence", source: "ASRService")
         self.lastStopOutcome = .empty
         self.lastFinalTranscriptionDurationMs = nil
         self.lastFinalParakeetProcessingMs = nil
+        self.lastCompletedCloudDictationOutput = nil
         if forDictionaryTraining || self.isDictionaryTrainingCaptureActive {
             self.lastDictionaryTrainingResult = nil
         }
@@ -3598,8 +3622,24 @@ final class ASRService: ObservableObject {
         do {
             traceStop("readiness_begin")
             var provider = self.transcriptionProvider
+            if !isolatedDictionaryCapture, self.isUsingCombinedCloudDictation,
+               let instructions = cloudDictationInstructions?(), let configuration = self.frozenCloudConfiguration
+            {
+                let combinedConfiguration = CloudTranscriptionConfiguration(
+                    modelID: configuration.modelID,
+                    languageCode: configuration.languageCode,
+                    audioDictation: instructions
+                )
+                self.frozenCloudConfiguration = combinedConfiguration
+                provider = CloudTranscriptionProvider(
+                    configuration: combinedConfiguration,
+                    apiKey: self.frozenCloudAPIKey ?? "",
+                    persistChunks: false
+                )
+                self.frozenTranscriptionProvider = provider
+            }
             let ensureStartedAt = Date().timeIntervalSince1970
-            if self.isAsrReady, provider.isReady {
+            if provider.isReady, self.isAsrReady || self.frozenCloudConfiguration?.audioDictation != nil {
                 self.benchmarkLog("stop_ensure_ready skipped=true elapsedMs=0")
             } else {
                 // TODO: Investigate rapid restart while this cold-provider stop is pending (PR #950).
@@ -3691,6 +3731,10 @@ final class ASRService: ObservableObject {
                 finalSource = "full"
             }
             let finalElapsedMs = self.elapsedMilliseconds(since: finalStartedAt)
+            if self.frozenCloudConfiguration?.audioDictation != nil {
+                guard let output = result.cloudDictationOutput else { throw CloudTranscriptionError.malformedResponse }
+                self.lastCompletedCloudDictationOutput = output
+            }
             traceStop("final_asr_end")
             if !useDictionaryTrainingPath {
                 self.lastFinalTranscriptionDurationMs = finalElapsedMs
@@ -3842,7 +3886,7 @@ final class ASRService: ObservableObject {
         let result = try await provider.transcribeFinal(failed.samples)
         try Task.checkCancellation()
         self.discardFailedCloudDictation()
-        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (result.cloudDictationOutput?.text ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func beginDeferredStopUIInvalidation() {

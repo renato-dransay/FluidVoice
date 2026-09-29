@@ -1,18 +1,72 @@
 import Foundation
 
+nonisolated enum CloudDictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case transcriptionOnly
+    case transcribeAndStyle
+
+    var id: String { self.rawValue }
+}
+
+nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+
+    static let defaultID = "google/gemini-2.5-flash"
+    // These Gemini models accept WAV input; discovery also checks their current schema capabilities.
+    static let catalog: [CloudAudioDictationModel] = [
+        .init(id: defaultID, name: "Gemini 2.5 Flash"),
+        .init(id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite"),
+        .init(id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro"),
+    ]
+}
+
+nonisolated struct CloudAudioDictationInstructions: Codable, Equatable, Sendable {
+    let modelID: String
+    let promptText: String?
+    let appContext: String
+    let precedingText: String
+    let spokenSendPhrase: String?
+
+    init(modelID: String, promptText: String?, appContext: String = "", precedingText: String = "", spokenSendPhrase: String? = nil) {
+        self.modelID = modelID
+        self.promptText = promptText
+        self.appContext = appContext
+        self.precedingText = precedingText
+        self.spokenSendPhrase = spokenSendPhrase
+    }
+}
+
+nonisolated struct CloudAudioDictationOutput: Codable, Equatable, Sendable {
+    let transcript: String
+    let text: String
+    let modelID: String
+    let styleApplied: Bool
+    let processingDuration: TimeInterval
+}
+
 nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable {
     let modelID: String
     let languageCode: String?
+    let audioDictation: CloudAudioDictationInstructions?
 
-    init(modelID: String = CloudTranscriptionModel.defaultDictationID, languageCode: String? = nil) {
+    init(modelID: String = CloudTranscriptionModel.defaultDictationID, languageCode: String? = nil, audioDictation: CloudAudioDictationInstructions? = nil) {
         self.modelID = modelID
         let language = languageCode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.languageCode = language?.isEmpty == false ? language : nil
+        self.audioDictation = audioDictation
     }
 
     static let meetingDefault = CloudTranscriptionConfiguration(modelID: CloudTranscriptionModel.defaultMeetingID)
 
     func validate(wordTimings: Bool) throws {
+        if let audioDictation {
+            guard CloudAudioDictationModel.catalog.contains(where: { $0.id == audioDictation.modelID }) else {
+                throw CloudTranscriptionError.unsupportedModel
+            }
+            if wordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
+            if let languageCode, !Self.supportedLanguageCodes.contains(languageCode) { throw CloudTranscriptionError.invalidLanguage }
+            return
+        }
         guard let model = CloudTranscriptionModel.catalog.first(where: { $0.id == self.modelID }) else {
             throw CloudTranscriptionError.unsupportedModel
         }
@@ -59,6 +113,16 @@ nonisolated struct CloudTranscriptionResult: Codable, Equatable, Sendable {
     let usage: CloudTranscriptionUsage?
     let requestID: String?
     let processingDuration: TimeInterval
+    let dictationOutput: CloudAudioDictationOutput?
+
+    init(text: String, words: [CloudTranscriptionWord]?, usage: CloudTranscriptionUsage?, requestID: String?, processingDuration: TimeInterval, dictationOutput: CloudAudioDictationOutput? = nil) {
+        self.text = text
+        self.words = words
+        self.usage = usage
+        self.requestID = requestID
+        self.processingDuration = processingDuration
+        self.dictationOutput = dictationOutput
+    }
 
     func validateTimings(duration: TimeInterval) throws {
         guard let words else { throw CloudTranscriptionError.invalidWordTimings }
@@ -81,6 +145,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
     case missingAPIKey, authentication, creditsExhausted, rateLimited, timeout, network
     case unsupportedModel, modelUnavailable, unsupportedWordTimings, invalidLanguage, invalidAudio, oversizedAudio
     case malformedResponse, invalidWordTimings, server(Int), catalogUnavailable, liveTranscriptionUnavailable
+    case dictationTooLong, truncatedDictationResponse
 
     var errorDescription: String? {
         switch self {
@@ -101,6 +166,8 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .server(let status): "OpenRouter transcription failed (HTTP \(status)). Retry or choose local transcription."
         case .catalogUnavailable: "OpenRouter did not list a supported transcription model. Try validation again later."
         case .liveTranscriptionUnavailable: "Cloud transcription runs after recording stops. Select a local model for live captions."
+        case .dictationTooLong: "Transcribe + Style supports recordings up to 120 seconds. Record a shorter dictation or choose Transcription Only for longer recordings."
+        case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
     }
 }
