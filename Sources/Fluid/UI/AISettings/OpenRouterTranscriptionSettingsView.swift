@@ -120,7 +120,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Dictation language", systemImage: "globe")
                 .font(.callout)
-            Text("Primary is the dictation default. Choose Primary, Secondary, or Automatic while recording; the choice is remembered. Without a primary, dictation detects automatically. Imported files detect automatically.")
+            Text("Dictation detects any language automatically. Choose Primary or Secondary while recording to override detection; the choice is remembered.")
                 .font(.caption).foregroundStyle(.secondary)
             self.languageHintPicker(
                 "Primary language",
@@ -140,7 +140,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
-            Text("Transcription-only dictation sends the selected language to OpenRouter. Transcribe + style uses it as a Gemini instruction. Imported files use both preferences as optional hints where supported.")
+            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or used as a Gemini instruction in Transcribe + style.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

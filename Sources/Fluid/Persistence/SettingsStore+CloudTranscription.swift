@@ -31,7 +31,7 @@ struct CloudTranscriptionPreferences {
 
     var primaryLanguageCode: String? {
         get {
-            // Preserve a former manual selection as the primary language.
+            // Preserve a former manual selection as an optional hint, never as a forced language.
             Self.validLanguageCode(self.defaults.string(forKey: "CloudTranscriptionPrimaryLanguage")
                 ?? self.defaults.string(forKey: "CloudTranscriptionLanguage"))
         }
@@ -61,8 +61,8 @@ struct CloudTranscriptionPreferences {
         }
     }
 
-    /// An absent choice follows the primary language. "auto" preserves an explicit
-    /// automatic choice across later recordings, even when a primary is configured.
+    /// An absent or unavailable choice keeps automatic detection. A user may
+    /// explicitly choose a configured language during recording.
     var dictationLanguageCode: String? {
         get {
             let stored = self.defaults.string(forKey: "CloudDictationLanguageSelection")
@@ -71,7 +71,7 @@ struct CloudTranscriptionPreferences {
             if let code = Self.validLanguageCode(stored), code == primary || code == self.secondaryLanguageCode {
                 return code
             }
-            return primary
+            return nil
         }
         set {
             guard newValue == nil || (newValue == self.primaryLanguageCode || newValue == self.secondaryLanguageCode) else { return }
@@ -100,9 +100,12 @@ struct CloudTranscriptionPreferences {
     }
 
     var dictationConfiguration: CloudTranscriptionConfiguration {
-        CloudTranscriptionConfiguration(
+        let selectedLanguage = self.dictationLanguageCode
+        return CloudTranscriptionConfiguration(
             modelID: self.modelID,
-            languageCode: self.dictationLanguageCode
+            languageCode: selectedLanguage,
+            primaryLanguageCode: self.primaryLanguageCode,
+            secondaryLanguageCode: self.secondaryLanguageCode
         )
     }
 
