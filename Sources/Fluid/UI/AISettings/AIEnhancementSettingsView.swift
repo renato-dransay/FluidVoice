@@ -57,10 +57,19 @@ struct AIEnhancementSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if self.selectedConfigurationSection == .providers, self.settings.usesCombinedCloudDictation {
-                Label("Dictation uses the OpenRouter voice model and key from Voice Engine. These providers still apply to text editing and other text AI actions.", systemImage: "info.circle")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("OpenRouter handles dictation", systemImage: "waveform")
+                        .font(.fluidSystem(size: 14, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.primaryText)
+                    Text("Transcribe + style sends audio and your Cleanup Style to the voice model in Voice Engine in one request. The providers below are for Edit, Write, and other text AI actions while this mode is on.")
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(self.theme.palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(self.theme.palette.accent.opacity(0.25), lineWidth: 1))
             }
             self.aiConfigurationCard
         }
