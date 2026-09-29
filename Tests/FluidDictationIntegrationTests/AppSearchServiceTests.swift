@@ -60,7 +60,11 @@ final class AppSearchServiceTests: XCTestCase {
 
         service.query = "launch at startup"
         service.query = "accent color"
-        try await Task.sleep(for: .milliseconds(600))
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while service.groups.first(where: { $0.kind == .settings }) == nil && clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         let settings = try XCTUnwrap(service.groups.first { $0.kind == .settings })
         XCTAssertTrue(settings.hits.contains { $0.target == .settings(.accentColor) })
