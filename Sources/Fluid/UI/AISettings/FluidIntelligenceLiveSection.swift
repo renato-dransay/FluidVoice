@@ -7,6 +7,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
     let backendID: String
     let isPrimary: Bool
     let isVerified: Bool
+    let usesCombinedCloudDictation: Bool
     let makePrimary: () -> Void
     @ViewBuilder let management: () -> Management
     @State private var showsManagement = false
@@ -46,7 +47,14 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                         .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 Spacer()
-                ProviderDefaultButton(isCurrent: self.isPrimary, isEnabled: self.isVerified && !self.controller.isBusy, action: self.makePrimary)
+                if self.usesCombinedCloudDictation {
+                    Label("Voice: OpenRouter", systemImage: "waveform")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .help("Transcribe + style uses the OpenRouter voice model. Switch to transcription only to choose a separate dictation cleanup provider.")
+                } else {
+                    ProviderDefaultButton(isCurrent: self.isPrimary, isEnabled: self.isVerified && !self.controller.isBusy, action: self.makePrimary)
+                }
                 Button("Manage", systemImage: "slider.horizontal.3") { self.showsManagement = true }
                     .fluidGlassAction()
             }

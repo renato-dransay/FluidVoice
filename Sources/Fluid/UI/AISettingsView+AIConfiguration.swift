@@ -54,6 +54,7 @@ extension AIEnhancementSettingsView {
                     backendID: self.settings.privateAIBackendPreference.rawValue,
                     isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
                     isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
+                    usesCombinedCloudDictation: self.settings.usesCombinedCloudDictation,
                     makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
                 ) {
                     self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
@@ -100,9 +101,12 @@ extension AIEnhancementSettingsView {
                             .foregroundStyle(.red)
                     }
                     ProviderDefaultButton(
-                        isCurrent: self.primaryDefaultProviderID == provider.id,
+                        isCurrent: self.settings.usesCombinedCloudDictation
+                            ? self.settings.selectedProviderID == provider.id
+                            : self.primaryDefaultProviderID == provider.id,
                         isEnabled: self.viewModel.canUseProviderWithoutVerification(provider.id)
-                            && !self.viewModel.isFetchingModels && !self.viewModel.isTestingConnection
+                            && !self.viewModel.isFetchingModels && !self.viewModel.isTestingConnection,
+                        purpose: self.settings.usesCombinedCloudDictation ? .textActions : .dictation
                     ) {
                         self.makePrimaryDefaultProvider(provider.id, isPrivateAI: false)
                     }
@@ -197,9 +201,11 @@ extension AIEnhancementSettingsView {
 
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Providers")
+                    Text(self.settings.usesCombinedCloudDictation ? "Text AI providers" : "Providers")
                         .font(.fluidSystem(size: 14, weight: .semibold))
-                    Text("Configure local models and API providers.")
+                    Text(self.settings.usesCombinedCloudDictation
+                         ? "These providers serve text actions; Voice Engine handles dictation."
+                         : "Configure local models and API providers.")
                         .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
                 }
@@ -242,13 +248,17 @@ extension AIEnhancementSettingsView {
                 self.aiSetupSummaryDivider
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
                 self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: self.settings.usesCombinedCloudDictation
+                    ? "Cleanup Styles supply the voice model's instructions"
+                    : "Cleanup Styles choose what dictation uses")
             }
 
             VStack(alignment: .leading, spacing: 7) {
                 self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryItem(icon: "wand.and.stars", text: "Cleanup Styles choose what dictation uses")
+                self.aiSetupSummaryItem(icon: "wand.and.stars", text: self.settings.usesCombinedCloudDictation
+                    ? "Cleanup Styles supply the voice model's instructions"
+                    : "Cleanup Styles choose what dictation uses")
             }
         }
         .padding(.horizontal, 2)
@@ -308,7 +318,13 @@ extension AIEnhancementSettingsView {
                 self.helpStep("2", "Add an API key if needed", "key")
                 self.helpStep("3", "Pick the model you want", "cpu")
                 self.helpStep("4", "Verify the connection", "checkmark.shield")
-                self.helpStep("5", "Set Dictate to Off, Default, or a custom prompt", "text.bubble")
+                self.helpStep(
+                    "5",
+                    self.settings.usesCombinedCloudDictation
+                        ? "Pick a Cleanup Style for dictation; these providers serve text actions"
+                        : "Set Dictate to Off, Default, or a custom prompt",
+                    "text.bubble"
+                )
             }
         }
         .padding(14)
@@ -1442,9 +1458,11 @@ extension AIEnhancementSettingsView {
         let models = self.viewModel.availableModelsByProvider[providerKey] ?? []
         let isPrivateAIProvider = item.id == PrivateAIProviderFeature.shared.providerID
         let primaryPromptSelection = self.viewModel.dictationPromptSelection(for: .primary)
-        let isDefaultProvider = isPrivateAIProvider
-            ? primaryPromptSelection == .privateAI
-            : primaryPromptSelection == .default && item.id == self.settings.selectedProviderID
+        let isDefaultProvider = self.settings.usesCombinedCloudDictation && !isPrivateAIProvider
+            ? item.id == self.settings.selectedProviderID
+            : (isPrivateAIProvider
+                ? primaryPromptSelection == .privateAI
+                : primaryPromptSelection == .default && item.id == self.settings.selectedProviderID)
         let fluidModel = self.privateAIController.selectedPrivateAIModel
         let fluidStatus = self.privateAIModelStatus(for: fluidModel)
         let isFluidInstalled = PrivateAIIntegrationService.isModelInstalled(fluidModel)
@@ -1488,28 +1506,38 @@ extension AIEnhancementSettingsView {
 
                 // Fixed action grid: companion icon, optional reasoning, primary action.
                 HStack(spacing: 8) {
-                    Button {
-                        guard !isDefaultProvider else { return }
-                        self.makePrimaryDefaultProvider(item.id, isPrivateAI: isPrivateAIProvider)
-                    } label: {
-                        Label(
-                            isDefaultProvider ? "Default" : "Use as default",
-                            systemImage: isDefaultProvider ? "checkmark.circle.fill" : "circle"
+                    if isPrivateAIProvider && self.settings.usesCombinedCloudDictation {
+                        Label("OpenRouter", systemImage: "waveform")
+                            .font(.fluidSystem(.caption2).weight(.semibold))
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
+                            .help("Transcribe + style uses the OpenRouter voice model for dictation.")
+                    } else {
+                        Button {
+                            guard !isDefaultProvider else { return }
+                            self.makePrimaryDefaultProvider(item.id, isPrivateAI: isPrivateAIProvider)
+                        } label: {
+                            Label(
+                                self.settings.usesCombinedCloudDictation
+                                    ? (isDefaultProvider ? "Text default" : "Use for text")
+                                    : (isDefaultProvider ? "Default" : "Use as default"),
+                                systemImage: isDefaultProvider ? "checkmark.circle.fill" : "circle"
+                            )
+                            .font(.fluidSystem(.caption2).weight(.semibold))
+                            .lineLimit(1)
+                            .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
+                        }
+                        .fluidCompactButton(
+                            isReady: isDefaultProvider,
+                            foreground: isDefaultProvider ? self.theme.palette.accent : nil,
+                            borderColor: isDefaultProvider ? self.theme.palette.accent.opacity(0.5) : nil
                         )
-                        .font(.fluidSystem(.caption2).weight(.semibold))
-                        .lineLimit(1)
-                        .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
+                        .help(self.settings.usesCombinedCloudDictation
+                            ? "Default for Edit, Write, and other text actions linked to the global provider. Dictation still uses OpenRouter."
+                            : (isDefaultProvider
+                                ? "Used by the main dictation shortcut"
+                                : "Use this provider for the main dictation shortcut"))
                     }
-                    .fluidCompactButton(
-                        isReady: isDefaultProvider,
-                        foreground: isDefaultProvider ? self.theme.palette.accent : nil,
-                        borderColor: isDefaultProvider ? self.theme.palette.accent.opacity(0.5) : nil
-                    )
-                    .help(
-                        isDefaultProvider
-                            ? "Used by the main dictation shortcut"
-                            : "Use this provider for the main dictation shortcut"
-                    )
 
                     if isPrivateAIProvider {
                         SearchableModelPicker(
@@ -1795,8 +1823,16 @@ extension AIEnhancementSettingsView {
     }
 
     private func makePrimaryDefaultProvider(_ providerID: String, isPrivateAI: Bool) {
-        guard providerID != self.primaryDefaultProviderID,
-              !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
+        guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
+        if self.settings.usesCombinedCloudDictation {
+            guard !isPrivateAI,
+                  providerID != self.settings.selectedProviderID,
+                  self.viewModel.canUseProviderWithoutVerification(providerID),
+                  self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
+            self.activateProvider(providerID)
+            return
+        }
+        guard providerID != self.primaryDefaultProviderID else { return }
         if isPrivateAI {
             guard !self.privateAIController.isBusy, self.viewModel.isPrivateAIPromptAvailable() else { return }
             self.viewModel.setDictationPromptSelection(.privateAI, for: .primary)
