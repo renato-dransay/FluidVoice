@@ -4,7 +4,7 @@ The personal fork starts at upstream `main` commit `3b509ea1754022d0a3825717308b
 
 ## Branches and builds
 
-`origin` is `renato-dransay/FluidVoice`; `upstream` is `altic-dev/FluidVoice`. Keep `main` as a fast-forward-only upstream mirror. The default branch is `personal`. Feature and upstream-update pull requests target `personal`; merges require review and passing checks.
+`origin` is `renato-dransay/FluidVoice`; `upstream` is `altic-dev/FluidVoice`. Keep `main` as a fast-forward-only upstream mirror. The default branch is `personal`. Feature and upstream-update pull requests target `personal`; the owner reviews the changes and merges after the required checks pass. A separate reviewer's approval is not required.
 
 Build on Apple Silicon with full Xcode selected and an installed Apple Development signing identity:
 
@@ -53,7 +53,7 @@ The fork uses fresh preferences under its bundle identifier, the Keychain servic
 
 The bot never force-pushes, merges a pull request, publishes a binary or installs an application. It explicitly dispatches `Personal fork checks` on the candidate branch because pull requests opened with `GITHUB_TOKEN` do not trigger ordinary pull-request workflows. Required checks are `Fork tooling tests`, `Personal SwiftLint`, and `Personal build and tests`. Review the diff and CI, merge the pull request, rebuild locally, run app smoke checks, then install through the snapshot helper.
 
-Enable Actions and "Allow GitHub Actions to create and approve pull requests" in the fork settings; the workflow only creates pull requests and never approves them. Keep default workflow token permissions read-only. Workflow-level permissions grant only the update job its necessary writes. Inherited upstream bots are restricted by repository guards to `altic-dev/FluidVoice`. Keep the two personal workflows enabled; other upstream maintenance workflows can stay disabled. The initial fork setup enforces one approving review, dismissal of stale approvals, and all three checks with an up-to-date branch on `personal`, including administrators. Force-pushes, deletion, and repository auto-merge are disabled. Merge commits remain allowed for upstream integration.
+Enable Actions and "Allow GitHub Actions to create and approve pull requests" in the fork settings; the workflow only creates pull requests and never approves them. Keep default workflow token permissions read-only. Workflow-level permissions grant only the update job its necessary writes. Inherited upstream bots are restricted by repository guards to `altic-dev/FluidVoice`. Keep the two personal workflows enabled; other upstream maintenance workflows can stay disabled. Branch protection requires all three checks with an up-to-date branch on `personal`, including administrators, but does not require approval from another reviewer. Force-pushes, deletion, and repository auto-merge are disabled. Merge commits remain allowed for upstream integration.
 
 GitHub scheduled workflows in inactive public repositories may stop after 60 days. Upstream **Watch > Custom > Releases** notifications were enabled and verified in GitHub during the initial setup. Check that the scheduled workflow stays active. For another account, configure the same releases-only option in GitHub; its REST subscription API does not provide that selector.
 

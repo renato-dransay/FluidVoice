@@ -2,6 +2,38 @@
 >
 > See [cloud transcription setup](docs/personal/cloud-transcription.md) and [signed builds, rollback, and reviewed upstream updates](docs/personal/maintenance.md). Build with `./build.sh personal`. The public source build excludes the private Fluid Intelligence runtime. Cloud recognition is off by default.
 
+## Keeping this personal fork up to date
+
+`personal` is this fork's default branch and contains our OpenRouter integration and personal build configuration. `main` remains an unmodified mirror of the original project's `main` branch.
+
+| Remote / branch | Purpose |
+| --- | --- |
+| `origin` | Our fork: [`renato-dransay/FluidVoice`](https://github.com/renato-dransay/FluidVoice). Personal changes are pushed here. |
+| `upstream` | Original project: [`altic-dev/FluidVoice`](https://github.com/altic-dev/FluidVoice). Updates are fetched from here; our automation never pushes to it. |
+| `origin/main` | Fast-forward-only mirror of `upstream/main`. It does not contain our personal changes. |
+| `origin/personal` | Our working release branch. Feature and upstream-update pull requests merge here. |
+
+The **Personal fork upstream updates** workflow runs every Monday at **08:23 UTC**. It refreshes the `main` mirror, checks the latest stable upstream release, and opens one update pull request into `personal` when that release is not already included. It merges the release into a candidate based on our existing `personal` branch, preserving our changes. Beta releases are excluded. Conflicts or divergent history produce an issue for manual resolution; the workflow never force-pushes or merges automatically.
+
+Run the same check immediately from GitHub Actions, or with:
+
+```sh
+gh workflow run fork-upstream.yml --repo renato-dransay/FluidVoice --ref personal
+```
+
+The workflow explicitly starts our fork checks for each update pull request. After the checks pass, the owner reviews the changes and merges the pull request. **No approval from a second reviewer is required.** The three required checks remain enforced. Upstream release notifications provide a backup reminder.
+
+After merging an update, refresh the local checkout and build the personal app:
+
+```sh
+cd /Users/renatobeltrao/Projects/fluidvoice
+git switch personal
+git pull --ff-only origin personal
+./build.sh personal
+```
+
+Run the [documented validation checks](docs/personal/maintenance.md#branches-and-builds), quit the personal app, then install with `python3 tools/fork/local_install.py install`. The installer retains the previous signed app and a data/preferences snapshot for rollback. Source updates do not automatically replace the installed app. Homebrew and upstream release downloads below install the original app, not this personal build.
+
 # FluidVoice
 
 <p align="center">
