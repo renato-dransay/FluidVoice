@@ -22,7 +22,8 @@ final class CloudTranscriptionProvider: TranscriptionProvider {
         !self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (try? self.configuration.validate(wordTimings: false)) != nil
     }
     var supportsWordTimings: Bool {
-        CloudTranscriptionModel.catalog.first(where: { $0.id == self.configuration.modelID })?.supportsWordTimings == true
+        if self.configuration.audioDictation != nil { return false }
+        return CloudTranscriptionModel.catalog.first(where: { $0.id == self.configuration.modelID })?.supportsWordTimings == true
     }
     var prefersNativeFileTranscription: Bool { true }
     var shouldClearCacheAfterCancellation: Bool { false }
@@ -30,6 +31,11 @@ final class CloudTranscriptionProvider: TranscriptionProvider {
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         try self.configuration.validate(wordTimings: false)
+        if let instructions = self.configuration.audioDictation {
+            let available = try await self.client.validateAudioDictation(apiKey: self.apiKey)
+            guard available.contains(where: { $0.id == instructions.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
+            return
+        }
         let available = try await self.client.validate(apiKey: self.apiKey)
         guard available.contains(where: { $0.id == self.configuration.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
     }
@@ -37,7 +43,7 @@ final class CloudTranscriptionProvider: TranscriptionProvider {
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         let result = try await self.engine.transcribe(samples: samples, configuration: self.configuration, apiKey: self.apiKey, wordTimings: false)
         try Task.checkCancellation()
-        return ASRTranscriptionResult(text: result.text)
+        return ASRTranscriptionResult(text: result.text, cloudDictationOutput: result.dictationOutput)
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {

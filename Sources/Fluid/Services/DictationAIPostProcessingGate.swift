@@ -19,6 +19,16 @@ enum DictationAIPostProcessingGate {
         self.isConfigured(for: .primary, appBundleID: nil)
     }
 
+    /// Style availability for live dictation can be supplied by the audio model itself.
+    /// Explicit text reprocessing still uses isConfigured and its own verified provider.
+    static func isStyleConfigured(for slot: SettingsStore.DictationShortcutSlot, appBundleID: String? = nil) -> Bool {
+        let settings = SettingsStore.shared
+        guard settings.usesCombinedCloudDictation else { return self.isConfigured(for: slot, appBundleID: appBundleID) }
+        return settings.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID) != .off &&
+            !settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            CloudAudioDictationModel.catalog.contains { $0.id == settings.cloudDictationModelID }
+    }
+
     static func isConfigured(for slot: SettingsStore.DictationShortcutSlot, appBundleID: String? = nil) -> Bool {
         let settings = SettingsStore.shared
         let promptSelection = settings.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID)

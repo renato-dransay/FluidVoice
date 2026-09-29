@@ -1,4 +1,4 @@
-> **FluidVoice Personal:** This fork adds optional OpenRouter speech recognition for dictation, imported files, and completed meetings, with local speaker detection. It uses a separate app identity and local data, and does not install official upstream binaries.
+> **FluidVoice Personal:** This fork adds optional OpenRouter speech recognition for dictation, imported files, and completed meetings, with local speaker detection. Dictation can send audio and Cleanup Style instructions together in one request. It uses a separate app identity and local data, and does not install official upstream binaries.
 >
 > See [cloud transcription setup](docs/personal/cloud-transcription.md) and [signed builds, rollback, and reviewed upstream updates](docs/personal/maintenance.md). Build with `./build.sh personal`. The public source build excludes the private Fluid Intelligence runtime. Cloud recognition is off by default.
 

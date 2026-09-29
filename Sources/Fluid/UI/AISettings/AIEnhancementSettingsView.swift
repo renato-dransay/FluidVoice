@@ -55,7 +55,15 @@ struct AIEnhancementSettingsView: View {
     @State var promptEditorOriginalConfiguration: SettingsStore.DictationPromptConfiguration? = nil
 
     var body: some View {
-        self.aiConfigurationCard
+        VStack(alignment: .leading, spacing: 16) {
+            if self.selectedConfigurationSection == .providers, self.settings.usesCombinedCloudDictation {
+                Label("Dictation uses the OpenRouter voice model and key from Voice Engine. These providers still apply to text editing and other text AI actions.", systemImage: "info.circle")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            self.aiConfigurationCard
+        }
             .onAppear {
                 self.viewModel.onAppear()
                 self.privateAIController.synchronizeSelection()

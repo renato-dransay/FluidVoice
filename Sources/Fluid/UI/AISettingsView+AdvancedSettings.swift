@@ -91,7 +91,11 @@ extension AIEnhancementSettingsView {
 
             VStack(alignment: .leading, spacing: 8) {
                 self.promptProfilesHelpRow("Built-in is the normal prompt. Assign any prompt as Primary to use it with your main hotkey.")
-                self.promptProfilesHelpRow("\(PrivateAIProviderFeature.displayName) uses its own local prompt.")
+                if self.settings.usesCombinedCloudDictation {
+                    self.promptProfilesHelpRow("OpenRouter sends the selected style with your audio in one request. The model and key come from Voice Engine.")
+                } else {
+                    self.promptProfilesHelpRow("\(PrivateAIProviderFeature.displayName) uses its own local prompt.")
+                }
                 self.promptProfilesHelpRow("Custom prompts can be assigned globally, by app, or by shortcut.")
             }
         }
@@ -442,6 +446,9 @@ extension AIEnhancementSettingsView {
         selection: SettingsStore.DictationPromptSelection,
         isPrivateAI: Bool
     ) -> Bool {
+        if self.settings.usesCombinedCloudDictation {
+            return self.isCloudDictationConfigured
+        }
         if isPrivateAI {
             return self.viewModel.isPrivateAIPromptAvailable()
         }
@@ -458,6 +465,28 @@ extension AIEnhancementSettingsView {
 
     private var defaultExternalPromptProviderID: String {
         DictationProviderRoute.externalFallbackProviderID(from: self.settings.selectedProviderID)
+    }
+
+    private var isCloudDictationConfigured: Bool {
+        !self.settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && CloudAudioDictationModel.catalog.contains { $0.id == self.settings.cloudDictationModelID }
+    }
+
+    private var isCombinedCloudPromptEditor: Bool {
+        self.settings.usesCombinedCloudDictation
+            && self.viewModel.draftPromptMode.normalized == .dictate
+            && self.viewModel.promptEditorMode?.isPrivateAI != true
+    }
+
+    private var cloudDictationModelPicker: PromptCardModelPicker {
+        PromptCardModelPicker(
+            summary: "OpenRouter · \(ModelDisplayName.forID(self.settings.cloudDictationModelID))",
+            selectedModel: self.settings.cloudDictationModelID,
+            models: [],
+            providerName: "OpenRouter (Voice Engine)",
+            onSelectModel: { _ in },
+            onOpenProviders: {}
+        )
     }
 
     private func promptEditorSelection(for mode: PromptEditorMode) -> SettingsStore.DictationPromptSelection? {
@@ -483,7 +512,7 @@ extension AIEnhancementSettingsView {
             self.promptEditorOriginalConfiguration = nil
             self.promptEditorShortcutDraft = pending?.shortcut
             let providerID = pending?.providerID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            self.promptEditorProviderIDDraft = providerID.isEmpty
+            self.promptEditorProviderIDDraft = providerID.isEmpty && !self.isCombinedCloudPromptEditor
                 ? self.viewModel.defaultVerifiedPromptProviderID()
                 : providerID
             self.promptEditorModelDraft = pending?.modelName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -499,7 +528,8 @@ extension AIEnhancementSettingsView {
         self.promptEditorShortcutDraft = configuration?.shortcut
 
         let providerID = configuration?.providerID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        self.promptEditorProviderIDDraft = providerID.isEmpty ? self.viewModel.defaultVerifiedPromptProviderID() : providerID
+        self.promptEditorProviderIDDraft = providerID.isEmpty && !self.isCombinedCloudPromptEditor
+            ? self.viewModel.defaultVerifiedPromptProviderID() : providerID
         self.promptEditorModelDraft = configuration?.modelName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if self.promptEditorModelDraft.isEmpty, !self.promptEditorProviderIDDraft.isEmpty {
             self.promptEditorModelDraft = self.viewModel.selectedModel(for: self.promptEditorProviderIDDraft)
@@ -606,12 +636,18 @@ extension AIEnhancementSettingsView {
     }
 
     private func isPromptEditorConfigurationReady() -> Bool {
+        if self.isCombinedCloudPromptEditor {
+            return self.isCloudDictationConfigured
+        }
         let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         return !providerID.isEmpty && !model.isEmpty && self.viewModel.connectionStatus(for: providerID) == .success
     }
 
     private func promptEditorModelPicker() -> PromptCardModelPicker? {
+        if self.isCombinedCloudPromptEditor {
+            return self.cloudDictationModelPicker
+        }
         let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !providerID.isEmpty else {
             return PromptCardModelPicker(
@@ -686,9 +722,22 @@ extension AIEnhancementSettingsView {
                 }
             }
             if !mode.isPrivateAI {
-                self.promptEditorProviderRow
-                self.promptEditorModelRow
-                self.promptEditorProviderGuidance
+                if self.isCombinedCloudPromptEditor {
+                    self.promptEditorConfigRow(title: "Voice model", description: "Configured in Voice Engine.") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("OpenRouter · \(ModelDisplayName.forID(self.settings.cloudDictationModelID))")
+                                .font(self.theme.typography.bodySmallStrong)
+                            Text("This style is sent with audio in one request. No separate AI provider or cleanup request is used.")
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else {
+                    self.promptEditorProviderRow
+                    self.promptEditorModelRow
+                    self.promptEditorProviderGuidance
+                }
             }
         }
         .padding(14)
@@ -923,6 +972,9 @@ extension AIEnhancementSettingsView {
         selection: SettingsStore.DictationPromptSelection,
         isPrivateAI: Bool
     ) -> PromptCardModelPicker? {
+        if self.settings.usesCombinedCloudDictation {
+            return self.cloudDictationModelPicker
+        }
         if isPrivateAI {
             return PromptCardModelPicker(
                 summary: ModelDisplayName.forID(PrivateAIIntegrationService.configuredModelID),
@@ -1043,7 +1095,8 @@ extension AIEnhancementSettingsView {
     private func promptModeSection(mode: SettingsStore.PromptMode) -> some View {
         let customProfiles = self.viewModel.dictationPromptProfiles
             .filter { $0.mode.normalized == mode }
-        let privateAIAvailable = mode.normalized == .dictate && self.viewModel.isPrivateAIPromptAvailable()
+        let privateAIAvailable = mode.normalized == .dictate && !self.settings.usesCombinedCloudDictation
+            && self.viewModel.isPrivateAIPromptAvailable()
         let isSelectedAppsOnly = self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
 
         VStack(alignment: .leading, spacing: 18) {
@@ -1051,7 +1104,9 @@ extension AIEnhancementSettingsView {
                 Label("Switch styles from the dictation overlay", systemImage: "info.circle")
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.theme.palette.accent)
-                Text("Manage instructions, models, and shortcuts here.")
+                Text(self.settings.usesCombinedCloudDictation
+                    ? "Your chosen style is sent with audio to the model in Voice Engine. No separate AI cleanup runs. Off transcribes without styling."
+                    : "Manage instructions, models, and shortcuts here.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -1076,7 +1131,8 @@ extension AIEnhancementSettingsView {
                         self.builtInStyleCard(
                             title: SettingsStore.DictationModeLabels.externalDefault,
                             symbol: "textformat",
-                            subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments) : "External AI provider",
+                            subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments)
+                                : (self.settings.usesCombinedCloudDictation ? "OpenRouter Voice Engine" : "External AI provider"),
                             detail: assignments.isReady ? "Customizable cleanup" : "Setup required",
                             assignments: assignments,
                             isEnabled: true,
@@ -1722,7 +1778,9 @@ extension AIEnhancementSettingsView {
     private func promptSectionDescription(for mode: SettingsStore.PromptMode) -> String {
         switch mode {
         case .dictate:
-            return "Each prompt can have its own provider, model, and optional shortcut."
+            return self.settings.usesCombinedCloudDictation
+                ? "Each style can have its own instructions and optional shortcut. Voice Engine supplies the OpenRouter model for all dictation styles."
+                : "Each prompt can have its own provider, model, and optional shortcut."
         case .edit, .write, .rewrite:
             return "Uses selected text as context (when text is selected) - Edit or rewrite selected text - answer questions, summarize, convert to bullets etc."
         }
@@ -1860,10 +1918,12 @@ extension AIEnhancementSettingsView {
                     if self.viewModel.draftPromptMode == .dictate && !mode.isPrivateAI {
                         VStack(alignment: .leading, spacing: 8) {
                             let hotkeyDisplay = self.settings.primaryDictationShortcutDisplayString
-                            let canTest = DictationAIPostProcessingGate.isProviderConfigured(
-                                providerID: self.promptEditorProviderIDDraft,
-                                model: self.promptEditorModelDraft
-                            )
+                            let canTest = self.isCombinedCloudPromptEditor
+                                ? self.isCloudDictationConfigured
+                                : DictationAIPostProcessingGate.isProviderConfigured(
+                                    providerID: self.promptEditorProviderIDDraft,
+                                    model: self.promptEditorModelDraft
+                                )
 
                             Toggle(isOn: Binding(
                                 get: { self.promptTest.isActive },
@@ -1872,8 +1932,8 @@ extension AIEnhancementSettingsView {
                                         let combined = self.viewModel.combinedDraftPrompt(self.viewModel.draftPromptText, mode: self.viewModel.draftPromptMode)
                                         self.promptTest.activate(
                                             draftPromptText: combined,
-                                            providerID: self.promptEditorProviderIDDraft,
-                                            model: self.promptEditorModelDraft
+                                            providerID: self.isCombinedCloudPromptEditor ? "openrouter" : self.promptEditorProviderIDDraft,
+                                            model: self.isCombinedCloudPromptEditor ? self.settings.cloudDictationModelID : self.promptEditorModelDraft
                                         )
                                     } else {
                                         self.promptTest.deactivate()
@@ -1887,12 +1947,16 @@ extension AIEnhancementSettingsView {
                             .disabled(!canTest)
 
                             if !canTest {
-                                Text("Choose a provider and model to test your prompt.")
+                                Text(self.isCombinedCloudPromptEditor
+                                    ? "Save an OpenRouter key and choose an audio dictation model in Voice Engine to test your style."
+                                    : "Choose a provider and model to test your prompt.")
                                     .font(.fluidSystem(.caption2))
                                     .foregroundStyle(.secondary)
                             } else if self.promptTest.isActive {
                                 Text(
-                                    "Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps)."
+                                    self.isCombinedCloudPromptEditor
+                                        ? "Press the hotkey to start/stop recording (maximum 120 seconds). Audio and your draft style are sent together. The same model returns both texts below. Nothing is typed into other apps."
+                                        : "Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps)."
                                 )
                                 .font(.fluidSystem(.caption2))
                                 .foregroundStyle(.secondary)
@@ -1916,7 +1980,7 @@ extension AIEnhancementSettingsView {
                                 }
 
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("Raw transcription")
+                                    Text(self.isCombinedCloudPromptEditor ? "Model transcript (same request)" : "Raw transcription")
                                         .font(.fluidSystem(.caption2))
                                         .foregroundStyle(.secondary)
                                     TextEditor(text: Binding(
@@ -1937,7 +2001,7 @@ extension AIEnhancementSettingsView {
                                 }
 
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("Post-processed output")
+                                    Text(self.isCombinedCloudPromptEditor ? "Styled output (same request)" : "Post-processed output")
                                         .font(.fluidSystem(.caption2))
                                         .foregroundStyle(.secondary)
                                     TextEditor(text: Binding(
@@ -2029,11 +2093,17 @@ extension AIEnhancementSettingsView {
             self.preparePromptEditorConfigurationDraft(mode: mode)
         }
         .onChange(of: self.promptEditorProviderIDDraft) { _, providerID in
+            guard !self.isCombinedCloudPromptEditor else { return }
             self.promptTest.updateDraftConfiguration(providerID: providerID, model: self.promptEditorModelDraft)
         }
         .onChange(of: self.promptEditorModelDraft) { _, model in
+            guard !self.isCombinedCloudPromptEditor else { return }
             self.promptTest.updateDraftConfiguration(providerID: self.promptEditorProviderIDDraft, model: model)
         }
+        .onChange(of: self.settings.speechExecutionSource) { _, _ in self.promptTest.deactivate() }
+        .onChange(of: self.settings.cloudDictationMode) { _, _ in self.promptTest.deactivate() }
+        .onChange(of: self.settings.cloudDictationModelID) { _, _ in self.promptTest.deactivate() }
+        .onChange(of: self.settings.openRouterTranscriptionAPIKey) { _, _ in self.autoDisablePromptTestIfNeeded() }
         .onChange(of: self.activeShortcutRecordingTarget) { oldValue, newValue in
             if case .newPrompt = mode {
                 if newValue == nil, oldValue != nil {
@@ -2065,7 +2135,7 @@ extension AIEnhancementSettingsView {
 
     private func autoDisablePromptTestIfNeeded() {
         guard self.promptTest.isActive else { return }
-        if !self.viewModel.isAIPostProcessingConfiguredForDictation() {
+        if self.isCombinedCloudPromptEditor ? !self.isCloudDictationConfigured : !self.viewModel.isAIPostProcessingConfiguredForDictation() {
             self.promptTest.deactivate()
         }
     }
