@@ -6,6 +6,13 @@ import Foundation
 /// Interrupted hardware must finish serialized cleanup before another operation
 /// can be admitted. In particular, cancellation must not launch a second IOProc.
 final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
+    /// Schedulers enqueue the deadline; they must not execute it inline under the admission lock.
+    typealias DeadlineScheduler = @Sendable (TimeInterval, DispatchWorkItem) -> Void
+
+    static func scheduleDeadline(_ delay: TimeInterval, _ timer: DispatchWorkItem) {
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay, execute: timer)
+    }
+
     enum Failure: LocalizedError {
         case timedOut
         case recovering
@@ -44,15 +51,21 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
 
     let queue: DispatchQueue
     private let timeout: TimeInterval?
+    private let deadlineScheduler: DeadlineScheduler
     private let lock = NSLock()
     private var pending: [UUID: Pending] = [:]
     private var recovering = false
     private var cleanupFailed = false
     private var availabilityWaiters: [UUID: AvailabilityWaiter] = [:]
 
-    init(queue: DispatchQueue, timeout: TimeInterval? = nil) {
+    init(
+        queue: DispatchQueue,
+        timeout: TimeInterval? = nil,
+        deadlineScheduler: @escaping DeadlineScheduler = BoundedAudioHardwareQueue.scheduleDeadline
+    ) {
         self.queue = queue
         self.timeout = timeout
+        self.deadlineScheduler = deadlineScheduler
     }
 
     var isAvailable: Bool {
@@ -103,7 +116,7 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
                 self.availabilityWaiters[id] = AvailabilityWaiter(continuation: continuation, timer: timer)
                 self.lock.unlock()
                 if let timeout, let timer {
-                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: timer)
+                    self.deadlineScheduler(timeout, timer)
                 }
             }
         } onCancel: {
@@ -172,10 +185,7 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
                     continuation.resume(with: result)
                 }
                 if let deadline, let timer {
-                    DispatchQueue.global(qos: .userInitiated).asyncAfter(
-                        deadline: .now() + deadline,
-                        execute: timer
-                    )
+                    self.deadlineScheduler(deadline, timer)
                 }
                 self.lock.unlock()
             }
