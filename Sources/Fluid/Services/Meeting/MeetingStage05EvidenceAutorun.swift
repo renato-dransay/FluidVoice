@@ -759,6 +759,12 @@ nonisolated enum MeetingStage05EvidenceAutorun {
             && frameHeight.isFinite && frameHeight >= 360
     }
 
+    /// ScreenCaptureKit returns a completed, read-only content snapshot. SDK lacks Sendable;
+    /// keep that unchecked boundary in this immutable wrapper, not on the timeout helper.
+    private struct ShareableContentSnapshot: @unchecked Sendable {
+        let content: SCShareableContent
+    }
+
     private struct PlayingSnapshot {
         let candidate: MeetingExternalReferenceTrialAWindowCandidate
         let content: SCShareableContent
@@ -781,8 +787,8 @@ nonisolated enum MeetingStage05EvidenceAutorun {
             let content: SCShareableContent
             do {
                 content = try await Self.withTimeout(seconds: min(0.5, max(0.01, deadline - now))) {
-                    try await SCShareableContent.current
-                }
+                    ShareableContentSnapshot(content: try await SCShareableContent.current)
+                }.content
             } catch {
                 if ProcessInfo.processInfo.systemUptime >= deadline {
                     throw MeetingStage05StimulusHandshake.Failure.timeout
