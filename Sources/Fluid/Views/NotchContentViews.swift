@@ -513,6 +513,68 @@ final class CompositorShimmerSweepView: NSView {
     }
 }
 
+/// Recording-time choice shared by notch and bottom overlays.
+struct CloudDictationLanguageSelector: View {
+    @ObservedObject private var settings = SettingsStore.shared
+    private var selectedCode: String? { self.settings.cloudDictationLanguageCode }
+
+    private func languageName(_ code: String) -> String {
+        Locale.current.localizedString(forLanguageCode: code)?.localizedCapitalized ?? code.uppercased()
+    }
+
+    private func select(_ code: String?) {
+        self.settings.cloudDictationLanguageCode = code
+        AppServices.shared.asr.refreshActiveCloudDictationLanguage()
+        guard let context = NotchContentState.shared.recordingTargetContext else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            _ = await TypingService.prepareTargetForDelivery(context)
+        }
+    }
+
+    @ViewBuilder
+    private func optionLabel(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    var body: some View {
+        if self.settings.usesCloudTranscription, let primary = self.settings.cloudTranscriptionPrimaryLanguageCode {
+            Menu {
+                Button(action: { self.select(primary) }) {
+                    self.optionLabel("Primary: \(self.languageName(primary))", selected: self.selectedCode == primary)
+                }
+                if let secondary = self.settings.cloudTranscriptionSecondaryLanguageCode {
+                    Button(action: { self.select(secondary) }) {
+                        self.optionLabel("Secondary: \(self.languageName(secondary))", selected: self.selectedCode == secondary)
+                    }
+                }
+                Button(action: { self.select(nil) }) {
+                    self.optionLabel("Detect automatically", selected: self.selectedCode == nil)
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "globe")
+                    Text(self.selectedCode?.uppercased() ?? "Auto")
+                    Image(systemName: "chevron.down")
+                }
+                .font(.fluidSystem(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.86))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .fluidDropdownSurface()
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(NotchContentState.shared.isProcessing)
+            .help("Transcription language: \(self.selectedCode.map(self.languageName) ?? "Automatic")")
+            .accessibilityIdentifier("cloud-dictation-language-selector")
+        }
+    }
+}
+
 // MARK: - Expanded View (Main Content) - Minimal Design
 
 struct NotchExpandedView: View {
@@ -1032,6 +1094,13 @@ struct NotchExpandedView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .offset(x: 4, y: 0)
             .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
+
+            if self.contentState.mode == .dictation,
+               self.settings.usesCloudTranscription,
+               self.settings.cloudTranscriptionPrimaryLanguageCode != nil
+            {
+                CloudDictationLanguageSelector()
+            }
 
             self.promptHoverMenuRow
 

@@ -674,7 +674,9 @@ final class ASRService: ObservableObject {
             if [.dictation, .fileTranscription, .localAPI].contains(activity) {
                 self.frozenSpeechExecutionSource = SettingsStore.shared.speechExecutionSource
                 if SettingsStore.shared.usesCloudTranscription {
-                    let configuration = SettingsStore.shared.cloudTranscriptionConfiguration
+                    let configuration = activity == .dictation
+                        ? SettingsStore.shared.cloudDictationConfiguration
+                        : SettingsStore.shared.cloudTranscriptionConfiguration
                     self.frozenCloudConfiguration = configuration
                     self.frozenCloudAPIKey = SettingsStore.shared.openRouterTranscriptionAPIKey
                     self.frozenCloudDictationModelID = activity == .dictation && SettingsStore.shared.usesCombinedCloudDictation
@@ -719,6 +721,30 @@ final class ASRService: ObservableObject {
         guard self.providerResetPending else { return }
         self.providerResetPending = false
         self.resetTranscriptionProvider()
+    }
+
+    /// Apply an overlay language choice to the recording already in progress.
+    /// Other frozen request settings remain tied to the original activity lease.
+    func refreshActiveCloudDictationLanguage() {
+        guard self.activeActivityLease?.activity == .dictation,
+              !self.isStoppingFinalTranscription,
+              let configuration = self.frozenCloudConfiguration
+        else { return }
+        let languageCode = SettingsStore.shared.cloudDictationLanguageCode
+        guard configuration.languageCode != languageCode else { return }
+        let updated = CloudTranscriptionConfiguration(
+            modelID: configuration.modelID,
+            languageCode: languageCode,
+            primaryLanguageCode: configuration.primaryLanguageCode,
+            secondaryLanguageCode: configuration.secondaryLanguageCode,
+            audioDictation: configuration.audioDictation
+        )
+        self.frozenCloudConfiguration = updated
+        self.frozenTranscriptionProvider = CloudTranscriptionProvider(
+            configuration: updated,
+            apiKey: self.frozenCloudAPIKey ?? "",
+            persistChunks: false
+        )
     }
 
     func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {

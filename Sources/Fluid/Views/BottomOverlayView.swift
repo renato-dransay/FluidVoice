@@ -2766,7 +2766,14 @@ struct BottomOverlayView: View {
         let barsWidth = CGFloat(self.layout.barCount) * self.layout.barWidth
             + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
         let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
-        return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4)
+        return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4
+            - (self.showsCloudLanguageSelector ? 52 : 0))
+    }
+
+    private var showsCloudLanguageSelector: Bool {
+        self.contentState.mode == .dictation
+            && self.settings.usesCloudTranscription
+            && self.settings.cloudTranscriptionPrimaryLanguageCode != nil
     }
 
     private var previewMaxHeight: CGFloat {
@@ -3628,6 +3635,10 @@ struct BottomOverlayView: View {
                         self.promptSelectorView
                             .fixedSize()
                             .transition(self.reduceMotion ? .opacity : .pillChip)
+                        if self.showsCloudLanguageSelector {
+                            CloudDictationLanguageSelector()
+                                .fixedSize()
+                        }
                     }
 
                     // Compact overlays still need a visible mode because they have no selector.
@@ -3654,6 +3665,10 @@ struct BottomOverlayView: View {
                             value: self.contentState.spokenSendIndicatorState
                         )
                     }
+
+                    if !self.isPillSize, !self.layout.showsTopControls, self.showsCloudLanguageSelector {
+                        CloudDictationLanguageSelector()
+                    }
                 }
                 .offset(x: self.waveformHorizontalOffset)
                 .frame(maxWidth: self.isPillSize ? nil : .infinity, alignment: .center)
@@ -3665,6 +3680,9 @@ struct BottomOverlayView: View {
                 .overlay(alignment: .trailing) {
                     if self.layout.showsTopControls {
                         HStack(spacing: 4) {
+                            if self.showsCloudLanguageSelector {
+                                CloudDictationLanguageSelector()
+                            }
                             self.promptSelectorView
                             self.actionsSelectorView
                         }
