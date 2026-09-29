@@ -516,12 +516,12 @@ final class CompositorShimmerSweepView: NSView {
 private struct CloudDictationLanguageButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.fluidSystem(size: 10, weight: .semibold))
+            .font(.fluidSystem(size: 9, weight: .semibold))
             .foregroundStyle(Color.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.2 : 0.12)))
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.16 : 0.06)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
     }
 }
 
@@ -568,7 +568,7 @@ struct CloudDictationLanguageSelector: View {
                     self.optionLabel("Detect automatically", selected: self.selectedCode == nil)
                 }
             } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: 2) {
                     Image(systemName: "globe")
                     Text(self.selectedCode?.uppercased() ?? "Auto")
                     Image(systemName: "chevron.down")
