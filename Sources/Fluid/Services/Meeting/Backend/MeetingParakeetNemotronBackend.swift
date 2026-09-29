@@ -26,12 +26,31 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
-        analysisSampleRate: 16_000
+        analysisSampleRate: 16_000,
+        requiresLocalDiarization: true,
+        usesTextOverlapEchoVerdicts: true
     )
 
-    var descriptor: MeetingBackendDescriptor {
-        Self.descriptor
-    }
+    static let cloudDescriptor = MeetingBackendDescriptor(
+        id: .openRouterNemotron,
+        version: "1",
+        execution: .hosted,
+        supportedLanguageCodes: MeetingCloudLanguage.supportedCodes,
+        supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+        supportedFinalPrecisions: [.word],
+        resultContract: .canonicalEvidence,
+        knownLimits: [
+            "Audio is sent to OpenRouter; speaker detection and matching stay on this Mac.",
+            "Only verified Whisper models provide the word timings needed for speaker labels.",
+            "Nemotron has 8 speaker slots per analysis epoch and requires Apple Silicon.",
+            "Missing or invalid word timings leave the affected audio incomplete.",
+        ],
+        analysisSampleRate: 16_000,
+        requiresLocalDiarization: true,
+        usesTextOverlapEchoVerdicts: true
+    )
+
+    let descriptor: MeetingBackendDescriptor
 
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
     private let modelLocator: any MeetingNemotronModelLocating
@@ -41,23 +60,31 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     init(
         runtimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory,
         modelLocator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(),
-        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer()
+        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer(),
+        descriptor: MeetingBackendDescriptor = MeetingParakeetNemotronBackend.descriptor
     ) {
         self.runtimeFactory = runtimeFactory
         self.modelLocator = modelLocator
         self.materializer = materializer
+        self.descriptor = descriptor
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
-        guard self.descriptor.supportedLanguageCodes.contains(request.session.languageCode) else {
+        let language = self.descriptor.id == .openRouterNemotron || request.session.languageCode == MeetingCloudLanguage.automatic
+            ? request.configuration.languageCode : request.session.languageCode
+        guard self.descriptor.supportedLanguageCodes.contains(language) else {
             throw MeetingBackendError.unsupportedLanguage(
                 backend: self.descriptor.id,
-                languageCode: request.session.languageCode
+                languageCode: language
             )
         }
         // The fixed meeting Parakeet v2 policy rejects unsupported requested options explicitly
         // (plan §5): no coercion of another model or feature into this backend.
-        _ = try MeetingProviderOptions.resolve(request.configuration)
+        if self.descriptor.id == .openRouterNemotron {
+            try MeetingCloudConfiguration.validate(request.configuration)
+        } else {
+            _ = try MeetingProviderOptions.resolve(request.configuration)
+        }
         // Model readiness is a precondition of planning; execute performs no downloads.
         let artifact = try self.modelLocator.locate()
         let plan = MeetingBackendPlan(request: request, descriptor: self.descriptor)
@@ -97,6 +124,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let work = Task.detached(priority: .userInitiated) {
             try await Self.runAttempt(
                 request: request,
+                backendID: plan.backendID,
                 manifest: validatedManifest,
                 runtime: runtime,
                 artifact: artifact,
@@ -166,6 +194,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
     private nonisolated static func runAttempt(
         request: MeetingBackendRequest,
+        backendID: MeetingBackendID,
         manifest: MeetingAnalysisManifest,
         runtime: any MeetingParakeetNemotronRunning,
         artifact: MeetingNemotronModelArtifact,
@@ -308,6 +337,14 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 try Task.checkCancellation()
                 do {
                     let output = try await asr.transcribeWithTimings(materialized.samples)
+                    if request.configuration.asrProvider == .openRouter,
+                       !MeetingCloudConfiguration.hasValidTimings(
+                           text: output.result.text, words: output.words, duration: materialized.durationSeconds
+                       )
+                    {
+                        result.failures[work.epoch.id] = "wordTimingsUnavailable"
+                        continue
+                    }
                     result.outputs.append(MeetingParakeetEpochOutput(
                         epochID: work.epoch.id,
                         text: output.result.text,
@@ -317,6 +354,14 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         spanSamples: materialized.spanSamples
                     ))
                 } catch let error as CancellationError {
+                    throw error
+                } catch let error as CloudTranscriptionError {
+                    if error == .invalidWordTimings {
+                        result.failures[work.epoch.id] = "wordTimingsUnavailable"
+                        continue
+                    }
+                    // Account/network failures need an actionable error. Completed cloud chunks
+                    // stay cached and retry resumes them without silently changing providers.
                     throw error
                 } catch {
                     result.failures[work.epoch.id] = "asrFailed"
@@ -329,6 +374,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         return try self.assembleBundle(
             request: request,
+            backendID: backendID,
             manifest: manifest,
             epochWork: epochWork,
             phaseA: phaseA,
@@ -376,6 +422,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     /// other epochs continue (plan §4).
     private nonisolated static func assembleBundle(
         request: MeetingBackendRequest,
+        backendID: MeetingBackendID,
         manifest: MeetingAnalysisManifest,
         epochWork: [EpochWork],
         phaseA: MeetingNemotronPhaseResult,
@@ -415,7 +462,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         return MeetingCanonicalResultBundle(
             evidence: MeetingFinalTranscriptEvidence(
-                backendID: .parakeetNemotron,
+                backendID: backendID,
                 attemptID: request.attemptID,
                 units: units,
                 speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },

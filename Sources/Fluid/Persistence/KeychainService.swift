@@ -33,7 +33,7 @@ final class KeychainService {
         case loaded([String: String])
     }
 
-    private let service = "com.fluidvoice.provider-api-keys"
+    private let service = ForkIdentity.keychainServiceName
     private let account = "fluidApiKeys"
     private let cacheLock = NSLock()
     private let ioLock = NSRecursiveLock()

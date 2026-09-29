@@ -18,7 +18,7 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .recording: "Choose your audio sources. Transcripts are currently in English."
+        case .recording: "Choose audio sources and how completed meetings are transcribed."
         case .automation: "Choose when to see a recording prompt and how long to keep audio."
         case .integrations: "Connect your meeting notes to the AI assistants you already use."
         }
@@ -138,7 +138,7 @@ struct MeetingRecordingSettingsSheet: View {
             Text("FluidMeet settings")
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
-            Text("Audio and transcripts stay on this Mac.")
+            Text("Configure recording, transcription, and storage.")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -276,6 +276,7 @@ struct MeetingRecordingSettingsSheet: View {
                     .accessibilityLabel("Refresh audio sources")
             }
 
+            MeetingCloudSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {

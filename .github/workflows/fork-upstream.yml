@@ -1,0 +1,27 @@
+name: Personal fork upstream updates
+on:
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+concurrency:
+  group: personal-upstream-update
+  cancel-in-progress: false
+jobs:
+  upstream:
+    if: github.repository == 'renato-dransay/FluidVoice'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: personal
+          fetch-depth: 0
+      - name: Prepare reviewed stable release update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/fork/upstream_update.py

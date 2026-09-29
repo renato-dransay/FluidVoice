@@ -464,6 +464,7 @@ final class TypingService {
         preserveTranscriptOnClipboard: Bool = false,
         verifiesLanding: Bool = true
     ) async -> TextDeliveryResult {
+        guard !Task.isCancelled else { return .recoverableFailure(.pasteCommandFailed) }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         var closeTrace = OverlayCloseTrace("typing.delivery")
         defer { closeTrace.finish() }
@@ -475,7 +476,6 @@ final class TypingService {
         )
         self.bench("clipboard_policy keepTranscript=\(preserveTranscriptOnClipboard)")
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
-        self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
 
         guard !text.isEmpty else {
             self.bench("request_return reason=empty_text")
@@ -545,6 +545,7 @@ final class TypingService {
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard)
             result = .commandPosted
         } else {
+            guard !Task.isCancelled else { return .recoverableFailure(.pasteCommandFailed) }
             deliveryPath = .clipboardFallback
             verificationBefore = PasteVerifier.capture()
             self.log("[TypingService] Direct insertion failed; using non-blocking clipboard fallback")
@@ -761,7 +762,6 @@ final class TypingService {
 
     private nonisolated func insertTextDirectly(_ text: String, preferredTargetPID: pid_t?) -> Bool {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
-        self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         if let preferredTargetPID, preferredTargetPID > 0 {
             self.log("[TypingService] Experimental Direct Typing mode: trying preferred PID unicode insertion first")

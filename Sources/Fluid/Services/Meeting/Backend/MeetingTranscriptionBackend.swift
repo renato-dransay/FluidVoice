@@ -19,6 +19,9 @@ nonisolated struct MeetingBackendID: RawRepresentable, Hashable, Codable, Sendab
     /// Local Parakeet TDT v2 ASR + Nemotron-3 diarization composite.
     static let parakeetNemotron = MeetingBackendID(rawValue: "local-parakeet-tdt-v2-nemotron-3-v1")
 
+    /// Hosted word-timed ASR with local Nemotron speaker detection.
+    static let openRouterNemotron = MeetingBackendID(rawValue: "openrouter-nemotron-3-v1")
+
     /// Single source of truth for new meeting-processing attempts. Keep explicit stored selections
     /// untouched; this value applies only when no preference has been recorded.
     static let productionDefault: MeetingBackendID = .parakeetNemotron
@@ -65,6 +68,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// The backend's real analysis/resample rate, when it has one. The pipeline records it on the
     /// analysis manifest; `nil` leaves sample-rate conversion explicitly unknown (plan §3).
     let analysisSampleRate: Double?
+    let requiresLocalDiarization: Bool
+    let usesTextOverlapEchoVerdicts: Bool
 
     init(
         id: MeetingBackendID,
@@ -75,7 +80,9 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         supportedFinalPrecisions: Set<MeetingTextUnitPrecision>,
         resultContract: MeetingBackendResultContract,
         knownLimits: [String],
-        analysisSampleRate: Double? = nil
+        analysisSampleRate: Double? = nil,
+        requiresLocalDiarization: Bool = false,
+        usesTextOverlapEchoVerdicts: Bool = false
     ) {
         self.id = id
         self.version = version
@@ -86,6 +93,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.resultContract = resultContract
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
+        self.requiresLocalDiarization = requiresLocalDiarization
+        self.usesTextOverlapEchoVerdicts = usesTextOverlapEchoVerdicts
     }
 }
 

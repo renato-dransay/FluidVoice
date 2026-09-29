@@ -105,16 +105,33 @@ private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession
     }
 }
 
+/// Uses the same prepared-session seam as local ASR without loading a local speech model.
+private nonisolated struct PreparedCloudMeetingASRSession: MeetingParakeetASRSession, @unchecked Sendable {
+    let provider: CloudTranscriptionProvider
+
+    func transcribeWithTimings(
+        _ samples: [Float]
+    ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        try await self.provider.transcribeWithWordTimings(samples)
+    }
+}
+
 final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronRunning {
     private let asrServiceProvider: @MainActor () -> ASRService
     private let modelLocator: any MeetingNemotronModelLocating
+    private let cloudRequest: MeetingBackendRequest?
+    private let cloudAPIKey: String
 
     init(
         asrServiceProvider: @escaping @MainActor () -> ASRService,
-        modelLocator: any MeetingNemotronModelLocating
+        modelLocator: any MeetingNemotronModelLocating,
+        cloudRequest: MeetingBackendRequest? = nil,
+        cloudAPIKey: String = ""
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.modelLocator = modelLocator
+        self.cloudRequest = cloudRequest
+        self.cloudAPIKey = cloudAPIKey
     }
 
     /// Runs between Nemotron and ASR, so the additional encoder never overlaps their residency.
@@ -200,6 +217,12 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
     ) async throws -> MeetingParakeetPhaseResult {
+        if let request = self.cloudRequest {
+            guard request.attemptID == attemptID, request.configuration == configuration else {
+                throw MeetingBackendError.hostCapabilityRequestMismatch(backend: .openRouterNemotron)
+            }
+            return try await Self.withCloudASR(request: request, apiKey: self.cloudAPIKey, body: body)
+        }
         let asrService = await self.asrServiceProvider()
         return try await asrService.withPreparedMeetingASR(
             attemptID: attemptID,
@@ -217,6 +240,34 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
         }
     }
+
+    @MainActor private static func withCloudASR(
+        request: MeetingBackendRequest,
+        apiKey: String,
+        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
+    ) async throws -> MeetingParakeetPhaseResult {
+        try Task.checkCancellation()
+        try MeetingCloudConfiguration.validate(request.configuration)
+        let provider = CloudTranscriptionProvider(
+            configuration: CloudTranscriptionConfiguration(
+                modelID: request.configuration.asrModel,
+                languageCode: request.configuration.languageCode == MeetingCloudLanguage.automatic
+                    ? nil : request.configuration.languageCode
+            ),
+            apiKey: apiKey,
+            cacheDirectory: request.sessionDirectory.appendingPathComponent("CloudTranscription", isDirectory: true)
+        )
+        try await provider.prepare(progressHandler: nil)
+        let session = PreparedCloudMeetingASRSession(provider: provider)
+        let work = Task.detached(priority: .userInitiated) { try await body(session) }
+        return try await withTaskCancellationHandler {
+            let result = try await work.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            work.cancel()
+        }
+    }
 }
 
 #else
@@ -226,7 +277,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronRunning {
     init(
         asrServiceProvider _: @escaping @MainActor () -> ASRService,
-        modelLocator _: any MeetingNemotronModelLocating
+        modelLocator _: any MeetingNemotronModelLocating,
+        cloudRequest _: MeetingBackendRequest? = nil,
+        cloudAPIKey _: String = ""
     ) {}
 
     func withNemotronDiarization(

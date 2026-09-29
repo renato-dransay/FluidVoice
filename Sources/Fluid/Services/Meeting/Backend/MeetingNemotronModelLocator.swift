@@ -74,7 +74,7 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
         return base
-            .appendingPathComponent("FluidVoice", isDirectory: true)
+            .appendingPathComponent(ForkIdentity.appSupportFolderName(legacyName: "FluidVoice"), isDirectory: true)
             .appendingPathComponent("MeetingModels", isDirectory: true)
             .appendingPathComponent("nemotron-3-diarization", isDirectory: true)
             .appendingPathComponent(Self.cacheVersion, isDirectory: true)

@@ -1,0 +1,51 @@
+name: Personal fork checks
+on:
+  pull_request:
+    branches: [personal]
+  push:
+    branches: [personal]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: personal-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  fork-tooling:
+    name: Fork tooling tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tools/fork -p 'test_*.py' -v
+  lint:
+    name: Personal SwiftLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SwiftLint strict
+        run: docker run --rm --volume "$PWD:$PWD" --workdir "$PWD" ghcr.io/realm/swiftlint:0.63.2 lint --strict --config .swiftlint.yml
+  test:
+    name: Personal build and tests
+    needs: [fork-tooling, lint]
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/WhisperModels
+          key: ${{ runner.os }}-whisper-models-transcribecpp-v1
+      - name: Standalone regressions
+        run: |
+          sh Tests/run_onboarding_tests.sh
+          sh Tests/run_release_highlights_tests.sh
+          sh Tests/run_cloud_transcription_tests.sh
+      - name: Xcode tests
+        run: |
+          xcodebuild test -project Fluid.xcodeproj -scheme Fluid \
+            -destination 'platform=macOS,arch=arm64' \
+            -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture \
+            CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO

@@ -712,6 +712,7 @@ struct MeetingTranscriptionView: View {
         return MeetingCaptureConfiguration(
             mode: application == nil ? .inRoom : .onlineCall,
             title: title,
+            languageCode: SettingsStore.shared.meetingRecordingLanguageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
@@ -907,6 +908,7 @@ struct MeetingTranscriptionView: View {
         return MeetingCaptureConfiguration(
             mode: session.mode,
             title: session.title,
+            languageCode: SettingsStore.shared.meetingRecordingLanguageCode,
             platform: session.platform,
             application: application,
             microphone: microphone
@@ -1945,6 +1947,7 @@ private struct MeetingHistoryRow: View {
 
 private struct MeetingSetupCanvas: View {
     @Binding var draft: MeetingTranscriptionSetupDraft
+    @ObservedObject private var settings = SettingsStore.shared
 
     let applications: [MeetingApplicationOption]
     let readiness: MeetingSetupReadiness
@@ -2138,13 +2141,25 @@ private struct MeetingSetupCanvas: View {
         }
     }
 
+    private var usesCloudTranscription: Bool {
+        self.settings.meetingTranscriptionBackendID == .openRouterNemotron
+    }
+
+    private var recordingFooterDetail: String {
+        let privacy = self.usesCloudTranscription
+            ? "Recorded audio is sent to OpenRouter for transcription. Speaker detection and live captions stay on this Mac."
+            : "Stays on this Mac."
+        let guidance = self.resolvedApplication != nil
+            ? "Use headphones for clearer speaker separation."
+            : "Place it where everyone can be heard."
+        return "\(privacy) \(guidance)"
+    }
+
     private var recordingFooter: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             Label(
-                self.resolvedApplication != nil
-                    ? "Stays on this Mac. Use headphones for clearer speaker separation."
-                    : "Stays on this Mac. Place it where everyone can be heard.",
-                systemImage: "lock"
+                self.recordingFooterDetail,
+                systemImage: self.usesCloudTranscription ? "cloud" : "lock"
             )
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)

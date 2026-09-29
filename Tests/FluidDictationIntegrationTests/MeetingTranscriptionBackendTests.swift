@@ -505,7 +505,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     func testDefaultRegistryUsesProductionDefaultAndKeepsLegacyRollback() throws {
         let registry = MeetingTranscriptionBackendRegistry.makeDefault()
         XCTAssertEqual(registry.defaultBackendID, .productionDefault)
-        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron])
+        XCTAssertEqual(registry.registeredBackendIDs, [.legacyCompatibility, .parakeetNemotron, .openRouterNemotron])
 
         let backend = try registry.makeBackend(
             id: registry.defaultBackendID,
@@ -625,7 +625,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
-    func testLegacyPreflightChecksStillRunBeforeBackendSelection() async {
+    func testLanguageUsesBackendDescriptorAndAudioPreflightStillPrecedesSelection() async {
         var factoryCallCount = 0
         func registry() -> MeetingTranscriptionBackendRegistry {
             let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
@@ -646,9 +646,10 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             )
             XCTFail("Non-English sessions must still be rejected")
         } catch {
-            guard case MeetingProcessingError.unsupportedLanguage = error else {
-                return XCTFail("Expected unsupportedLanguage, got \(error)")
-            }
+            XCTAssertEqual(
+                error as? MeetingBackendError,
+                .unsupportedLanguage(backend: Self.fixtureBackendID, languageCode: "fr")
+            )
         }
 
         do {
@@ -664,7 +665,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(factoryCallCount, 0, "preflight failures must not construct a backend")
+        XCTAssertEqual(factoryCallCount, 1, "Language validation uses the selected backend; empty audio fails before selection")
     }
 
     /// Every chunk reports unreadable, so a manifest builds to explicit gaps without fixture audio.

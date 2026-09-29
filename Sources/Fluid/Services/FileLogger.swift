@@ -31,7 +31,8 @@ final nonisolated class FileLogger: @unchecked Sendable {
         #else
         let baseDirectory = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         #endif
-        self.logDirectory = baseDirectory.appendingPathComponent("Logs/Fluid", isDirectory: true)
+        self.logDirectory = baseDirectory.appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent(ForkIdentity.logFolderName, isDirectory: true)
         self.logFileURL = self.logDirectory.appendingPathComponent("Fluid.log", isDirectory: false)
         self.backupLogURL = self.logDirectory.appendingPathComponent("Fluid.log.1", isDirectory: false)
         self.legacyLogFileURL = self.logDirectory.appendingPathComponent("fluid.log", isDirectory: false)

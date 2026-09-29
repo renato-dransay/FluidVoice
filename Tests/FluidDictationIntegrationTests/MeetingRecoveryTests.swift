@@ -1750,18 +1750,16 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
-        var continuation: CheckedContinuation<Void, Never>?
-        capture.onPreflight = {
-            await withCheckedContinuation { continuation = $0 }
-        }
+        let suspended = self.expectation(description: "permission preflight is suspended")
+        let gate = PermissionPreflightGate(suspended: suspended)
+        capture.onPreflight = { await gate.wait() }
         let arbiter = StubArbiter()
         let coordinator = MeetingSessionCoordinator(
             store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
         )
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        defer { start.cancel(); gate.open() }
+        await self.fulfillment(of: [suspended], timeout: 2)
 
         do {
             _ = try await coordinator.retryProcessing(sessionID: UUID())
@@ -1795,7 +1793,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 return XCTFail("expected activityInProgress, got \(error)")
             }
         }
-        continuation?.resume()
+        gate.open()
         _ = try await start.value
         XCTAssertEqual(capture.preflightCount, 1)
     }
@@ -1804,8 +1802,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
-        var continuation: CheckedContinuation<Void, Never>?
-        capture.onPreflight = { await withCheckedContinuation { continuation = $0 } }
+        let suspended = self.expectation(description: "permission preflight is suspended")
+        let gate = PermissionPreflightGate(suspended: suspended)
+        capture.onPreflight = { await gate.wait() }
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore(rootDirectory: dir),
             capture: capture,
@@ -1813,11 +1812,10 @@ final class MeetingRecoveryTests: XCTestCase {
             audioArbiter: StubArbiter()
         )
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        defer { start.cancel(); gate.open() }
+        await self.fulfillment(of: [suspended], timeout: 2)
         await coordinator.shutdownForTermination()
-        continuation?.resume()
+        gate.open()
         do {
             _ = try await start.value
             XCTFail("terminated coordinator must not start capture after preflight")
@@ -3496,10 +3494,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let capture = StubCaptureController()
         capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
         let arbiter = StubArbiter()
-        var continuation: CheckedContinuation<Void, Never>?
-        capture.onPreflight = {
-            await withCheckedContinuation { continuation = $0 }
-        }
+        let suspended = self.expectation(description: "permission preflight is suspended")
+        let gate = PermissionPreflightGate(suspended: suspended)
+        capture.onPreflight = { await gate.wait() }
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore(rootDirectory: dir),
             capture: capture,
@@ -3508,12 +3505,11 @@ final class MeetingRecoveryTests: XCTestCase {
         )
 
         let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration()) }
-        while capture.preflightCount == 0 {
-            await Task.yield()
-        }
+        defer { start.cancel(); gate.open() }
+        await self.fulfillment(of: [suspended], timeout: 2)
         XCTAssertEqual(arbiter.acquireCount, 0, "permission prompt must not hold the meeting audio lease")
 
-        continuation?.resume()
+        gate.open()
         _ = try await start.value
         XCTAssertEqual(arbiter.acquireCount, 1)
     }
@@ -4056,6 +4052,30 @@ private final class ThrowingDirectoryStore: MeetingSessionStoring, @unchecked Se
 private actor EventRecorder {
     private(set) var events: [String] = []
     func record(_ event: String) { self.events.append(event) }
+}
+
+/// Publishes readiness only after installing its continuation, so the release cannot be lost.
+@MainActor
+private final class PermissionPreflightGate {
+    private let suspended: XCTestExpectation
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
+
+    init(suspended: XCTestExpectation) { self.suspended = suspended }
+
+    func wait() async {
+        guard !self.isOpen else { return }
+        await withCheckedContinuation {
+            self.continuation = $0
+            self.suspended.fulfill()
+        }
+    }
+
+    func open() {
+        self.isOpen = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
 }
 
 private final class StubCaptureController: MeetingCaptureControlling, @unchecked Sendable {

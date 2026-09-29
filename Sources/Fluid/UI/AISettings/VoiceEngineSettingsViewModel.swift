@@ -12,6 +12,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     var areSpeechModelActionsBlocked: Bool {
         self.asr.isRunning
+            || self.asr.activeExclusiveActivity != nil
             || self.downloadingModel != nil
             || self.asr.hasActiveModelDownload
             || self.asr.hasActiveModelPreparation

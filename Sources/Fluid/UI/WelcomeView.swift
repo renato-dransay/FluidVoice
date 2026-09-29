@@ -55,6 +55,7 @@ struct OnboardingFlowView: View {
 
     @State private var selectedLanguageID = SettingsStore.shared.onboardingSelectedLanguageID
     @State private var selectedModelRouteID: String?
+    @State private var showsCloudTranscriptionSetup = false
     @State private var hoveredLanguageID: String?
     @State private var hoveredModelRouteID: String?
     @State private var hoveredModelInfoRouteID: String?
@@ -263,6 +264,9 @@ struct OnboardingFlowView: View {
     }
 
     private var isVoiceModelReady: Bool {
+        if self.settings.usesCloudTranscription {
+            return !self.settings.openRouterTranscriptionAPIKey.isEmpty
+        }
         guard let route = self.selectedOnboardingRoute else {
             return false
         }
@@ -354,6 +358,9 @@ struct OnboardingFlowView: View {
         }
         .background {
             FluidOnboardingWindowTransparency()
+        }
+        .sheet(isPresented: self.$showsCloudTranscriptionSetup) {
+            OnboardingCloudTranscriptionSetupView(appServices: self.appServices)
         }
         .onAppear {
             self.isOnboardingFlowVisible = true
@@ -1126,6 +1133,13 @@ struct OnboardingFlowView: View {
                                     .padding(.top, 14)
                             }
 
+                            Button(self.settings.usesCloudTranscription ? "OpenRouter selected — configure" : "Use OpenRouter cloud transcription") {
+                                self.showsCloudTranscriptionSetup = true
+                            }
+                            .buttonStyle(.link)
+                            .disabled(self.isModelPreparationInProgress)
+                            .padding(.top, 12)
+
                             Text("You can switch models later in Voice Engine settings.")
                                 .font(.fluidSystem(size: 12, weight: .medium))
                                 .foregroundStyle(Color.white.opacity(0.44))
@@ -1410,7 +1424,7 @@ struct OnboardingFlowView: View {
     }
 
     private func isOnboardingModelSelected(_ model: SettingsStore.SpeechModel) -> Bool {
-        self.settings.selectedSpeechModel == model
+        !self.settings.usesCloudTranscription && self.settings.selectedSpeechModel == model
     }
 
     private func isOnboardingModelReady(_ model: SettingsStore.SpeechModel) -> Bool {
@@ -1418,7 +1432,7 @@ struct OnboardingFlowView: View {
     }
 
     private func isOnboardingRouteReady(_ route: VoiceEngineLanguageRoute) -> Bool {
-        self.isRouteSelectedInSettings(route) && self.asr.isAsrReady
+        !self.settings.usesCloudTranscription && self.isRouteSelectedInSettings(route) && self.asr.isAsrReady
     }
 
     private func isOnboardingModelDownloaded(_ model: SettingsStore.SpeechModel) -> Bool {
@@ -1451,6 +1465,10 @@ struct OnboardingFlowView: View {
 
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
+        if self.settings.usesCloudTranscription {
+            self.settings.speechExecutionSource = .local
+            self.asr.resetTranscriptionProvider()
+        }
         self.selectOnboardingRoute(route)
 
         self.modelPreparationTask = Task { @MainActor in
@@ -2266,6 +2284,7 @@ private extension OnboardingFlowView {
     }
 
     func isRouteSelectedInSettings(_ route: VoiceEngineLanguageRoute) -> Bool {
+        guard !self.settings.usesCloudTranscription else { return false }
         guard route.model == self.settings.selectedSpeechModel else {
             return false
         }

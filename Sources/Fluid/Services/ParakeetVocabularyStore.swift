@@ -85,7 +85,7 @@ final class ParakeetVocabularyStore {
     }
 
     private let fileName = "parakeet_custom_vocabulary.json"
-    private let appSupportFolder = "FluidVoice"
+    private let appSupportFolder = ForkIdentity.appSupportFolderName(legacyName: "FluidVoice")
 
     private init() {}
 

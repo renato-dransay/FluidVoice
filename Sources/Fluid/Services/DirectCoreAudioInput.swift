@@ -732,13 +732,18 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         },
         installsHardwareListeners: Bool = true,
         operationTimeout: TimeInterval? = nil,
+        operationDeadlineScheduler: @escaping BoundedAudioHardwareQueue.DeadlineScheduler = BoundedAudioHardwareQueue.scheduleDeadline,
         deviceSnapshotReader: @escaping @Sendable (Bool) throws -> DeviceSnapshot = DirectCoreAudioLifecycleController.queryDeviceSnapshot,
         deviceLivenessReader: @escaping @Sendable (AudioObjectID) -> Bool? = DirectCoreAudioLifecycleController.readDeviceLiveness,
         deviceResolver: @escaping @Sendable (DirectCoreAudioDeviceSelection) throws -> AudioDevice.Device? = DirectCoreAudioLifecycleController.resolveSelectedDevice,
         onFormatInvalidated: @escaping @Sendable (FormatInvalidation) -> Void
     ) {
         self.recoveryTimeout = operationTimeout ?? 5
-        self.hardwareOperations = BoundedAudioHardwareQueue(queue: self.lifecycleQueue, timeout: operationTimeout)
+        self.hardwareOperations = BoundedAudioHardwareQueue(
+            queue: self.lifecycleQueue,
+            timeout: operationTimeout,
+            deadlineScheduler: operationDeadlineScheduler
+        )
         self.deviceQueries = BoundedAudioHardwareQueue(
             queue: DispatchQueue(label: "com.fluidvoice.audio.device-snapshot", qos: .userInitiated),
             timeout: operationTimeout ?? 5

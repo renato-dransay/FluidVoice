@@ -1409,7 +1409,7 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(segment.status, .final)
     }
 
-    func testCaptureConfigurationPinsEnglishAndSeparatesMicrophoneIdentifiers() {
+    func testCaptureConfigurationDefaultsToEnglishAndSeparatesMicrophoneIdentifiers() {
         let configuration = MeetingCaptureConfiguration(
             mode: .inRoom,
             title: "Room sync",
@@ -1430,11 +1430,19 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertNil(configuration.application)
     }
 
+    func testCaptureConfigurationAcceptsAutomaticAndMultilingualMetadata() {
+        for language in ["auto", "fr", "de", "pt", "ja"] {
+            var configuration = MeetingModelFixture.makeOnlineConfiguration()
+            configuration.languageCode = language
+            XCTAssertNoThrow(try configuration.validate(), "Capture metadata must allow backend-supported languages")
+        }
+    }
+
     func testCaptureConfigurationRejectsInvalidModeSourcesLanguageAndMicrophone() {
         var configuration = MeetingModelFixture.makeOnlineConfiguration()
         XCTAssertNoThrow(try configuration.validate())
 
-        configuration.languageCode = "fr"
+        configuration.languageCode = "not-a-language"
         self.assertConfigurationValidationError(.unsupportedLanguage, configuration: configuration)
 
         configuration = MeetingModelFixture.makeOnlineConfiguration()

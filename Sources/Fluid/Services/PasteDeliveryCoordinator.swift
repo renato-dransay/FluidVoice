@@ -644,6 +644,7 @@ final class PasteDeliveryCoordinator {
         preserveTranscriptOnClipboard: Bool,
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
+        guard !Task.isCancelled else { return .recoverableFailure(.pasteCommandFailed) }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
         await self.acquireDeliverySlot()
@@ -652,6 +653,7 @@ final class PasteDeliveryCoordinator {
         defer {
             if !settlementOwnsSlot { self.releaseDeliverySlot() }
         }
+        guard !Task.isCancelled else { return .recoverableFailure(.pasteCommandFailed) }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
@@ -719,6 +721,7 @@ final class PasteDeliveryCoordinator {
         let changeCount = self.pasteboard.changeCount
         let generation = self.generation
         let ready = await prepare()
+        guard !Task.isCancelled else { return false }
         if !ready, self.generation == generation {
             await self.copyBackup(text, enabled: preserveTranscriptOnClipboard, expectedChangeCount: changeCount)
         }
@@ -728,10 +731,11 @@ final class PasteDeliveryCoordinator {
     /// Serialize standalone copies with active paste leases so cleanup cannot undo the backup.
     @discardableResult
     func copyBackup(_ text: String, enabled: Bool, expectedChangeCount: Int? = nil) async -> Bool {
-        guard enabled, !text.isEmpty else { return false }
+        guard enabled, !text.isEmpty, !Task.isCancelled else { return false }
         let requestedChangeCount = expectedChangeCount ?? self.pasteboard.changeCount
         await self.acquireDeliverySlot()
         defer { self.releaseDeliverySlot() }
+        guard !Task.isCancelled else { return false }
         guard self.pasteboard.changeCount == requestedChangeCount ||
             self.pasteboard.changeCount == self.lastWrittenChangeCount
         else {

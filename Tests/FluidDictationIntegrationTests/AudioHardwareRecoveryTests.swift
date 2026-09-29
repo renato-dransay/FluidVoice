@@ -111,16 +111,27 @@ final class AudioHardwareRecoveryTests: XCTestCase {
 
     func testBlockedStartTimesOutAndDropsLatePacketsUntilCleanupCompletes() async throws {
         let input = RecoveryInput(block: "start")
+        let deadlines = RecoveryDeadlineScheduler()
         defer { input.release.signal() }
-        let controller = makeRecoveryController(input)
-        let began = ProcessInfo.processInfo.systemUptime
-        do {
-            _ = try await controller.start(deviceID: 144, deviceName: "Test", reason: "timeout")
-            XCTFail("Blocked startup must time out")
-        } catch {
-            XCTAssertTrue(error is BoundedAudioHardwareQueue.Failure)
+        let controller = makeRecoveryController(input, deadlineScheduler: { deadlines.schedule($0, $1) })
+        let starting = Task {
+            try await controller.start(deviceID: 144, deviceName: "Test", reason: "timeout")
         }
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - began, 1)
+        try await waitForEvent(input, "start")
+        // Expire only the blocked native start. An 80 ms wall-clock deadline on
+        // every operation can also expire a healthy retry waiting for a CI worker.
+        guard deadlines.fireNext() else {
+            XCTFail("A blocked native start must have an armed deadline")
+            return
+        }
+        do {
+            _ = try await starting.value
+            XCTFail("Blocked startup must time out")
+        } catch BoundedAudioHardwareQueue.Failure.timedOut {
+            // Exercise the real queue timeout transition, independently of scheduler latency.
+        } catch {
+            XCTFail("Expected timedOut, got \(error)")
+        }
         XCTAssertTrue(controller.isRecoveringHardware)
         XCTAssertEqual(controller.snapshot.phase, .failed)
         XCTAssertEqual(input.count("start"), 1)
@@ -725,6 +736,7 @@ private func makeDefaultRecoveryController(_ input: RecoveryInput) -> DirectCore
 private func makeRecoveryController(
     _ input: RecoveryInput,
     timeout: TimeInterval? = 0.08,
+    deadlineScheduler: @escaping BoundedAudioHardwareQueue.DeadlineScheduler = BoundedAudioHardwareQueue.scheduleDeadline,
     deviceLivenessReader: @escaping @Sendable (AudioObjectID) -> Bool? = { _ in true }
 ) -> DirectCoreAudioLifecycleController {
     DirectCoreAudioLifecycleController(
@@ -740,6 +752,7 @@ private func makeRecoveryController(
         },
         installsHardwareListeners: false,
         operationTimeout: timeout,
+        operationDeadlineScheduler: deadlineScheduler,
         deviceLivenessReader: deviceLivenessReader,
         onFormatInvalidated: { _ in }
     )
@@ -759,6 +772,25 @@ private func waitForEvent(_ input: RecoveryInput, _ event: String) async throws 
         try await Task.sleep(nanoseconds: 1_000_000)
     }
     XCTFail("Native operation did not enter: \(event)")
+}
+
+private final nonisolated class RecoveryDeadlineScheduler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timers: [DispatchWorkItem] = []
+
+    func schedule(_: TimeInterval, _ timer: DispatchWorkItem) {
+        self.lock.withLock { self.timers.append(timer) }
+    }
+
+    func fireNext() -> Bool {
+        let timer = self.lock.withLock { () -> DispatchWorkItem? in
+            self.timers.removeAll(where: \.isCancelled)
+            return self.timers.isEmpty ? nil : self.timers.removeFirst()
+        }
+        guard let timer else { return false }
+        timer.perform()
+        return true
+    }
 }
 
 private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, @unchecked Sendable {
@@ -1621,10 +1653,18 @@ final class AudioHardwareAdversarialTests: XCTestCase {
 
     func testDelayedCleanupRejectsReplacementUntilOldInputIsRetired() async throws {
         let input = RecoveryInput(block: "invalidate")
+        let deadlines = RecoveryDeadlineScheduler()
         defer { input.release.signal() }
-        let controller = makeRecoveryController(input, timeout: 0.08)
+        let controller = makeRecoveryController(input, deadlineScheduler: { deadlines.schedule($0, $1) })
         _ = try await controller.start(deviceID: 144, deviceName: "External", reason: "before_unplug")
-        await controller.invalidate(reason: "unplug")
+        let invalidating = Task { await controller.invalidate(reason: "unplug") }
+        try await waitForEvent(input, "invalidate")
+        // Expire the deliberately blocked cleanup after the healthy start has finished.
+        guard deadlines.fireNext() else {
+            XCTFail("Blocked native cleanup must have an armed deadline")
+            return
+        }
+        await invalidating.value
         XCTAssertTrue(controller.isRecoveringHardware)
         input.emit()
         XCTAssertEqual(input.count("delivered"), 0)

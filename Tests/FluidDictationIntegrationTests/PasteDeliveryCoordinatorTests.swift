@@ -73,6 +73,60 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.restoreCount, 2)
     }
 
+    func testCancelledQueuedDeliveryNeverInsertsOrCopiesTranscript() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let commandPoster = FakePasteCommandPoster()
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: commandPoster,
+            settlementDelayNanoseconds: .max
+        )
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        var queued = false
+        let cancelledDelivery = Task { @MainActor in
+            queued = true
+            return await coordinator.deliver("cancelled", preserveTranscriptOnClipboard: true)
+        }
+        await self.waitUntil { queued }
+        cancelledDelivery.cancel()
+        coordinator.runPendingSettlementForTesting()
+
+        let result = await cancelledDelivery.value
+        XCTAssertEqual(result, .recoverableFailure(.pasteCommandFailed))
+        XCTAssertEqual(commandPoster.postCount, 1)
+        XCTAssertEqual(pasteboard.temporaryWriteCount, 1)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(pasteboard.text, "before")
+
+        // Cancellation releases the slot so the next user operation still works.
+        let nextResult = await coordinator.deliver("next", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(nextResult, .commandPosted)
+        coordinator.runPendingSettlementForTesting()
+    }
+
+    func testCancelledQueuedBackupPreservesExistingClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: FakePasteCommandPoster(),
+            settlementDelayNanoseconds: .max
+        )
+        _ = await coordinator.deliver("first", preserveTranscriptOnClipboard: false)
+        var queued = false
+        let cancelledCopy = Task { @MainActor in
+            queued = true
+            return await coordinator.copyBackup("cancelled", enabled: true)
+        }
+        await self.waitUntil { queued }
+        cancelledCopy.cancel()
+        coordinator.runPendingSettlementForTesting()
+
+        let copied = await cancelledCopy.value
+        XCTAssertFalse(copied)
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+        XCTAssertEqual(pasteboard.text, "before")
+    }
+
     func testOverlappingDeliveriesDoNotReplaceClipboardDuringActivePasteCommand() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let commandPoster = SuspendingFakePasteCommandPoster()

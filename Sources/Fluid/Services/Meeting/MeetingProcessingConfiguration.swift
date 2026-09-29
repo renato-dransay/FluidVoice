@@ -17,6 +17,11 @@ nonisolated enum MeetingConfigFingerprintEncoding {
     }
 }
 
+nonisolated enum MeetingASRProvider: String, CaseIterable, Sendable {
+    case local
+    case openRouter
+}
+
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
@@ -27,6 +32,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     /// MainActor test guards this literal against drift instead of referencing it here.
     static let defaultPipelineVersion = 13
 
+    let asrProvider: MeetingASRProvider
     let asrModel: String
     let languageCode: String
     let vocabularyBoostingEnabled: Bool
@@ -37,6 +43,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     let pipelineVersion: Int
 
     init(
+        asrProvider: MeetingASRProvider = .local,
         asrModel: String = Self.defaultASRModel,
         languageCode: String = Self.defaultLanguageCode,
         vocabularyBoostingEnabled: Bool = false,
@@ -46,6 +53,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion
     ) {
+        self.asrProvider = asrProvider
         self.asrModel = asrModel
         self.languageCode = languageCode
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
@@ -60,6 +68,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     /// enforced these options; resumability may rely on it only once processing fully applies them.
     var identityFingerprint: String {
         MeetingConfigFingerprintEncoding.encode([
+            ("provider", self.asrProvider.rawValue),
             ("asr", self.asrModel),
             ("lang", self.languageCode),
             ("vocabBoost", String(self.vocabularyBoostingEnabled)),

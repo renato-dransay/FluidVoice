@@ -11,7 +11,7 @@ import AudioToolbox
 import CoreAudio
 
 /// Serializes transcription operations and lets teardown cancel the real queued work.
-private actor TranscriptionExecutor {
+actor TranscriptionExecutor {
     private var lastTask: Task<Void, Never>?
     private var operationCancellations: [UUID: () -> Void] = [:]
 
@@ -29,7 +29,13 @@ private actor TranscriptionExecutor {
         self.operationCancellations[operationID] = { task.cancel() }
         self.lastTask = Task { _ = try? await task.value }
         defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await task.value
+        let result = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     func cancelAndAwaitPending() async {
@@ -617,6 +623,12 @@ final class ASRService: ObservableObject {
     @Published private(set) var activeExclusiveActivity: ASRExclusiveActivity?
     private var audioCaptureStartWaiters: [CheckedContinuation<Void, Never>] = []
     private var activeActivityLease: ASRActivityLease?
+    private var frozenTranscriptionProvider: (any TranscriptionProvider)?
+    private var frozenSpeechExecutionSource: SpeechExecutionSource?
+    private var cloudSpeechProvider: CloudTranscriptionProvider?
+    private var frozenCloudConfiguration: CloudTranscriptionConfiguration?
+    private var failedCloudDictation: (samples: [Float], configuration: CloudTranscriptionConfiguration)?
+    @Published private(set) var hasFailedCloudDictation = false
     private var dictationActivityLease: ASRActivityLease?
     private var providerResetPending = false
     private var meetingAudioHandoffGeneration: UInt64 = 0
@@ -655,6 +667,21 @@ final class ASRService: ObservableObject {
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
         guard let activeActivityLease = self.activeActivityLease else {
             DictionaryAudioLearningService.shared.cancelForRecording()
+            // Freeze the provider before an await or a preference change can redirect this audio.
+            if [.dictation, .fileTranscription, .localAPI].contains(activity) {
+                self.frozenSpeechExecutionSource = SettingsStore.shared.speechExecutionSource
+                if SettingsStore.shared.usesCloudTranscription {
+                    let configuration = SettingsStore.shared.cloudTranscriptionConfiguration
+                    self.frozenCloudConfiguration = configuration
+                    self.frozenTranscriptionProvider = CloudTranscriptionProvider(
+                        configuration: configuration,
+                        apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
+                        persistChunks: activity != .dictation
+                    )
+                } else {
+                    self.frozenTranscriptionProvider = self.transcriptionProvider
+                }
+            }
             let lease = ASRActivityLease(id: UUID(), activity: activity)
             self.activeActivityLease = lease
             self.activeExclusiveActivity = activity
@@ -676,6 +703,9 @@ final class ASRService: ObservableObject {
         #endif
         self.activeActivityLease = nil
         self.activeExclusiveActivity = nil
+        self.frozenTranscriptionProvider = nil
+        self.frozenSpeechExecutionSource = nil
+        self.frozenCloudConfiguration = nil
         DictionaryAudioLearningService.shared.activityDidEnd()
 
         guard self.providerResetPending else { return }
@@ -1092,6 +1122,17 @@ final class ASRService: ObservableObject {
     /// The transcription provider, selected based on the unified SpeechModel setting.
     /// Uses the new SettingsStore.selectedSpeechModel instead of old TranscriptionProviderOption.
     private var transcriptionProvider: TranscriptionProvider {
+        if let frozenTranscriptionProvider { return frozenTranscriptionProvider }
+        if SettingsStore.shared.usesCloudTranscription {
+            if let cloudSpeechProvider { return cloudSpeechProvider }
+            let provider = CloudTranscriptionProvider(
+                configuration: SettingsStore.shared.cloudTranscriptionConfiguration,
+                apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
+                cacheDirectory: ForkIdentity.applicationSupportURL()?.appendingPathComponent("CloudTranscription", isDirectory: true)
+            )
+            self.cloudSpeechProvider = provider
+            return provider
+        }
         let model = SettingsStore.shared.selectedSpeechModel
 
         switch model {
@@ -1195,7 +1236,11 @@ final class ASRService: ObservableObject {
 
     /// Returns the user-friendly name of the currently selected speech model
     var activeProviderName: String {
-        SettingsStore.shared.selectedSpeechModel.displayName
+        self.isUsingCloudTranscription ? self.transcriptionProvider.name : SettingsStore.shared.selectedSpeechModel.displayName
+    }
+
+    var isUsingCloudTranscription: Bool {
+        (self.frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
     }
 
     /// Exposes the transcription provider for file transcription (MeetingTranscriptionService)
@@ -1205,6 +1250,9 @@ final class ASRService: ObservableObject {
     }
 
     private func currentTranscriptionAnalyticsDimensions() -> (provider: String, model: String) {
+        if self.isUsingCloudTranscription {
+            return (provider: "openrouter", model: self.transcriptionProvider.name)
+        }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
             provider: selectedModel.provider.rawValue.lowercased(),
@@ -1407,6 +1455,7 @@ final class ASRService: ObservableObject {
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
+        self.cloudSpeechProvider = nil
 
         // CRITICAL FIX: Check if the NEW model's files exist on disk
         // This prevents UI from showing "Download" when model is already downloaded
@@ -2291,6 +2340,7 @@ final class ASRService: ObservableObject {
     }
 
     private func recordWordBoostHitIfAny(transcribedText: String) {
+        guard !self.isUsingCloudTranscription else { return }
         let model = SettingsStore.shared.selectedSpeechModel
         guard model.supportsCustomVocabulary,
               let provider = self.fluidAudioProvider,
@@ -2388,6 +2438,11 @@ final class ASRService: ObservableObject {
     /// This method performs an accurate async check for providers that require it
     /// (e.g., `AppleSpeechAnalyzerProvider` uses `SpeechTranscriber.installedLocales`).
     func checkIfModelsExistAsync() async {
+        if self.isUsingCloudTranscription {
+            self.modelExistenceCheckID = UUID()
+            self.modelsExistOnDisk = false
+            return
+        }
         let model = SettingsStore.shared.selectedSpeechModel
         let checkID = UUID()
         self.modelExistenceCheckID = checkID
@@ -2996,7 +3051,7 @@ final class ASRService: ObservableObject {
 
             // Only start streaming for models that support it (large Whisper models are too slow)
             let model = SettingsStore.shared.selectedSpeechModel
-            if model.supportsStreaming, !forDictionaryTraining {
+            if !self.isUsingCloudTranscription, model.supportsStreaming, !forDictionaryTraining {
                 DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
                 self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples)")
                 self.startStreamingTranscription()
@@ -3612,7 +3667,7 @@ final class ASRService: ObservableObject {
                     // The executor closure inherits main-actor isolation, so inference
                     // and every await hop would otherwise run on or wait for the main
                     // thread. Detach so the UI stays responsive during final ASR.
-                    try await Task.detached(priority: .userInitiated) {
+                    let task = Task.detached(priority: .userInitiated) {
                         let executionStartedAt = ProcessInfo.processInfo.systemUptime
                         DebugLogger.shared.debug("ASR_BENCH t=\(executionStartedAt) final_executor_begin mainThread=\(Thread.isMainThread)", source: "ASRBenchmark")
                         defer {
@@ -3622,8 +3677,14 @@ final class ASRService: ObservableObject {
                             DebugLogger.shared.debug("ASR_BENCH t=\(ProcessInfo.processInfo.systemUptime) final_executor_end", source: "ASRBenchmark")
                         }
                         return try await provider.transcribeFinal(pcm)
-                    }.value
+                    }
+                    return try await withTaskCancellationHandler {
+                        try await task.value
+                    } onCancel: {
+                        task.cancel()
+                    }
                 }
+                try Task.checkCancellation()
                 delayedFinalStatusTask.cancel()
                 self.publishStoppedState(for: stoppingSessionID)
                 self.benchmarkLog("final_executor_return")
@@ -3638,10 +3699,12 @@ final class ASRService: ObservableObject {
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
             let finalRTF = finalAudioSeconds > 0 ? (Double(finalElapsedMs) / 1000.0) / finalAudioSeconds : 0
             DebugLogger.shared.debug("stop(): final transcription finished source=\(finalSource)", source: "ASRService")
-            DebugLogger.shared.debug(
-                "Transcription completed: '\(result.text)' (confidence: \(result.confidence))",
-                source: "ASRService"
-            )
+            if !self.isUsingCloudTranscription {
+                DebugLogger.shared.debug(
+                    "Transcription completed: '\(result.text)' (confidence: \(result.confidence))",
+                    source: "ASRService"
+                )
+            }
             DebugLogger.shared.info(
                 "Final ASR result | provider=\(provider.name) | samples=\(pcm.count) | textChars=\(result.text.trimmingCharacters(in: .whitespacesAndNewlines).count) | confidence=\(result.confidence)",
                 source: "ASRService"
@@ -3672,17 +3735,23 @@ final class ASRService: ObservableObject {
                 ))
             }
 
-            let textWithoutFillers = ASRService.removeFillerWords(result.text)
-            let dictionaryText = useDictionaryTrainingPath
-                ? textWithoutFillers
-                : ASRService.applyCustomDictionary(textWithoutFillers)
-            let outputText = useDictionaryTrainingPath
-                ? dictionaryText
-                : ASRService.applySpokenPunctuationFormatting(dictionaryText)
+            try Task.checkCancellation()
+            let outputText: String
+            if self.isUsingCloudTranscription {
+                outputText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                let textWithoutFillers = ASRService.removeFillerWords(result.text)
+                let dictionaryText = useDictionaryTrainingPath
+                    ? textWithoutFillers
+                    : ASRService.applyCustomDictionary(textWithoutFillers)
+                outputText = useDictionaryTrainingPath ? dictionaryText : ASRService.applySpokenPunctuationFormatting(dictionaryText)
+            }
             if !isolatedDictionaryCapture {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
             }
-            DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
+            if !self.isUsingCloudTranscription {
+                DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
+            }
             self
                 .benchmarkLog(
                     "stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)"
@@ -3709,6 +3778,19 @@ final class ASRService: ObservableObject {
             return outputText
         } catch {
             self.lastStopOutcome = .failed
+            if self.isUsingCloudTranscription {
+                if !Task.isCancelled, !(error is CancellationError), let configuration = self.frozenCloudConfiguration {
+                    self.failedCloudDictation = (pcm, configuration)
+                    self.hasFailedCloudDictation = true
+                    self.errorTitle = "OpenRouter transcription failed"
+                    self.errorMessage = error.localizedDescription + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
+                    self.showError = true
+                }
+                self.isLoadingModel = false
+                self.modelPreparationPhase = nil
+                DebugLogger.shared.error("Cloud transcription failed; no transcript or request payload logged.", source: "ASRService")
+                return ""
+            }
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
             DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
             let nsError = error as NSError
@@ -3734,6 +3816,33 @@ final class ASRService: ObservableObject {
             self.benchmarkLog("stop_end result=error totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) error=\(error.localizedDescription)")
             return ""
         }
+    }
+
+    func discardFailedCloudDictation() {
+        self.failedCloudDictation = nil
+        self.hasFailedCloudDictation = false
+    }
+
+    /// Retry is explicit and copies its result only when requested by the user in settings.
+    func retryFailedCloudDictation(useLocal: Bool) async throws -> String {
+        guard let failed = self.failedCloudDictation else { return "" }
+        let lease = try self.acquireExclusiveActivity(.dictation)
+        defer { self.releaseExclusiveActivity(lease) }
+        let provider: any TranscriptionProvider
+        if useLocal {
+            provider = self.getProvider(for: SettingsStore.shared.selectedSpeechModel)
+        } else {
+            provider = CloudTranscriptionProvider(
+                configuration: failed.configuration,
+                apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
+                persistChunks: false
+            )
+        }
+        try await provider.prepare(progressHandler: nil)
+        let result = try await provider.transcribeFinal(failed.samples)
+        try Task.checkCancellation()
+        self.discardFailedCloudDictation()
+        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func beginDeferredStopUIInvalidation() {
@@ -3837,9 +3946,12 @@ final class ASRService: ObservableObject {
             self.modelPreparationPhase = nil
         }
 
-        let cleanedText = ASRService.applySpokenPunctuationFormatting(
-            ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
-        )
+        try Task.checkCancellation()
+        let cleanedText = self.isUsingCloudTranscription
+            ? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ASRService.applySpokenPunctuationFormatting(
+                ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+            )
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return ASRTranscriptionResult(text: cleanedText, confidence: result.confidence)
     }
@@ -3936,9 +4048,12 @@ final class ASRService: ObservableObject {
             self.modelPreparationPhase = nil
         }
 
-        let cleanedText = ASRService.applySpokenPunctuationFormatting(
-            ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
-        )
+        try Task.checkCancellation()
+        let cleanedText = self.isUsingCloudTranscription
+            ? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ASRService.applySpokenPunctuationFormatting(
+                ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+            )
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return (ASRTranscriptionResult(text: cleanedText, confidence: result.confidence), estimatedSamples)
     }
@@ -6254,6 +6369,16 @@ final class ASRService: ObservableObject {
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         try Task.checkCancellation()
+        if self.isUsingCloudTranscription {
+            let provider = self.transcriptionProvider
+            try await provider.prepare(progressHandler: nil)
+            try Task.checkCancellation()
+            self.isAsrReady = provider.isReady
+            self.modelsExistOnDisk = false
+            self.isLoadingModel = false
+            self.isDownloadingModel = false
+            return
+        }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
