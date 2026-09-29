@@ -185,14 +185,17 @@ final class MeetingReferenceSynchronizerTests: XCTestCase {
     }
 
     func testStereoContinuityUsesDownmixedCountAndMalformedArrayIsGap() {
-        let stereo = (0..<2).map { index in
-            MeetingMicrophonePCMFrame(
+        let stereo: [MeetingMicrophonePCMFrame] = (0..<2).map { (index: Int) -> MeetingMicrophonePCMFrame in
+            let sampleTime = Int64(index * 160)
+            let hostTime = Double(index) * 0.01
+            let samples = [Float](repeating: Float(index + 1), count: 320)
+            return MeetingMicrophonePCMFrame(
                 sequenceNumber: index,
-                sampleTime: Int64(index * 160),
-                hostTime: Double(index) * 0.01,
+                sampleTime: sampleTime,
+                hostTime: hostTime,
                 sampleRate: self.sampleRate,
                 channelCount: 2,
-                samples: [Float](repeating: Float(index + 1), count: 320)
+                samples: samples
             )
         }
         let valid = MeetingReferenceSynchronizer().synchronize(microphone: stereo, reference: [self.ref(0, pts: 0), self.ref(1, pts: 0.01)])
@@ -303,20 +306,17 @@ final class MeetingReferenceSynchronizerTests: XCTestCase {
             referenceScope: .authorizedFullMix,
             referenceCompleteness: .measuredComplete
         )
-        let microphone = (0..<frameCount).map {
-            self.mic(
-                $0,
-                start: Int64($0 * 160),
-                host: Double($0) * 0.01,
-                value: Float(($0 % 13) + 1)
-            )
+        let microphone: [MeetingMicrophonePCMFrame] = (0..<frameCount).map { (index: Int) -> MeetingMicrophonePCMFrame in
+            let sampleTime = Int64(index * 160)
+            let hostTime = Double(index) * 0.01
+            let sampleValue = Float((index % 13) + 1)
+            return self.mic(index, start: sampleTime, host: hostTime, value: sampleValue)
         }
-        let reference = (0..<frameCount).map { index in
-            self.ref(
-                index,
-                pts: Double(index) * 0.01 + (index >= gapIndex ? gapSeconds : 0),
-                value: Float((index % 17) + 1)
-            )
+        let reference: [MeetingReferencePCMFrame] = (0..<frameCount).map { (index: Int) -> MeetingReferencePCMFrame in
+            let offset = index >= gapIndex ? gapSeconds : 0
+            let presentationTime = Double(index) * 0.01 + offset
+            let sampleValue = Float((index % 17) + 1)
+            return self.ref(index, pts: presentationTime, value: sampleValue)
         }
         let synchronizer = MeetingReferenceSynchronizer(configuration: configuration)
 
