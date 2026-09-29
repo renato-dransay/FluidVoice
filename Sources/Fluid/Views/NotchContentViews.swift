@@ -882,8 +882,9 @@ struct NotchExpandedView: View {
     private func promptMenuContent() -> some View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
+        let isCloudDictation = promptMode.normalized == .dictate && self.settings.usesCloudTranscription
         return VStack(alignment: .leading, spacing: 2) {
-            Text(self.settings.usesCloudTranscription ? "OpenRouter cleanup style" : "AI Prompt")
+            Text(isCloudDictation ? "OpenRouter cleanup style" : "AI Prompt")
                 .font(.fluidSystem(size: 8, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.42))
                 .padding(.horizontal, 6)
@@ -900,7 +901,7 @@ struct NotchExpandedView: View {
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(
-                            self.settings.usesCloudTranscription ? "No cleanup" : "Basic",
+                            isCloudDictation ? "No cleanup" : "Basic",
                             rowID: "off",
                             isSelected: {
                                 let selection = self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID)

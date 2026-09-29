@@ -1986,7 +1986,9 @@ private struct BottomOverlayPromptMenuView: View {
             }
 
             if !self.isCompact {
-                Text(self.settings.usesCombinedCloudDictation ? "CLEANUP STYLES · SAME REQUEST" : "EXTERNAL CLEANUP")
+                Text(self.promptMode.normalized == .dictate
+                    ? (self.settings.usesCombinedCloudDictation ? "CLEANUP STYLES · SAME REQUEST" : "EXTERNAL CLEANUP")
+                    : "PROMPTS")
                     .font(.fluidSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.horizontal, 8)
