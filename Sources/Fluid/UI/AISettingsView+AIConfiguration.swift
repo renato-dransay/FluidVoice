@@ -318,9 +318,13 @@ extension AIEnhancementSettingsView {
                 self.helpStep("2", "Add an API key if needed", "key")
                 self.helpStep("3", "Pick the model you want", "cpu")
                 self.helpStep("4", "Verify the connection", "checkmark.shield")
-                self.helpStep("5", self.settings.usesCombinedCloudDictation
-                    ? "Pick a Cleanup Style for dictation; these providers serve text actions"
-                    : "Set Dictate to Off, Default, or a custom prompt", "text.bubble")
+                self.helpStep(
+                    "5",
+                    self.settings.usesCombinedCloudDictation
+                        ? "Pick a Cleanup Style for dictation; these providers serve text actions"
+                        : "Set Dictate to Off, Default, or a custom prompt",
+                    "text.bubble"
+                )
             }
         }
         .padding(14)
