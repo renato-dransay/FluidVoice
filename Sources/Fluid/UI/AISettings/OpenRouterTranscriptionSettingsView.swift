@@ -120,7 +120,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Dictation language", systemImage: "globe")
                 .font(.callout)
-            Text("Primary is selected for dictation by default. While recording, choose Primary, Secondary, or Automatic in the overlay; your choice is remembered. Without a primary language, dictation detects automatically. Imported files always detect automatically.")
+            Text("Primary is the dictation default. Choose Primary, Secondary, or Automatic while recording; the choice is remembered. Without a primary, dictation detects automatically. Imported files detect automatically.")
                 .font(.caption).foregroundStyle(.secondary)
             self.languageHintPicker(
                 "Primary language",
