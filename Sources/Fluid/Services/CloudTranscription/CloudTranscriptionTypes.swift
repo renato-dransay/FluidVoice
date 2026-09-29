@@ -63,8 +63,8 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
     static let meetingDefault = CloudTranscriptionConfiguration(modelID: CloudTranscriptionModel.defaultMeetingID)
 
     func validate(wordTimings: Bool) throws {
-        for code in [self.languageCode, self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) {
-            if !Self.supportedLanguageCodes.contains(code) { throw CloudTranscriptionError.invalidLanguage }
+        for code in [self.languageCode, self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) where !Self.supportedLanguageCodes.contains(code) {
+            throw CloudTranscriptionError.invalidLanguage
         }
         if let audioDictation {
             guard CloudAudioDictationModel.catalog.contains(where: { $0.id == audioDictation.modelID }) else {
@@ -140,6 +140,8 @@ nonisolated struct CloudTranscriptionResult: Codable, Equatable, Sendable {
     let processingDuration: TimeInterval
     let dictationOutput: CloudAudioDictationOutput?
 
+    // Preserve missing timings instead of fabricating a timed silence result.
+    // swiftlint:disable:next discouraged_optional_collection
     init(text: String, words: [CloudTranscriptionWord]?, usage: CloudTranscriptionUsage?, requestID: String?, processingDuration: TimeInterval, dictationOutput: CloudAudioDictationOutput? = nil) {
         self.text = text
         self.words = words

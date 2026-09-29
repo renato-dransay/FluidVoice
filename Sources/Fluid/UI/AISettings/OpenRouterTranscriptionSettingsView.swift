@@ -122,15 +122,22 @@ struct OpenRouterTranscriptionSettingsView: View {
                 .font(.callout)
             Text("Speak in any language supported by the model. Optional language hints do not force a language or limit detection to your choices.")
                 .font(.caption).foregroundStyle(.secondary)
-            self.languageHintPicker("Primary language", selection: Binding(
-                get: { self.settings.cloudTranscriptionPrimaryLanguageCode ?? "none" },
-                set: { self.settings.cloudTranscriptionPrimaryLanguageCode = $0 == "none" ? nil : $0 }
-            ))
+            self.languageHintPicker(
+                "Primary language",
+                selection: Binding(
+                    get: { self.settings.cloudTranscriptionPrimaryLanguageCode ?? "none" },
+                    set: { self.settings.cloudTranscriptionPrimaryLanguageCode = $0 == "none" ? nil : $0 }
+                )
+            )
             .accessibilityIdentifier("cloud-primary-language")
-            self.languageHintPicker("Secondary language", selection: Binding(
-                get: { self.settings.cloudTranscriptionSecondaryLanguageCode ?? "none" },
-                set: { self.settings.cloudTranscriptionSecondaryLanguageCode = $0 == "none" ? nil : $0 }
-            ), excluding: self.settings.cloudTranscriptionPrimaryLanguageCode)
+            self.languageHintPicker(
+                "Secondary language",
+                selection: Binding(
+                    get: { self.settings.cloudTranscriptionSecondaryLanguageCode ?? "none" },
+                    set: { self.settings.cloudTranscriptionSecondaryLanguageCode = $0 == "none" ? nil : $0 }
+                ),
+                excluding: self.settings.cloudTranscriptionPrimaryLanguageCode
+            )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
             Text("Hints help providers that support them; other providers may ignore them. Leave both empty for unrestricted automatic detection.")

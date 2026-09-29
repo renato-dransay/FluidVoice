@@ -3023,8 +3023,11 @@ struct ContentView: View {
         )
 
         if await self.routePromptTestResult(
-            transcribedText, sessionID: promptTestSessionID, lifecycleID: expectedOverlayLifecycleID,
-            combinedOutput: combinedOutput, combinedRequest: usesCombinedDictation
+            transcribedText,
+            sessionID: promptTestSessionID,
+            lifecycleID: expectedOverlayLifecycleID,
+            combinedOutput: combinedOutput,
+            combinedRequest: usesCombinedDictation
         ) { return }
 
         guard transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
@@ -4577,6 +4580,7 @@ struct ContentView: View {
         // Pre-load model in background while recording (avoids 10s freeze on stop)
         let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         Task {
+            guard !self.asr.isUsingCombinedCloudDictation else { return }
             guard MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             do {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
@@ -4603,6 +4607,7 @@ struct ContentView: View {
     }
 
     private func prewarmPrivateAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
+        guard !self.asr.isUsingCombinedCloudDictation else { return }
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(

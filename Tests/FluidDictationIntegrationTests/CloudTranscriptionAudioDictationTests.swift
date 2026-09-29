@@ -22,7 +22,9 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         )
         let result = try await self.client().transcribe(
             samples: [Float](repeating: 0.1, count: 16_000),
-            configuration: .init(languageCode: "de", audioDictation: instructions), apiKey: "test-key", wordTimings: false
+            configuration: .init(languageCode: "de", audioDictation: instructions),
+            apiKey: "test-key",
+            wordTimings: false
         )
         XCTAssertEqual(recorder.requests.count, 1)
         let request = try XCTUnwrap(recorder.requests.first)
@@ -73,6 +75,55 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         XCTAssertEqual(result.dictationOutput?.styleApplied, false)
     }
 
+    func testCombinedLanguageHintsKeepAutomaticDetectionInOneRequest() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], try Self.response(transcript: "Bonjour, monde.", text: "Bonjour, monde."))
+        }
+        let configuration = CloudTranscriptionConfiguration(
+            primaryLanguageCode: "de",
+            secondaryLanguageCode: "pt",
+            audioDictation: .init(modelID: CloudAudioDictationModel.defaultID, promptText: nil)
+        )
+        let result = try await self.client().transcribe(samples: [0.1], configuration: configuration, apiKey: "test-key", wordTimings: false)
+        XCTAssertEqual(result.dictationOutput?.text, "Bonjour, monde.")
+        XCTAssertNil(configuration.languageCode)
+        XCTAssertEqual(recorder.requests.count, 1)
+        XCTAssertEqual(recorder.requests.first?.httpMethod, "POST")
+        XCTAssertEqual(recorder.requests.first?.url?.path, "/api/v1/chat/completions")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(recorder.requests.first?.httpBody)) as? [String: Any])
+        XCTAssertNil(body["language"])
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        let system = try XCTUnwrap(messages.first?["content"] as? String)
+        XCTAssertTrue(system.contains("German and Portuguese"))
+        XCTAssertTrue(system.contains("Other languages may also be spoken"))
+        XCTAssertTrue(system.contains("Detect the spoken language automatically"))
+        XCTAssertTrue(system.contains("these hints do not request translation"))
+        XCTAssertFalse(system.contains("Expected spoken language code:"))
+    }
+
+    func testInvalidCombinedLanguageHintsFailBeforeUpload() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], try Self.response(transcript: "unexpected", text: "unexpected"))
+        }
+        let instructions = CloudAudioDictationInstructions(modelID: CloudAudioDictationModel.defaultID, promptText: nil)
+        for configuration in [
+            CloudTranscriptionConfiguration(primaryLanguageCode: "invalid", audioDictation: instructions),
+            CloudTranscriptionConfiguration(primaryLanguageCode: "de", secondaryLanguageCode: "invalid", audioDictation: instructions),
+        ] {
+            do {
+                _ = try await self.client().transcribe(samples: [0.1], configuration: configuration, apiKey: "test-key", wordTimings: false)
+                XCTFail("Invalid primary or secondary language hints must fail before uploading audio")
+            } catch {
+                XCTAssertEqual(error as? CloudTranscriptionError, .invalidLanguage)
+            }
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
     func testAuthoredTemplateSupportsTranslationOfFinalTextAndEveryTranscriptPlaceholder() async throws {
         let recorder = CloudRequestRecorder()
         CloudURLProtocol.install { request in
@@ -121,7 +172,9 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         do {
             _ = try await engine.transcribe(
                 samples: [Float](repeating: 0.1, count: 120 * 16_000 + 1),
-                configuration: self.configuration(), apiKey: "test-key", wordTimings: false
+                configuration: self.configuration(),
+                apiKey: "test-key",
+                wordTimings: false
             )
             XCTFail("Combined dictation exceeding 120 seconds must fail locally")
         } catch {
@@ -153,7 +206,23 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         CloudURLProtocol.install { request in
             recorder.append(request)
             if request.url?.path == "/api/v1/key" { return (200, [:], Data(#"{"data":{}}"#.utf8)) }
-            return (200, [:], Data(#"{"data":[{"id":"google/gemini-2.5-flash","name":"Gemini Flash","architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-2.5-pro","name":"Missing audio","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]},{"id":"google/gemini-2.5-flash-lite","name":"Missing schema","architecture":{"input_modalities":["audio"],"output_modalities":["text"]},"supported_parameters":["response_format"]},{"id":"unknown/audio-model","architecture":{"input_modalities":["audio"],"output_modalities":["text"]},"supported_parameters":["response_format","structured_outputs"]}]}"#.utf8))
+            let catalog = #"""
+            {"data":[
+                {"id":"google/gemini-2.5-flash","name":"Gemini Flash",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"google/gemini-2.5-pro","name":"Missing audio",
+                 "architecture":{"input_modalities":["text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"google/gemini-2.5-flash-lite","name":"Missing schema",
+                 "architecture":{"input_modalities":["audio"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format"]},
+                {"id":"unknown/audio-model",
+                 "architecture":{"input_modalities":["audio"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]}
+            ]}
+            """#
+            return (200, [:], Data(catalog.utf8))
         }
         let models = try await self.client().validateAudioDictation(apiKey: "test-key")
         XCTAssertEqual(models.map(\.id), [CloudAudioDictationModel.defaultID])
@@ -223,7 +292,8 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
     }
     private nonisolated static func responseObject(_ content: [String: Any], cost: Double? = nil) throws -> Data {
         let encoded = try JSONSerialization.data(withJSONObject: content)
-        var response: [String: Any] = ["id": "generation-combined", "choices": [["finish_reason": "stop", "message": ["content": String(decoding: encoded, as: UTF8.self)]]]]
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        var response: [String: Any] = ["id": "generation-combined", "choices": [["finish_reason": "stop", "message": ["content": json]]]]
         if let cost { response["usage"] = ["cost": cost] }
         return try JSONSerialization.data(withJSONObject: response)
     }

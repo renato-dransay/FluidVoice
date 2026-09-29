@@ -1955,7 +1955,7 @@ extension AIEnhancementSettingsView {
                             } else if self.promptTest.isActive {
                                 Text(
                                     self.isCombinedCloudPromptEditor
-                                        ? "Press the hotkey to start/stop recording (maximum 120 seconds). Audio and your draft style are sent together. Transcript and styled text appear below; nothing is typed into other apps. Both texts come from the same model."
+                                        ? "Press the hotkey to start/stop recording (maximum 120 seconds). Audio and your draft style are sent together. The same model returns both texts below. Nothing is typed into other apps."
                                         : "Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps)."
                                 )
                                 .font(.fluidSystem(.caption2))

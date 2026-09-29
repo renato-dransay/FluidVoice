@@ -25,7 +25,10 @@ struct OnboardingCloudTranscriptionSetupView: View {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)
             }
             HStack {
-                Button("Cancel") { self.dismiss() }
+                Button("Cancel") {
+                    self.activationTask?.cancel()
+                    self.dismiss()
+                }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Use OpenRouter") { self.activate() }
@@ -39,19 +42,54 @@ struct OnboardingCloudTranscriptionSetupView: View {
     }
 
     private func activate() {
+        guard !self.isActivating else { return }
+        let mode = self.settings.cloudDictationMode
+        let modelID = mode == .transcribeAndStyle ? self.settings.cloudDictationModelID : self.settings.cloudTranscriptionModelID
+        let apiKey = self.settings.openRouterTranscriptionAPIKey
+        let primaryLanguageCode = self.settings.cloudTranscriptionPrimaryLanguageCode
+        let secondaryLanguageCode = self.settings.cloudTranscriptionSecondaryLanguageCode
+        let originalSource = self.settings.speechExecutionSource
+        self.errorMessage = nil
         self.isActivating = true
         self.activationTask = Task { @MainActor in
-            defer { self.isActivating = false }
+            defer {
+                self.isActivating = false
+                self.activationTask = nil
+            }
             do {
-                let models = try await OpenRouterTranscriptionClient().validate(apiKey: self.settings.openRouterTranscriptionAPIKey)
+                let availableModelIDs: Set<String>
+                if mode == .transcribeAndStyle {
+                    let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
+                    availableModelIDs = Set(models.map(\.id))
+                } else {
+                    let models = try await OpenRouterTranscriptionClient().validate(apiKey: apiKey)
+                    availableModelIDs = Set(models.map(\.id))
+                }
                 try Task.checkCancellation()
-                guard models.contains(where: { $0.id == self.settings.cloudTranscriptionModelID }) else {
-                    self.errorMessage = "The selected transcription model is unavailable on OpenRouter. Choose another model."
+                let currentModelID = self.settings.cloudDictationMode == .transcribeAndStyle
+                    ? self.settings.cloudDictationModelID : self.settings.cloudTranscriptionModelID
+                guard self.settings.cloudDictationMode == mode,
+                      currentModelID == modelID,
+                      self.settings.openRouterTranscriptionAPIKey == apiKey,
+                      self.settings.cloudTranscriptionPrimaryLanguageCode == primaryLanguageCode,
+                      self.settings.cloudTranscriptionSecondaryLanguageCode == secondaryLanguageCode,
+                      self.settings.speechExecutionSource == originalSource
+                else {
+                    self.errorMessage = "Voice settings changed during validation. Try activating OpenRouter again."
+                    return
+                }
+                guard availableModelIDs.contains(modelID) else {
+                    self.errorMessage = mode == .transcribeAndStyle
+                        ? "The selected audio dictation model is unavailable on OpenRouter. Choose another model."
+                        : "The selected transcription model is unavailable on OpenRouter. Choose another model."
                     return
                 }
                 self.settings.speechExecutionSource = .openRouter
                 self.viewModel.asr.resetTranscriptionProvider()
-                try await self.viewModel.asr.ensureAsrReady(source: .onboarding)
+                if mode == .transcriptionOnly {
+                    try await self.viewModel.asr.ensureAsrReady(source: .onboarding)
+                    try Task.checkCancellation()
+                }
                 self.dismiss()
             } catch is CancellationError {
                 return
