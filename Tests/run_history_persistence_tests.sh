@@ -15,6 +15,7 @@ sed '/^extension FileTranscriptionEntry/,$d' \
     Sources/Fluid/Persistence/Search/SearchIndexRecord.swift > "$task_test_dir/HistorySearchRecord.swift"
 xcrun swiftc -O -parse-as-library \
     "$task_test_dir/HistorySearchRecord.swift" \
+    Sources/Fluid/Persistence/ForkIdentity.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Tests/HistoryPersistenceBoundaryTests.swift \

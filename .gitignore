@@ -232,3 +232,9 @@ builds/
 !README.md
 !CONTRIBUTING.md
 !.github/pull_request_template.md
+
+# Personal fork maintenance documentation
+!docs/
+docs/*
+!docs/personal/
+!docs/personal/**

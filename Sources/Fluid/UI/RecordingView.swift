@@ -12,10 +12,17 @@ struct RecordingView: View {
     @EnvironmentObject var appServices: AppServices
     private var asr: ASRService { self.appServices.asr }
     @Environment(\.theme) private var theme
+    @ObservedObject private var settings = SettingsStore.shared
     @Binding var appear: Bool
 
     let stopAndProcessTranscription: () async -> Void
     let startRecording: () -> Void
+
+    private var isReadyToRecord: Bool {
+        self.settings.usesCloudTranscription
+            ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
+            : self.asr.isAsrReady
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -45,12 +52,12 @@ struct RecordingView: View {
                             // Status indicator
                             HStack {
                                 Circle()
-                                    .fill(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
+                                    .fill(self.asr.isRunning ? .red : self.isReadyToRecord ? Color.fluidGreen : .secondary)
                                     .frame(width: 8, height: 8)
 
-                                Text(self.asr.isRunning ? "Recording..." : self.asr.isAsrReady ? "Ready to record" : "Model not ready")
+                                Text(self.asr.isRunning ? "Recording..." : self.isReadyToRecord ? "Ready to record" : self.settings.usesCloudTranscription ? "OpenRouter key required" : "Model not ready")
                                     .font(.fluidSystem(.subheadline))
-                                    .foregroundStyle(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
+                                    .foregroundStyle(self.asr.isRunning ? .red : self.isReadyToRecord ? Color.fluidGreen : .secondary)
                             }
 
                             // Recording Control (Single Toggle Button)
@@ -74,7 +81,7 @@ struct RecordingView: View {
                             .buttonHoverEffect()
                             .scaleEffect(self.asr.isRunning ? 1.05 : 1.0)
                             .animation(.spring(response: 0.3), value: self.asr.isRunning)
-                            .disabled(!self.asr.isAsrReady && !self.asr.isRunning)
+                            .disabled((!self.isReadyToRecord || self.asr.activeExclusiveActivity != nil) && !self.asr.isRunning)
                         }
                     }
                     .padding(14)

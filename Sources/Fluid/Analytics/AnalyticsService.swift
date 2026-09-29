@@ -557,7 +557,7 @@ private actor AnalyticsCore {
             appropriateFor: nil,
             create: true
         )
-        let directoryName = Bundle.main.bundleIdentifier ?? "FluidVoice"
+        let directoryName = ForkIdentity.appSupportFolderName(legacyName: Bundle.main.bundleIdentifier ?? "FluidVoice")
         return applicationSupport
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent("Analytics", isDirectory: true)

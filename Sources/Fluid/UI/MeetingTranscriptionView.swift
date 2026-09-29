@@ -712,6 +712,7 @@ struct MeetingTranscriptionView: View {
         return MeetingCaptureConfiguration(
             mode: application == nil ? .inRoom : .onlineCall,
             title: title,
+            languageCode: SettingsStore.shared.meetingRecordingLanguageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
@@ -907,6 +908,7 @@ struct MeetingTranscriptionView: View {
         return MeetingCaptureConfiguration(
             mode: session.mode,
             title: session.title,
+            languageCode: SettingsStore.shared.meetingRecordingLanguageCode,
             platform: session.platform,
             application: application,
             microphone: microphone

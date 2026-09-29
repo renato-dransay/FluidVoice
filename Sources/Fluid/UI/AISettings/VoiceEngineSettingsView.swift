@@ -22,8 +22,24 @@ struct VoiceEngineSettingsView: View {
     }
 
     var body: some View {
-        self.speechRecognitionCard
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Transcription", selection: self.$settings.speechExecutionSource) {
+                ForEach(SpeechExecutionSource.allCases) { source in
+                    Text(source.displayName).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(self.viewModel.areSpeechModelActionsBlocked)
+            if self.settings.usesCloudTranscription {
+                OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
+            } else {
+                self.speechRecognitionCard
+            }
+        }
             .onAppear { self.viewModel.onAppear() }
+            .onChange(of: self.settings.speechExecutionSource) { _, _ in
+                self.viewModel.asr.resetTranscriptionProvider()
+            }
             .onChange(of: self.settings.selectedSpeechModel) { _, newValue in
                 self.viewModel.handleSelectedSpeechModelChange(newValue)
             }

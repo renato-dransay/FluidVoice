@@ -61,7 +61,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         )
     }
 
-    func start(mode: MeetingCaptureMode) {
+    func start(mode: MeetingCaptureMode, languageCode: String = "en") {
+        guard languageCode == "en" || languageCode == MeetingCloudLanguage.automatic else {
+            self.publish { $0.settingAvailability(.unavailable(reason: "Local live captions support English only. Your completed transcript uses the selected cloud language.")) }
+            return
+        }
         #if arch(arm64)
         guard Self.isMemorySufficient(physicalMemory: ProcessInfo.processInfo.physicalMemory) else {
             self.diag(

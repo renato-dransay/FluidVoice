@@ -267,6 +267,144 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         )
     }
 
+    func testCloudBackendAcceptsAutomaticAndMultilingualConfiguration() throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        for language in ["auto", "en", "de", "pt", "ja"] {
+            let backend = MeetingParakeetNemotronBackend(
+                runtimeFactory: { _ in FakeRuntime() },
+                modelLocator: StubModelLocator(),
+                materializer: FakeMaterializer(),
+                descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+            )
+            let configuration = MeetingFinalProcessingConfiguration(
+                asrProvider: .openRouter, asrModel: "openai/whisper-large-v3", languageCode: language
+            )
+            let plan = try backend.plan(self.makeRequest(
+                session: fixture.session, directory: directory, configuration: configuration
+            ))
+            XCTAssertEqual(plan.backendID, .openRouterNemotron)
+            XCTAssertEqual(plan.request.configuration, configuration)
+            XCTAssertEqual(backend.descriptor.execution, .hosted)
+            XCTAssertTrue(backend.descriptor.requiresLocalDiarization)
+            XCTAssertTrue(backend.descriptor.usesTextOverlapEchoVerdicts)
+        }
+    }
+
+    func testCloudBackendRejectsModelsWithoutVerifiedWordTimings() throws {
+        let fixture = self.makeTwoEpochFixture()
+        let backend = MeetingParakeetNemotronBackend(
+            runtimeFactory: { _ in FakeRuntime() },
+            modelLocator: StubModelLocator(),
+            descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+        )
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrProvider: .openRouter, asrModel: "openai/gpt-4o-transcribe", languageCode: "auto"
+        )
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(
+            session: fixture.session, directory: self.makeTempSessionDirectory(), configuration: configuration
+        )))
+    }
+
+    func testCloudBackendMarksMissingTimingsIncompleteInsteadOfInventingUtterances() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let runtime = FakeRuntime()
+        runtime.asrSession.responses = [
+            .init(text: "Hallo", words: []), .init(text: "Olá", words: []), .init(text: "Hello", words: []),
+        ]
+        let backend = MeetingParakeetNemotronBackend(
+            runtimeFactory: { _ in runtime },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer(),
+            descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+        )
+        let plan = try backend.plan(self.makeRequest(
+            session: fixture.session,
+            directory: self.makeTempSessionDirectory(),
+            configuration: MeetingFinalProcessingConfiguration(
+                asrProvider: .openRouter, asrModel: "openai/whisper-large-v3", languageCode: "auto"
+            )
+        ))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        let outcome = try await backend.execute(plan: plan, manifest: manifest) { _ in }
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(bundle.evidence.backendID, .openRouterNemotron)
+        XCTAssertTrue(bundle.evidence.units.isEmpty)
+        XCTAssertFalse(bundle.coverageReceipts.isEmpty)
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .failed && $0.reasonCode == "wordTimingsUnavailable" })
+    }
+
+    func testCloudPipelineFreezesConfigurationBeforeModelPreparation() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let runtime = FakeRuntime()
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .openRouterNemotron)
+        registry.register(.openRouterNemotron) { context in
+            MeetingParakeetNemotronBackend(
+                runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                modelLocator: StubModelLocator(),
+                materializer: FakeMaterializer(),
+                descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+            )
+        }
+        var selectedLanguage = "de"
+        var snapshotCount = 0
+        var preparationCount = 0
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Cloud backend must not prepare a local speech model"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            chunkObserver: FixtureObserver(results: fixture.observations),
+            meetingRuntimeFactory: { _ in runtime },
+            finalConfigurationProvider: { _, _ in
+                snapshotCount += 1
+                return MeetingFinalProcessingConfiguration(
+                    asrProvider: .openRouter, asrModel: "openai/whisper-large-v3", languageCode: selectedLanguage
+                )
+            },
+            cloudAPIKeyProvider: { "" },
+            prepareDiarizationModel: {
+                preparationCount += 1
+                selectedLanguage = "pt"
+            }
+        )
+        let result = try await pipeline.process(session: fixture.session, sessionDirectory: directory) { _ in }
+        XCTAssertEqual(snapshotCount, 1)
+        XCTAssertEqual(preparationCount, 1)
+        XCTAssertEqual(result.attempt.backendID, MeetingBackendID.openRouterNemotron.rawValue)
+        XCTAssertEqual(result.attempt.asrModel, "openai/whisper-large-v3")
+        XCTAssertEqual(result.attempt.languageCode, "de")
+        XCTAssertEqual(runtime.asrConfigurations.first?.languageCode, "de")
+        XCTAssertEqual(runtime.asrConfigurations.first?.asrProvider, .openRouter)
+        var persisted = fixture.session
+        persisted.processingAttempts = [result.attempt]
+        XCTAssertNoThrow(try persisted.validateForPersistence())
+    }
+
+    func testCloudCancellationDoesNotBecomeAnIncompleteReceipt() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let runtime = FakeRuntime()
+        runtime.asrSession.cancellationCallIndices = [0]
+        let backend = MeetingParakeetNemotronBackend(
+            runtimeFactory: { _ in runtime },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer(),
+            descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+        )
+        let plan = try backend.plan(self.makeRequest(
+            session: fixture.session,
+            directory: self.makeTempSessionDirectory(),
+            configuration: MeetingFinalProcessingConfiguration(
+                asrProvider: .openRouter, asrModel: "openai/whisper-large-v3", languageCode: "auto"
+            )
+        ))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        await XCTAssertAsyncThrowsError(try await backend.execute(plan: plan, manifest: manifest) { _ in }) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     // MARK: - Registry selection
 
     func testRegistryUsesCompositeDefaultAndKeepsLegacyRegistered() throws {
@@ -274,6 +412,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(registry.defaultBackendID, .productionDefault)
         XCTAssertTrue(registry.contains(.parakeetNemotron))
         XCTAssertTrue(registry.contains(.legacyCompatibility))
+        XCTAssertTrue(registry.contains(.openRouterNemotron))
 
         let runtime = FakeRuntime()
         let context = MeetingBackendHostContext(

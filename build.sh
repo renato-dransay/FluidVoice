@@ -15,6 +15,7 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="${1:-${BUILD_PROFILE:-public}}"
 PRIVATE_FI_BUILD_SCRIPT="${PROJECT_DIR}/build_with_FI_incremental.sh"
 DERIVED_DATA_PATH="${FLUIDVOICE_DERIVED_DATA_PATH:-${PROJECT_DIR}/DerivedData}"
+APP_NAME="${FLUIDVOICE_APP_NAME:-FluidVoice Personal}"
 
 resolve_development_team() {
     local identity
@@ -76,6 +77,7 @@ run_public_build() {
         -destination 'platform=macOS'
         -derivedDataPath "${DERIVED_DATA_PATH}"
         build
+        "FLUIDVOICE_APP_NAME=${APP_NAME}"
     )
 
     cd "${PROJECT_DIR}"
@@ -121,10 +123,10 @@ EOF
     fi
 
     echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/${APP_NAME}.app"
     xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/${APP_NAME}.app"
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
     if [ ! -d "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2
@@ -202,7 +204,7 @@ EOF
 }
 
 case "${PROFILE}" in
-    public|oss|incremental|fast)
+    public|personal|oss|incremental|fast)
         run_public_build signed
         ;;
     unsigned|ci)
@@ -219,7 +221,7 @@ case "${PROFILE}" in
         ;;
     *)
         echo "Unknown build profile: ${PROFILE}"
-        echo "Valid profiles: public/oss/incremental/fast, unsigned/ci, fi/private/dev/full"
+        echo "Valid profiles: public/personal/oss/incremental/fast, unsigned/ci, fi/private/dev/full"
         exit 1
         ;;
 esac

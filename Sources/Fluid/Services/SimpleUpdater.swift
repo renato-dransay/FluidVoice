@@ -3,6 +3,7 @@ import Foundation
 import PromiseKit
 
 enum SimpleUpdateError: Error, LocalizedError {
+    case personalBuildManagedLocally
     case invalidURL
     case invalidResponse
     case jsonDecoding
@@ -18,6 +19,7 @@ enum SimpleUpdateError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .personalBuildManagedLocally: return "FluidVoice Personal updates are installed from your tested fork build. Use the local install or rollback script."
         case .invalidURL: return "Invalid URL."
         case .invalidResponse: return "Invalid HTTP response from GitHub."
         case .jsonDecoding: return "The data couldn’t be read because it isn’t in the correct format."
@@ -146,6 +148,7 @@ final class SimpleUpdater {
     }
 
     func hasRollbackBackup() -> Bool {
+        guard !ForkIdentity.isPersonalBuild else { return false }
         return self.latestRollbackBackup() != nil
     }
 
@@ -155,6 +158,7 @@ final class SimpleUpdater {
     }
 
     func rollbackToLatestBackup() async throws {
+        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -303,6 +307,7 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws -> (hasUpdate: Bool, latestVersion: String) {
+        guard !ForkIdentity.isPersonalBuild else { return (false, self.currentAppVersion) }
         guard !self.isUpdateInProgress else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -337,6 +342,7 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws {
+        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -605,7 +611,7 @@ final class SimpleUpdater {
         let base = self.fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         let support = base ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return support
-            .appendingPathComponent("Fluid", isDirectory: true)
+            .appendingPathComponent(ForkIdentity.appSupportFolderName(legacyName: "Fluid"), isDirectory: true)
             .appendingPathComponent(self.rollbackBackupDirectoryName, isDirectory: true)
             .appendingPathComponent(self.installedAppName, isDirectory: true)
     }
@@ -852,6 +858,7 @@ final class SimpleUpdater {
     }
 
     private func performSwapAndRelaunch(installedAppURL: URL, downloadedAppURL: URL) throws {
+        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
         // Handle app name changes: if the downloaded app has a different name,
         // we need to replace the old app and use the new name
         let installedAppName = installedAppURL.lastPathComponent

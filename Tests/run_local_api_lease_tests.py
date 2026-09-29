@@ -18,16 +18,28 @@ if ".app/Contents/Developer" not in developer_dir or not (Path(developer_dir) / 
 os.environ["DEVELOPER_DIR"] = developer_dir
 
 source = (repo / 'Sources/Fluid/Services/ASRService.swift').read_text()
-methods = source[source.index('    func transcribeSamplesForAPI('):source.index('    // MARK: - Scoped Meeting ASR Preparation')]
+methods = source[source.index('    func transcribeSamplesForAPI('):source.index('    // MARK: - Exclusive model residency')]
 leases = source[source.index('    func acquireExclusiveActivity('):source.index('    func prepareMeetingAudioHandoff(')]
 types = source[source.index('enum ASRExclusiveActivity:'):source.index('nonisolated enum ASRHardwareListenerEventDisposition:')]
-executor = source[source.index('private actor TranscriptionExecutor {'):source.index('private nonisolated func logTranscriptionExecutorPhase')]
+executor = source[source.index('actor TranscriptionExecutor {'):source.index('private nonisolated func logTranscriptionExecutorPhase')]
 swift = r'''
 import Foundation
 TYPES
 EXECUTOR
 func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {}
 struct ASRTranscriptionResult { let text: String; let confidence: Float }
+enum SpeechExecutionSource { case local, openRouter }
+struct CloudTranscriptionConfiguration: Equatable {
+    let modelID: String
+    let languageCode: String?
+}
+@MainActor final class SettingsStore {
+    static let shared = SettingsStore()
+    var speechExecutionSource = SpeechExecutionSource.local
+    var cloudTranscriptionConfiguration = CloudTranscriptionConfiguration(modelID: "original", languageCode: "en")
+    var openRouterTranscriptionAPIKey = "fixture-credential"
+    var usesCloudTranscription: Bool { speechExecutionSource == .openRouter }
+}
 final class DictionaryAudioLearningService {
     static let shared = DictionaryAudioLearningService()
     func cancelForRecording() {}
@@ -56,23 +68,38 @@ struct LocalAPIAudioDecoder {
         }
     }
 }
-final class Provider {
+class Provider {
     var isReady = true
     var prefersNativeFileTranscription = true
     var finalCalls: [[Float]] = []
     var fileCalls = 0
     var shouldFail = false
     var gate: Gate?
+    var responseText: String?
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         finalCalls.append(samples)
         if let gate { await gate.pause() }
         if shouldFail { throw CancellationError() }
-        return ASRTranscriptionResult(text: "sample result", confidence: 0.8)
+        return ASRTranscriptionResult(text: responseText ?? "sample result", confidence: 0.8)
     }
     func transcribeFile(at url: URL) async throws -> ASRTranscriptionResult {
         fileCalls += 1
         if shouldFail { throw CancellationError() }
-        return ASRTranscriptionResult(text: "file result", confidence: 0.8)
+        return ASRTranscriptionResult(text: responseText ?? "file result", confidence: 0.8)
+    }
+}
+final class CloudTranscriptionProvider: Provider {
+    static var nextGate: Gate?
+    let configuration: CloudTranscriptionConfiguration
+    let apiKey: String
+    let persistChunks: Bool
+    init(configuration: CloudTranscriptionConfiguration, apiKey: String, persistChunks: Bool) {
+        self.configuration = configuration
+        self.apiKey = apiKey
+        self.persistChunks = persistChunks
+        super.init()
+        self.gate = Self.nextGate
+        self.responseText = "  um cloud raw words  "
     }
 }
 @MainActor final class ASRService {
@@ -80,7 +107,15 @@ final class Provider {
     var activeExclusiveActivity: ASRExclusiveActivity?
     var deferredMeetingActivityLeaseRelease: ASRActivityLease?
     var providerResetPending = false
-    var transcriptionProvider = Provider()
+    var localProvider = Provider()
+    var frozenTranscriptionProvider: Provider?
+    var frozenSpeechExecutionSource: SpeechExecutionSource?
+    var frozenCloudConfiguration: CloudTranscriptionConfiguration?
+    var transcriptionProvider: Provider { frozenTranscriptionProvider ?? localProvider }
+    var isUsingCloudTranscription: Bool {
+        (frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
+    }
+    static var formattingCalls = 0
     private let transcriptionExecutor = TranscriptionExecutor()
     var hasCompletedFirstTranscription = false
     var isLoadingModel = true
@@ -90,9 +125,9 @@ final class Provider {
     func isMeetingASRClaimBlocking(lease: ASRActivityLease) -> Bool { false }
     func resetTranscriptionProvider() {}
     func ensureAsrReady() async throws { if prepareFails { throw CancellationError() } }
-    static func applySpokenPunctuationFormatting(_ text: String) -> String { text }
-    static func applyCustomDictionary(_ text: String) -> String { text }
-    static func removeFillerWords(_ text: String) -> String { text }
+    static func applySpokenPunctuationFormatting(_ text: String) -> String { formattingCalls += 1; return text }
+    static func applyCustomDictionary(_ text: String) -> String { formattingCalls += 1; return text }
+    static func removeFillerWords(_ text: String) -> String { formattingCalls += 1; return text }
     func recordWordBoostHitIfAny(transcribedText: String) { outputCount += 1 }
     LEASES
     METHODS
@@ -166,6 +201,58 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             let service = ASRService()
             _ = try await service.transcribeSamplesForAPI([0.1])
             check(service.transcriptionProvider.finalCalls.first?.count == 16000 && service.activeActivityLease == nil, "Direct samples API still acquires/releases and pads")
+            passes += 1
+        }
+        do {
+            let settings = SettingsStore.shared
+            settings.speechExecutionSource = .openRouter
+            let originalConfiguration = CloudTranscriptionConfiguration(modelID: "original", languageCode: "en")
+            settings.cloudTranscriptionConfiguration = originalConfiguration
+            let service = ASRService()
+            let gate = Gate()
+            CloudTranscriptionProvider.nextGate = gate
+            ASRService.formattingCalls = 0
+            let request = Task { try await service.transcribeSamplesForAPI([0.1]) }
+            while !(await gate.entered) { await Task.yield() }
+            guard let provider = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else {
+                fatalError("Cloud API lease must freeze a cloud provider")
+            }
+            check(provider.configuration == originalConfiguration, "Model and language must be frozen at acquisition")
+            check(provider.persistChunks, "API recordings should persist resumable chunks")
+            settings.speechExecutionSource = .local
+            settings.cloudTranscriptionConfiguration = .init(modelID: "changed", languageCode: "de")
+            settings.openRouterTranscriptionAPIKey = "changed-fixture-credential"
+            check(service.transcriptionProvider === provider && service.isUsingCloudTranscription, "Preferences cannot redirect in-flight cloud audio")
+            check(provider.configuration == originalConfiguration && provider.apiKey == "fixture-credential", "In-flight configuration and credential are immutable")
+            await gate.release()
+            let result = try await request.value
+            check(result.text == "um cloud raw words", "Cloud transcript is trimmed but not rewritten")
+            check(ASRService.formattingCalls == 0, "Cloud API must bypass local transcript transformations")
+            check(service.frozenTranscriptionProvider == nil && service.frozenSpeechExecutionSource == nil && service.frozenCloudConfiguration == nil, "Lease release clears all frozen state")
+            CloudTranscriptionProvider.nextGate = nil
+            settings.speechExecutionSource = .openRouter
+            for activity in [ASRExclusiveActivity.dictation, .fileTranscription, .localAPI] {
+                let lease = try service.acquireExclusiveActivity(activity)
+                guard let next = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else { fatalError("Expected cloud provider") }
+                check(next.configuration == settings.cloudTranscriptionConfiguration, "Only subsequent operations adopt model and language changes")
+                check(next.persistChunks == (activity != .dictation), "Dictation must not persist cloud chunks; files and API may resume")
+                service.releaseExclusiveActivity(lease)
+                passes += 1
+            }
+            settings.speechExecutionSource = .local
+            passes += 1
+        }
+        do {
+            let service = ASRService()
+            let gate = Gate()
+            service.localProvider.gate = gate
+            let request = Task { try await service.transcribeSamplesForAPI([0.1]) }
+            while !(await gate.entered) { await Task.yield() }
+            request.cancel()
+            await gate.release()
+            do { _ = try await request.value; fatalError("Cancelled API request returned late output") } catch is CancellationError {}
+            check(service.activeActivityLease == nil && service.frozenTranscriptionProvider == nil, "Cancellation releases API ownership")
+            check(service.outputCount == 0, "Cancelled API must not publish output metadata")
             passes += 1
         }
         print("PASS \(passes) API scenarios using production API methods, activity ownership and transcription executor")

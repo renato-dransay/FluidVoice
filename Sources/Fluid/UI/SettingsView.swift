@@ -381,6 +381,12 @@ struct SettingsView: View {
 
                             Divider().opacity(0.2)
 
+                            if ForkIdentity.isPersonalBuild {
+                                Text("Personal builds are updated from your reviewed fork. Use the local install and rollback scripts.")
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.settingsSecondaryText)
+                            }
+
                             // Automatic Updates
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(alignment: .center) {
@@ -441,6 +447,7 @@ struct SettingsView: View {
                                     .font(self.theme.typography.bodySmall)
                                     .foregroundStyle(self.settingsSecondaryText)
                             }
+                            .disabled(ForkIdentity.isPersonalBuild)
                             .settingsSearchTarget(.automaticUpdates)
 
                             // Update Buttons
@@ -548,6 +555,7 @@ struct SettingsView: View {
                                 .fluidOutlinedButton()
                                 .controlSize(.regular)
                             }
+                            .disabled(ForkIdentity.isPersonalBuild)
                             .padding(.top, 12)
 
                             if self.rollbackVersion.isEmpty {
@@ -1562,7 +1570,7 @@ struct SettingsView: View {
                             Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
-                            Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
+                            Text("Crash diagnostics are written to Library/Logs/\(ForkIdentity.logFolderName)/Fluid.log by default.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
                         }

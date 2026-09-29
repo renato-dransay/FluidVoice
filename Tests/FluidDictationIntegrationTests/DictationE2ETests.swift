@@ -1593,6 +1593,38 @@ extension DictationE2ETests {
         XCTAssertEqual(state.customWords.map(\.aliases), [[], []])
     }
 
+    func testTranscriptionExecutorCancelsRunningProviderWhenCallerCancels() async {
+        let executor = TranscriptionExecutor()
+        let started = self.expectation(description: "Provider started")
+        let providerCancelled = self.expectation(description: "Provider upload cancelled by caller")
+        let request = Task {
+            try await executor.run {
+                started.fulfill()
+                do {
+                    try await Task.sleep(nanoseconds: 60_000_000_000)
+                    return "late response"
+                } catch {
+                    providerCancelled.fulfill()
+                    throw error
+                }
+            }
+        }
+        await self.fulfillment(of: [started], timeout: 2)
+        request.cancel()
+        // This must complete before explicit executor teardown. Without the cancellation
+        // bridge, the unstructured provider task stays asleep and this expectation fails.
+        await self.fulfillment(of: [providerCancelled], timeout: 2)
+        await executor.cancelAndAwaitPending()
+        do {
+            _ = try await request.value
+            XCTFail("A cancelled request must never return a late transcript")
+        } catch is CancellationError {
+            // Expected: cancellation reaches the provider and propagates to the caller.
+        } catch {
+            XCTFail("Expected CancellationError, got \(type(of: error))")
+        }
+    }
+
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
         // Arrange
         let modelDirectory = Self.modelDirectoryForRun()

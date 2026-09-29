@@ -28,6 +28,7 @@ final class MeetingProcessingConfigurationTests: XCTestCase {
         XCTAssertTrue(base.identityFingerprint.hasPrefix("v\(MeetingConfigFingerprintEncoding.version);"))
 
         let variants: [MeetingFinalProcessingConfiguration] = [
+            MeetingFinalProcessingConfiguration(asrProvider: .openRouter),
             MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v3"),
             MeetingFinalProcessingConfiguration(languageCode: "de"),
             MeetingFinalProcessingConfiguration(vocabularyBoostingEnabled: true),

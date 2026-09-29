@@ -225,6 +225,37 @@ nonisolated enum SpeakerLabeledTranscriptionPolicy {
     }
 }
 
+/// Assigns already-recognized words to local speaker turns. Recognition runs once for the file;
+/// no per-speaker cloud request or fallback can bill the same audio a second time.
+nonisolated enum CloudFileSpeakerAlignment {
+    static func segments(
+        words: [ASRWordTiming], turns: [SpeakerDiarizationService.SpeakerTurn]
+    ) -> [SpeakerTranscriptSegment] {
+        var segments: [SpeakerTranscriptSegment] = []
+        for word in words {
+            let matches = Dictionary(grouping: turns.filter {
+                min(word.end, $0.endSeconds) - max(word.start, $0.startSeconds) > (word.end - word.start) / 2
+            }, by: \.speakerLabel)
+            let speaker = matches.count == 1 ? (matches.keys.first ?? "Unknown speaker") : (matches.isEmpty ? "Unknown speaker" : "Multiple speakers")
+            if let previous = segments.last, previous.speaker == speaker,
+               word.start - previous.endSeconds <= 1, word.end - previous.startSeconds <= 30
+            {
+                segments[segments.count - 1] = SpeakerTranscriptSegment(
+                    speaker: speaker,
+                    startSeconds: previous.startSeconds,
+                    endSeconds: word.end,
+                    text: previous.text + " " + word.text
+                )
+            } else {
+                segments.append(SpeakerTranscriptSegment(
+                    speaker: speaker, startSeconds: word.start, endSeconds: word.end, text: word.text
+                ))
+            }
+        }
+        return segments
+    }
+}
+
 /// Result of a transcription operation
 nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
     let id: UUID
@@ -411,6 +442,16 @@ final class FileTranscriptionService: ObservableObject {
             throw TranscriptionError.activityInProgress("This file is already being transcribed.")
         }
 
+        // Freeze source, model, language, credentials and speaker options before the first await.
+        let settings = SettingsStore.shared
+        let cloudProvider: CloudTranscriptionProvider? = settings.usesCloudTranscription
+            ? CloudTranscriptionProvider(configuration: settings.cloudTranscriptionConfiguration, apiKey: settings.openRouterTranscriptionAPIKey)
+            : nil
+        let speakerLabelsEnabled = settings.fileTranscriptionSpeakerLabelsEnabled
+        let expectedSpeakerCount = settings.fileTranscriptionExpectedSpeakerCount
+        if let cloudProvider, speakerLabelsEnabled, !cloudProvider.supportsWordTimings {
+            throw CloudTranscriptionError.unsupportedWordTimings
+        }
         let activityLease: ASRActivityLease
         do {
             activityLease = try self.asrService.acquireExclusiveActivity(.fileTranscription)
@@ -434,13 +475,14 @@ final class FileTranscriptionService: ObservableObject {
         }
 
         do {
-            // Initialize models if not already done (reuses ASRService models)
-            if !self.asrService.isAsrReady {
-                try await self.initializeModels()
+            let provider: any TranscriptionProvider
+            if let cloudProvider {
+                try await cloudProvider.prepare(progressHandler: nil)
+                provider = cloudProvider
+            } else {
+                if !self.asrService.isAsrReady { try await self.initializeModels() }
+                provider = self.asrService.fileTranscriptionProvider
             }
-
-            // Get the current transcription provider (works for both Parakeet and Whisper)
-            let provider = self.asrService.fileTranscriptionProvider
             guard provider.isReady else {
                 throw TranscriptionError.modelLoadFailed("Transcription provider not ready")
             }
@@ -453,10 +495,12 @@ final class FileTranscriptionService: ObservableObject {
                     .fileNotSupported("Format .\(fileExtension) not supported. \(Self.supportedFormatsDescription)")
             }
 
-            AnalyticsService.shared.recordUsage(
-                mode: .meeting,
-                transcriptionModel: SettingsStore.shared.selectedSpeechModel.analyticsDescriptor
-            )
+            if cloudProvider == nil {
+                AnalyticsService.shared.recordUsage(
+                    mode: .meeting,
+                    transcriptionModel: SettingsStore.shared.selectedSpeechModel.analyticsDescriptor
+                )
+            }
 
             // Get audio duration for progress display
             self.currentStatus = "Analyzing audio file..."
@@ -476,9 +520,21 @@ final class FileTranscriptionService: ObservableObject {
             let isVideoContainer = UTType(filenameExtension: fileExtension)
                 .map { $0.conforms(to: .movie) } ?? false
 
+            if let cloudProvider {
+                return try await self.transcribeCloudFile(
+                    fileURL,
+                    provider: cloudProvider,
+                    duration: duration,
+                    startTime: startTime,
+                    speakerLabelsEnabled: speakerLabelsEnabled,
+                    expectedSpeakerCount: expectedSpeakerCount,
+                    isVideoContainer: isVideoContainer
+                )
+            }
+
             // Speaker-labeled path: diarize first, then transcribe each speaker turn.
             // Any diarization failure falls back to the standard paths below.
-            if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled,
+            if speakerLabelsEnabled,
                SpeakerDiarizationService.isSupported,
                !isVideoContainer
             {
@@ -496,7 +552,7 @@ final class FileTranscriptionService: ObservableObject {
                 )
                 self.fallbackNotice = "Speaker labeling was unavailable for this file. The transcript was completed without speaker labels."
                 self.progress = 0.3
-            } else if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled, isVideoContainer {
+            } else if speakerLabelsEnabled, isVideoContainer {
                 DebugLogger.shared.info(
                     "Speaker labeling skipped for video container; using standard transcription",
                     source: "FileTranscriptionService"
@@ -651,6 +707,9 @@ final class FileTranscriptionService: ObservableObject {
             FileTranscriptionHistoryStore.shared.addEntry(result)
             return result
 
+        } catch let error as CancellationError {
+            self.currentStatus = "Cancelled"
+            throw error
         } catch let error as TranscriptionError {
             self.error = error.localizedDescription
             throw error
@@ -659,6 +718,58 @@ final class FileTranscriptionService: ObservableObject {
             self.error = wrappedError.localizedDescription
             throw wrappedError
         }
+    }
+
+    private func transcribeCloudFile(
+        _ fileURL: URL,
+        provider: CloudTranscriptionProvider,
+        duration: Double,
+        startTime: Date,
+        speakerLabelsEnabled: Bool,
+        expectedSpeakerCount: Int,
+        isVideoContainer: Bool
+    ) async throws -> TranscriptionResult {
+        try Task.checkCancellation()
+        var turns: [SpeakerDiarizationService.SpeakerTurn] = []
+        if speakerLabelsEnabled {
+            guard SpeakerDiarizationService.isSupported, !isVideoContainer else {
+                throw TranscriptionError.transcriptionFailed(
+                    "Speaker labels require an audio file and Apple Silicon. Disable speaker labels to transcribe this file without them."
+                )
+            }
+            self.currentStatus = "Identifying speakers locally..."
+            let diarizer = SpeakerDiarizationService(expectedSpeakers: expectedSpeakerCount > 0 ? expectedSpeakerCount : nil)
+            turns = try await diarizer.diarize(fileURL: fileURL)
+            try Task.checkCancellation()
+        }
+        self.currentStatus = "Transcribing with OpenRouter..."
+        self.progress = 0.3
+        let transcript: ASRTranscriptionResult
+        let segments: [SpeakerTranscriptSegment]
+        if speakerLabelsEnabled {
+            let timed = try await provider.transcribeFileWithWordTimings(at: fileURL)
+            transcript = timed.result
+            segments = CloudFileSpeakerAlignment.segments(words: timed.words, turns: turns)
+        } else {
+            transcript = try await provider.transcribeFile(at: fileURL)
+            segments = []
+        }
+        try Task.checkCancellation()
+        let hasUnassignedWords = segments.contains { $0.speaker == "Unknown speaker" || $0.speaker == "Multiple speakers" }
+        let result = TranscriptionResult(
+            text: transcript.text,
+            confidence: transcript.confidence,
+            duration: duration,
+            processingTime: Date().timeIntervalSince(startTime),
+            fileName: fileURL.lastPathComponent,
+            speakerSegments: segments,
+            speakerLabelingNotice: hasUnassignedWords ? "Some words could not be assigned to one speaker. Their text is retained." : nil
+        )
+        self.currentStatus = "Complete!"
+        self.progress = 1
+        self.result = result
+        FileTranscriptionHistoryStore.shared.addEntry(result)
+        return result
     }
 
     /// Export transcription result to text file

@@ -27,6 +27,12 @@ final class MeetingTranscriptionBackendRegistry {
         registry.register(.parakeetNemotron) { context in
             MeetingParakeetNemotronBackend(runtimeFactory: context.parakeetNemotronRuntimeFactory)
         }
+        registry.register(.openRouterNemotron) { context in
+            MeetingParakeetNemotronBackend(
+                runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                descriptor: MeetingParakeetNemotronBackend.cloudDescriptor
+            )
+        }
         return registry
     }
 

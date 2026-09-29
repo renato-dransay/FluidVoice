@@ -290,7 +290,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard self.languageCode == "en" else {
+        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {
@@ -1037,7 +1037,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard self.languageCode == "en" else {
+        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
@@ -1145,10 +1145,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             }
         }
         for attempt in self.processingAttempts {
-            if let languageCode = attempt.languageCode,
-               languageCode != self.languageCode
-            {
-                throw MeetingModelValidationError.unsupportedLanguage
+            if let languageCode = attempt.languageCode {
+                let isCloud = attempt.backendID == MeetingBackendID.openRouterNemotron.rawValue
+                guard MeetingCloudLanguage.supportedCodes.contains(languageCode),
+                      isCloud || languageCode == self.languageCode || (self.languageCode == MeetingCloudLanguage.automatic && languageCode == "en")
+                else { throw MeetingModelValidationError.unsupportedLanguage }
             }
         }
     }
@@ -1232,7 +1233,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
         case let .unsupportedSchema(version):
             return "Unsupported meeting schema version \(version)."
         case .unsupportedLanguage:
-            return "Meeting transcription currently supports English only."
+            return "The selected meeting language is not supported."
         case .missingMicrophone:
             return "A microphone must be selected."
         case .missingOnlineApplication:

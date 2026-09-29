@@ -288,6 +288,7 @@ struct ContentView: View {
     @State private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
     @State private var activeRecordingMode: ActiveRecordingMode = .none
     @State private var pendingAIReprocessText: String? = nil
+    @State private var stoppedTranscriptionTask: Task<Void, Never>?
     @State private var activeShortcutRecordingTarget: ShortcutRecordingTarget? = nil
     @State private var currentRecordingModifierKeyCodes: Set<UInt16> = []
     @State private var pendingModifierKeyCodes: Set<UInt16> = []
@@ -1016,6 +1017,9 @@ struct ContentView: View {
     }
 
     private func currentTranscriptionModelInfo() -> (provider: String, model: String) {
+        if self.settings.usesCloudTranscription {
+            return (provider: "openrouter", model: self.settings.cloudTranscriptionModelID)
+        }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
             provider: selectedModel.provider.rawValue.lowercased(),
@@ -1027,7 +1031,8 @@ struct ContentView: View {
         shouldUseAI: Bool,
         dictationSlot: SettingsStore.DictationShortcutSlot?,
         appBundleID: String,
-        snapshot: DictationStopSnapshot? = nil
+        snapshot: DictationStopSnapshot? = nil,
+        transcriptionModelInfo: (provider: String, model: String)
     ) -> (provider: String?, model: String?) {
         let postProcessing = snapshot.map { (provider: Optional($0.route.providerKey), model: Optional($0.route.model)) } ?? self.currentDictationAIModelInfo(
             dictationSlot: dictationSlot,
@@ -1035,7 +1040,7 @@ struct ContentView: View {
         )
         AnalyticsService.shared.recordUsage(
             mode: .dictation,
-            transcriptionModel: self.settings.selectedSpeechModel.analyticsDescriptor,
+            transcriptionModel: AnalyticsModelDescriptor(provider: transcriptionModelInfo.provider, model: transcriptionModelInfo.model),
             aiModel: shouldUseAI ? AnalyticsModelDescriptor(
                 provider: postProcessing.provider ?? "unknown",
                 model: postProcessing.model ?? "unknown"
@@ -2907,9 +2912,19 @@ struct ContentView: View {
         defer {
             if self.overlayLifecycleID == lifecycle { NotchContentState.shared.stopSnapshotLabel = nil }
         }
+        guard self.stoppedTranscriptionTask == nil else { return }
         let pipelineID = UUID().uuidString
-        await DebugLogger.$pipelineID.withValue(pipelineID) {
-            await self.processStoppedTranscription(route: route, pipelineID: pipelineID, toggleStopRequestedAt: toggleStopRequestedAt)
+        let task = Task { @MainActor in
+            await DebugLogger.$pipelineID.withValue(pipelineID) {
+                await self.processStoppedTranscription(route: route, pipelineID: pipelineID, toggleStopRequestedAt: toggleStopRequestedAt)
+            }
+        }
+        self.stoppedTranscriptionTask = task
+        defer { self.stoppedTranscriptionTask = nil }
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -2924,6 +2939,7 @@ struct ContentView: View {
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         let pipelineStartedAt = ProcessInfo.processInfo.systemUptime
+        let transcriptionModelInfo = self.currentTranscriptionModelInfo()
         let expectedOverlayLifecycleID = self.overlayLifecycleID
         self.appBench("pipeline_begin id=\(pipelineID) route=\(route.rawValue) toggleStopRequestedAt=\(toggleStopRequestedAt.map { String($0) } ?? "nil") loadAvg1m=\(self.benchmarkLoadAverage())")
         defer {
@@ -2972,6 +2988,7 @@ struct ContentView: View {
             onFinalTranscriptionStarted: stopOverlay.onFinalTranscriptionStarted
         )
         self.appBench("asr_stop_return elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded()))")
+        guard !Task.isCancelled else { return }
         self.completeDictationStopSnapshot(&stopSnapshot)
         let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()
         let dictionaryLearningRecording = self.asr.consumeDictionaryLearningRecording()
@@ -3018,11 +3035,11 @@ struct ContentView: View {
 
         // If this was a rewrite recording, process the rewrite instead of typing
         if wasRewriteMode {
-            DebugLogger.shared.info("Processing rewrite with instruction: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing rewrite instruction (chars: \(transcribedText.count))", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .edit,
-                descriptor: self.settings.selectedSpeechModel.analyticsDescriptor
+                descriptor: AnalyticsModelDescriptor(provider: transcriptionModelInfo.provider, model: transcriptionModelInfo.model)
             )
             let appInfo = self.recordingAppInfo ?? self.getCurrentAppInfo()
             await self.processRewriteWithVoiceInstruction(transcribedText, appInfo: appInfo)
@@ -3031,11 +3048,11 @@ struct ContentView: View {
 
         // If this was a command recording, process the command
         if wasCommandMode {
-            DebugLogger.shared.info("Processing command: \(transcribedText)", source: "ContentView")
+            DebugLogger.shared.info("Processing command (chars: \(transcribedText.count))", source: "ContentView")
             AnalyticsService.shared.recordModelUsage(
                 role: .transcription,
                 mode: .command,
-                descriptor: self.settings.selectedSpeechModel.analyticsDescriptor
+                descriptor: AnalyticsModelDescriptor(provider: transcriptionModelInfo.provider, model: transcriptionModelInfo.model)
             )
             await self.processCommandWithVoice(transcribedText)
             return
@@ -3071,12 +3088,12 @@ struct ContentView: View {
             for: activeDictationSlot ?? .primary,
             appBundleID: appInfo.bundleId
         )))
-        let transcriptionModelInfo = self.currentTranscriptionModelInfo()
         let postProcessingModelInfo = self.recordDictationUsage(
             shouldUseAI: shouldUseAI,
             dictationSlot: activeDictationSlot,
             appBundleID: appInfo.bundleId,
-            snapshot: stopSnapshot
+            snapshot: stopSnapshot,
+            transcriptionModelInfo: transcriptionModelInfo
         )
 
         if shouldUseAI {
@@ -3139,6 +3156,9 @@ struct ContentView: View {
         } else {
             finalText = normalizedTranscribedText
         }
+
+        // A cancelled upload or enhancement must never publish or insert a late response.
+        guard !Task.isCancelled else { return }
 
         // Normalize literal command and mention syntax after AI cleanup and before final user preferences.
         finalText = ASRService.applyDictationLiteralFormatting(
@@ -3222,7 +3242,7 @@ struct ContentView: View {
             TranscriptionHistoryStore.shared.addEntry(
                 id: historyEntryID,
                 timestamp: historyTimestamp,
-                rawText: spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
+                rawText: transcribedText,
                 processedText: finalText,
                 appName: appInfo.name,
                 windowTitle: appInfo.windowTitle,
@@ -3281,6 +3301,7 @@ struct ContentView: View {
             // Dispatch insertion as soon as the destination app is ready; the
             // overlay hides asynchronously after output so it cannot delay paste.
             let focusReady = await self.prepareStoppedDictationDelivery(finalText, keepBackup: shouldCopyToClipboard, snapshot: stopSnapshot, needsRestoration: typingTarget.shouldRestoreOriginalFocus)
+            guard !Task.isCancelled else { return }
 
             if spokenSendAllowed {
                 NotchContentState.shared.setSpokenSendIndicatorState(.sending)
@@ -4307,7 +4328,7 @@ struct ContentView: View {
         self.rewriteModeService.setPromptAppBundleID(appInfo.bundleId)
         let hasOriginalText = !self.rewriteModeService.originalText.isEmpty
         DebugLogger.shared.info(
-            "Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction: '\(instruction)', originalText length: \(self.rewriteModeService.originalText.count)",
+            "Processing \(hasOriginalText ? "rewrite" : "write/improve") - instruction chars: \(instruction.count), originalText chars: \(self.rewriteModeService.originalText.count)",
             source: "ContentView"
         )
 
@@ -4318,6 +4339,7 @@ struct ContentView: View {
         // - With originalText: rewrites existing text based on instruction
         // - Without originalText: improves/refines the spoken text
         await self.rewriteModeService.processRewriteRequest(instruction)
+        guard !Task.isCancelled else { return }
 
         // If rewrite was successful, type the result
         if !self.rewriteModeService.rewrittenText.isEmpty {
@@ -4334,6 +4356,7 @@ struct ContentView: View {
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             let deliveryResult = await self.asr.typeTextToActiveField(
                 self.rewriteModeService.rewrittenText,
                 preferredTargetPID: typingTarget.pid,
@@ -4438,7 +4461,7 @@ struct ContentView: View {
     // MARK: - Command Mode Voice Processing
 
     private func processCommandWithVoice(_ command: String) async {
-        DebugLogger.shared.info("Processing voice command: '\(command)'", source: "ContentView")
+        DebugLogger.shared.info("Processing voice command (chars: \(command.count))", source: "ContentView")
 
         // Show processing animation
         self.menuBarManager.setProcessing(true)
@@ -4851,7 +4874,7 @@ struct ContentView: View {
         // Set cancel callback for Escape key handling (closes transient UI, resets recording state)
         // Returns true if it handled something (so GlobalHotkeyManager knows to consume the event)
         self.hotkeyManager?.setCancelCallback {
-            var handled = false
+            var handled = self.cancelStoppedTranscriptionIfNeeded()
 
             // The suggestion panel is non-activating, so its Escape key arrives
             // through the global event tap while the target app stays focused.
@@ -4917,8 +4940,19 @@ struct ContentView: View {
     }
 
     @discardableResult
+    private func cancelStoppedTranscriptionIfNeeded() -> Bool {
+        guard let task = self.stoppedTranscriptionTask else { return false }
+        task.cancel()
+        self.advanceOverlayLifecycle()
+        self.cancelPrewarmDictationIfNeeded()
+        NotchOverlayManager.shared.updateTranscriptionText("")
+        NotchOverlayManager.shared.hide()
+        return true
+    }
+
+    @discardableResult
     private func handleCancelShortcut() -> Bool {
-        var handled = false
+        var handled = self.cancelStoppedTranscriptionIfNeeded()
 
         if DictionaryCorrectionOverlayController.shared.isPresented {
             DebugLogger.shared.debug("Cancel shortcut: closing dictionary suggestion", source: "ContentView")
@@ -5051,7 +5085,7 @@ extension ContentView {
     }
 
     private func logDictationPromptTrace(_ title: String, value: String) {
-        let line = "[PromptTrace][Dictate] \(title):\n\(value)"
+        let line = "[PromptTrace][Dictate] \(title): chars=\(value.count)"
         if self.forcePromptTraceToConsole {
             print(line)
         }
@@ -5243,6 +5277,11 @@ extension ContentView {
     }
 
     private func getModelStatusText() -> String {
+        if self.settings.usesCloudTranscription {
+            return self.settings.openRouterTranscriptionAPIKey.isEmpty
+                ? "Add an OpenRouter key in Voice Engine settings."
+                : "OpenRouter is configured. Audio uploads after recording stops."
+        }
         if self.asr.isLoadingModel {
             return "Loading model into memory... (30-60 sec)"
         } else if self.asr.isDownloadingModel {
@@ -5257,7 +5296,10 @@ extension ContentView {
     }
 
     private var onboardingVoiceModelReady: Bool {
-        self.asr.isAsrReady
+        if self.settings.usesCloudTranscription {
+            return !self.settings.openRouterTranscriptionAPIKey.isEmpty
+        }
+        return self.asr.isAsrReady
     }
 
     private var onboardingMicrophoneReady: Bool {

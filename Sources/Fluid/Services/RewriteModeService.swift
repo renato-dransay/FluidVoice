@@ -419,7 +419,7 @@ final class RewriteModeService: ObservableObject {
     }
 
     private func logPromptTrace(_ title: String, value: String) {
-        let line = "[PromptTrace][Edit] \(title):\n\(value)"
+        let line = "[PromptTrace][Edit] \(title): chars=\(value.count)"
         if self.forcePromptTraceToConsole {
             print(line)
         }

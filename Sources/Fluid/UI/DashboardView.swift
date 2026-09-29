@@ -227,7 +227,9 @@ struct DashboardView: View {
     @ViewBuilder
     private func finishSetup(layout: DashboardLayout) -> some View {
         let missing = DashboardSetupStatus(
-            voiceModelReady: self.asr.modelsExistOnDisk || self.asr.isAsrReady,
+            voiceModelReady: self.settings.usesCloudTranscription
+                ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
+                : self.asr.modelsExistOnDisk || self.asr.isAsrReady,
             microphoneReady: self.asr.micStatus == .authorized,
             typingAccessReady: self.accessibilityEnabled
         ).missing

@@ -1338,7 +1338,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
-    private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory?
+    private let finalConfigurationProvider: @MainActor (MeetingBackendID, String) -> MeetingFinalProcessingConfiguration
+    private let cloudAPIKeyProvider: @MainActor () -> String
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1357,6 +1359,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
+        finalConfigurationProvider: (@MainActor (MeetingBackendID, String) -> MeetingFinalProcessingConfiguration)? = nil,
+        cloudAPIKeyProvider: @escaping @MainActor () -> String = { SettingsStore.shared.openRouterTranscriptionAPIKey },
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
@@ -1365,12 +1369,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
         self.echoVerdictProvider = echoVerdictProvider
-        self.meetingRuntimeFactory = meetingRuntimeFactory ?? { [asrServiceProvider] _ in
-            MeetingParakeetNemotronRuntime(
-                asrServiceProvider: asrServiceProvider,
-                modelLocator: MeetingNemotronModelLocator()
-            )
+        self.meetingRuntimeFactory = meetingRuntimeFactory
+        self.finalConfigurationProvider = finalConfigurationProvider ?? { backendID, language in
+            SettingsStore.shared.meetingFinalConfiguration(backendID: backendID, recordedLanguageCode: language)
         }
+        self.cloudAPIKeyProvider = cloudAPIKeyProvider
         self.prepareDiarizationModel = prepareDiarizationModel
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
         let resolvedRegistry = backendRegistry ?? MeetingTranscriptionBackendRegistry.makeDefault()
@@ -1396,9 +1399,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        guard session.languageCode == "en" else {
-            throw MeetingProcessingError.unsupportedLanguage
-        }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
             throw MeetingProcessingError.noRecoverableAudio
         }
@@ -1418,11 +1418,19 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
+        let configuration = self.finalConfigurationProvider(backendID, session.languageCode)
+        let cloudAPIKey = configuration.asrProvider == .openRouter ? self.cloudAPIKeyProvider() : ""
+        if configuration.asrProvider == .openRouter {
+            try MeetingCloudConfiguration.validate(configuration)
+            if self.meetingRuntimeFactory == nil && cloudAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw MeetingCloudConfigurationError.missingAPIKey
+            }
+        }
         let request = MeetingBackendRequest(
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: MeetingFinalProcessingConfiguration(languageCode: session.languageCode)
+            configuration: configuration
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
@@ -1449,11 +1457,22 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     guard callbackRequest == request else {
                         throw MeetingBackendError.hostCapabilityRequestMismatch(backend: backendID)
                     }
-                    return try self.meetingRuntimeFactory(callbackRequest)
+                    if let factory = self.meetingRuntimeFactory { return try factory(callbackRequest) }
+                    return MeetingParakeetNemotronRuntime(
+                        asrServiceProvider: self.asrServiceProvider,
+                        modelLocator: MeetingNemotronModelLocator(),
+                        cloudRequest: configuration.asrProvider == .openRouter ? callbackRequest : nil,
+                        cloudAPIKey: cloudAPIKey
+                    )
                 }
             )
         )
-        if backendID == .parakeetNemotron {
+        let requestedLanguage = configuration.asrProvider == .openRouter || session.languageCode == MeetingCloudLanguage.automatic
+            ? configuration.languageCode : session.languageCode
+        guard backend.descriptor.supportedLanguageCodes.contains(requestedLanguage) else {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: requestedLanguage)
+        }
+        if backend.descriptor.requiresLocalDiarization {
             try await self.prepareDiarizationModel()
         }
         let plan = try backend.plan(request)
@@ -1500,7 +1519,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
                         sessionID: session.id,
-                        language: session.languageCode,
+                        language: request.configuration.languageCode,
                         result: processed,
                         directory: sessionDirectory,
                         provider: summaryProvider
@@ -1564,7 +1583,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
 
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
-            ?? (plan.backendID == .parakeetNemotron
+            ?? (backend.descriptor.usesTextOverlapEchoVerdicts
                 ? MeetingTextOverlapEchoVerdictProvider()
                 : MeetingFailClosedEchoVerdictProvider())
         let echoVerdicts = try await echoProvider.echoVerdicts(

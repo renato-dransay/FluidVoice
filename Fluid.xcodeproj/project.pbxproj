@@ -112,6 +112,11 @@
 		A5B000000000000000000017 /* AppUpdater in Frameworks */ = {isa = PBXBuildFile; productRef = 7CE006BC2E80EBE600DDCCD6 /* AppUpdater */; };
 		A5B000000000000000000018 /* MediaRemoteAdapter in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A5B000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
+		BFCE25A44C043E98CAEF9E21 /* CloudTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFC18863B5750C44C2491E66 /* CloudTranscriptionClientTests.swift */; };
+		E0EC69589F4AFCF04C394AF1 /* CloudTranscriptionChunkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */; };
+		116A75F50AF4D585FDAC3393 /* CloudTranscriptionSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */; };
+		309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */; };
+		B11ABB5737781D49446C9472 /* FileCloudSpeakerAlignmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -251,6 +256,11 @@
 		A5B00000000000000000000E /* stage-inputs.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "stage-inputs.sh"; sourceTree = "<group>"; };
 		A5B00000000000000000000F /* placeholder.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = placeholder.json; sourceTree = "<group>"; };
 		A5B00000000000000000001D /* FluidASRBaselineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidASRBaselineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AFC18863B5750C44C2491E66 /* CloudTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionClientTests.swift; sourceTree = "<group>"; };
+		9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionChunkTests.swift; sourceTree = "<group>"; };
+		839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionSettingsTests.swift; sourceTree = "<group>"; };
+		DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkIdentityTests.swift; sourceTree = "<group>"; };
+		FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCloudSpeakerAlignmentTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -424,6 +434,11 @@
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
+				FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */,
+				DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */,
+				839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */,
+				9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */,
+				AFC18863B5750C44C2491E66 /* CloudTranscriptionClientTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
 				FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */,
 				CD0E00000000000000000001 /* MeetingOverlayModelsTests.swift */,
@@ -778,6 +793,11 @@
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
+				B11ABB5737781D49446C9472 /* FileCloudSpeakerAlignmentTests.swift in Sources */,
+				309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */,
+				116A75F50AF4D585FDAC3393 /* CloudTranscriptionSettingsTests.swift in Sources */,
+				E0EC69589F4AFCF04C394AF1 /* CloudTranscriptionChunkTests.swift in Sources */,
+				BFCE25A44C043E98CAEF9E21 /* CloudTranscriptionClientTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
 				FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */,
 				CD0E00000000000000000002 /* MeetingOverlayModelsTests.swift in Sources */,
@@ -997,8 +1017,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.7";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
-				PRODUCT_NAME = "FluidVoice Debug";
+				PRODUCT_BUNDLE_IDENTIFIER = com.renatobeltrao.fluidvoice.personal;
+				PRODUCT_NAME = "$(FLUIDVOICE_APP_NAME)";
+				PRODUCT_MODULE_NAME = FluidVoice_Debug;
+				FLUIDVOICE_APP_NAME = "FluidVoice Personal";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1052,8 +1074,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.7";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
-				PRODUCT_NAME = FluidVoice;
+				PRODUCT_BUNDLE_IDENTIFIER = com.renatobeltrao.fluidvoice.personal;
+				PRODUCT_NAME = "$(FLUIDVOICE_APP_NAME)";
+				PRODUCT_MODULE_NAME = FluidVoice;
+				FLUIDVOICE_APP_NAME = "FluidVoice Personal";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1073,7 +1097,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Personal.app/Contents/MacOS/FluidVoice Personal";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1089,7 +1113,7 @@
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Personal.app/Contents/MacOS/FluidVoice Personal";
 			};
 			name = Debug;
 		};
@@ -1098,7 +1122,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Personal.app/Contents/MacOS/FluidVoice Personal";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1113,7 +1137,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Personal.app/Contents/MacOS/FluidVoice Personal";
 			};
 			name = Release;
 		};

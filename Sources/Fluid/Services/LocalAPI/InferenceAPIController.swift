@@ -61,13 +61,16 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     }
 
     private func transcribeFile(_ fileURL: URL) async throws -> LocalAPI.Response {
+        let providerName = SettingsStore.shared.usesCloudTranscription
+            ? "OpenRouter / \(SettingsStore.shared.cloudTranscriptionModelID)"
+            : SettingsStore.shared.selectedSpeechModel.displayName
         let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
         return LocalAPI.json(
             TranscribeResponse(
                 text: apiResult.result.text,
                 confidence: apiResult.result.confidence,
                 sampleCount: apiResult.sampleCount,
-                provider: SettingsStore.shared.selectedSpeechModel.displayName
+                provider: providerName
             )
         )
     }
