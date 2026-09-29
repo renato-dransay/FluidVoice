@@ -513,6 +513,18 @@ final class CompositorShimmerSweepView: NSView {
     }
 }
 
+private struct CloudDictationLanguageButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.fluidSystem(size: 10, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.2 : 0.12)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+    }
+}
+
 /// Recording-time choice shared by notch and bottom overlays.
 struct CloudDictationLanguageSelector: View {
     @ObservedObject private var settings = SettingsStore.shared
@@ -561,15 +573,14 @@ struct CloudDictationLanguageSelector: View {
                     Text(self.selectedCode?.uppercased() ?? "Auto")
                     Image(systemName: "chevron.down")
                 }
-                .font(.fluidSystem(size: 9, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.86))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .fluidDropdownSurface()
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(CloudDictationLanguageButtonStyle())
+            .menuIndicator(.hidden)
+            .preferredColorScheme(.dark)
             .disabled(NotchContentState.shared.isProcessing)
             .help("Transcription language: \(self.selectedCode.map(self.languageName) ?? "Automatic")")
+            .accessibilityLabel("Language: \(self.selectedCode.map(self.languageName) ?? "Automatic")")
             .accessibilityIdentifier("cloud-dictation-language-selector")
         }
     }
@@ -872,7 +883,7 @@ struct NotchExpandedView: View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
         return VStack(alignment: .leading, spacing: 2) {
-            Text("AI Prompt")
+            Text(self.settings.usesCloudTranscription ? "OpenRouter cleanup style" : "AI Prompt")
                 .font(.fluidSystem(size: 8, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.42))
                 .padding(.horizontal, 6)
@@ -889,7 +900,7 @@ struct NotchExpandedView: View {
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(
-                            "Basic",
+                            self.settings.usesCloudTranscription ? "No cleanup" : "Basic",
                             rowID: "off",
                             isSelected: {
                                 let selection = self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID)

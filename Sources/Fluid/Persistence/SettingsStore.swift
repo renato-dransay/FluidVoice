@@ -793,7 +793,7 @@ final class SettingsStore: ObservableObject {
 
     func dictationOverlayLabel(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
         let selection = self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID)
-        guard selection != .off else { return "Basic" }
+        guard selection != .off else { return self.usesCloudTranscription ? "No cleanup" : "Basic" }
         if self.usesCombinedCloudDictation {
             let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
             let model = CloudAudioDictationModel.catalog.first { $0.id == self.cloudDictationModelID }?.name ?? self.cloudDictationModelID
