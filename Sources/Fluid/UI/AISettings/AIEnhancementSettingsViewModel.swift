@@ -1683,7 +1683,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func isAIPostProcessingConfiguredForDictation() -> Bool {
-        DictationAIPostProcessingGate.isProviderConfigured()
+        if self.settings.usesCombinedCloudDictation {
+            return !self.settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && CloudAudioDictationModel.catalog.contains { $0.id == self.settings.cloudDictationModelID }
+        }
+        return DictationAIPostProcessingGate.isProviderConfigured()
     }
 
     func openDefaultPromptViewer(for mode: SettingsStore.PromptMode) {
@@ -1705,7 +1709,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.draftIncludeContext = (self.draftPromptMode == .edit)
         self.draftPromptName = ""
         self.draftPromptText = ""
-        let defaultProviderID = self.defaultVerifiedPromptProviderID()
+        let defaultProviderID = self.settings.usesCombinedCloudDictation && self.draftPromptMode == .dictate
+            ? "" : self.defaultVerifiedPromptProviderID()
         let defaultModel = defaultProviderID.isEmpty ? "" : self.selectedModel(for: defaultProviderID)
         self.pendingNewPromptConfiguration = SettingsStore.DictationPromptConfiguration(
             shortcut: nil,

@@ -15,4 +15,5 @@ run_case() {
 run_case OnboardingAISetupControllerTests Sources/Fluid/Services/OnboardingAISetupController.swift
 run_case OnboardingPolishPracticeTests Sources/Fluid/Services/OnboardingPolishPractice.swift
 run_case OnboardingDictationOutputPolicyTests Sources/Fluid/Services/OnboardingDictationOutputPolicy.swift
+run_case CloudDictationDeliveryPolicyTests Sources/Fluid/Services/CloudDictationDeliveryPolicy.swift Sources/Fluid/Services/SpokenSendParser.swift
 run_case PrivateAIHardwareRecommendationTests Sources/Fluid/Services/PrivateAIHardwareRecommendation.swift

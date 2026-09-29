@@ -8,6 +8,10 @@ struct DictationStopSnapshot {
     let usesAI: Bool
     let systemPrompt: String
     let hasCustomPrompt: Bool
+    /// Off is distinct from an explicitly authored empty prompt.
+    var styleEnabled: Bool = false
+    /// Preserve the selected style's explicit context preference for cloud uploads.
+    var includesCloudContext: Bool = false
     private(set) var precedingText: String
     /// True when the preceding text must be read from the field focused at
     /// stop rather than reused from recording start.
@@ -62,9 +66,11 @@ struct DictationStopSnapshot {
             target: target,
             appInfo: appInfo,
             route: DictationProviderRoute.resolve(settings: settings, dictationSlot: slot, appBundleID: promptAppID),
-            usesAI: target != nil && DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: promptAppID),
+            usesAI: (target != nil || settings.usesCombinedCloudDictation) && DictationAIPostProcessingGate.isStyleConfigured(for: slot, appBundleID: promptAppID),
             systemPrompt: customPrompt ?? settings.effectiveDictationSystemPrompt(for: slot, appBundleID: promptAppID),
             hasCustomPrompt: customPrompt != nil,
+            styleEnabled: settings.resolvedDictationPromptSelection(for: slot, appBundleID: promptAppID) != .off,
+            includesCloudContext: settings.resolvedDictationPromptProfile(for: slot, appBundleID: promptAppID)?.includeContext == true,
             precedingText: precedingText,
             readsContextFromFocusedField: readsContextFromFocusedField
         )

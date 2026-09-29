@@ -511,6 +511,7 @@ final class SettingsStore: ObservableObject {
         if self.isDictationPromptOff(for: slot) { return .off }
         if let promptID = self.selectedDictationPromptID(for: slot) {
             if promptID == PrivateAIProviderPromptFormat.promptSelectionID {
+                if self.usesCombinedCloudDictation { return .default }
                 return PrivateAIProviderPromptFormat.isAvailable(settings: self) ? .privateAI : .default
             }
             return .profile(promptID)
@@ -733,7 +734,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptSelection {
-        if let manual = DictationAppSession.shared.choice(for: slot, appID: appBundleID) { return manual }
+        if let manual = DictationAppSession.shared.choice(for: slot, appID: appBundleID) {
+            return self.usesCombinedCloudDictation && manual == .privateAI ? .default : manual
+        }
         let selection = self.dictationPromptSelection(for: slot)
         guard selection != .off else { return .off }
         let appOnly = self.promptRoutingScope(for: .dictate) == .selectedAppsOnly
@@ -791,6 +794,11 @@ final class SettingsStore: ObservableObject {
     func dictationOverlayLabel(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
         let selection = self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID)
         guard selection != .off else { return "Basic" }
+        if self.usesCombinedCloudDictation {
+            let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
+            let model = CloudAudioDictationModel.catalog.first { $0.id == self.cloudDictationModelID }?.name ?? self.cloudDictationModelID
+            return "\(mode) · \(model)"
+        }
         let route = DictationProviderRoute.resolve(settings: self, dictationSlot: slot, appBundleID: appBundleID)
         let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
         let modelName = PrivateAIModelRegistry.model(id: route.model)?.displayName ?? route.model

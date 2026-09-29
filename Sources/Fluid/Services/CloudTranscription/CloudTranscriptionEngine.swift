@@ -15,6 +15,10 @@ actor CloudTranscriptionEngine {
         try configuration.validate(wordTimings: wordTimings)
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CloudTranscriptionError.missingAPIKey }
         try Task.checkCancellation()
+        if configuration.audioDictation != nil {
+            // A single complete recording preserves style context and cannot resume partial AI output.
+            return try await self.client.transcribe(samples: samples, configuration: configuration, apiKey: apiKey, wordTimings: wordTimings)
+        }
         let chunks = CloudAudioChunker.chunks(samples: samples, wordTimings: wordTimings)
         let identity = try Self.audioIdentity(samples: samples, configuration: configuration, wordTimings: wordTimings)
         var texts: [String] = []
