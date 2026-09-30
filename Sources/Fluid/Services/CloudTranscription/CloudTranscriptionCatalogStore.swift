@@ -55,9 +55,9 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
     var audioDictationModels: [CloudAudioDictationModel] {
         let listed = self.lock.withLock { self.audioListed }
         let builtInIDs = Set(CloudAudioDictationModel.builtIn.map(\.id))
-        return CloudAudioDictationModel.builtIn + listed.filter { !builtInIDs.contains($0.id) }.map {
+        return CloudAudioDictationModel.current(CloudAudioDictationModel.builtIn + listed.filter { !builtInIDs.contains($0.id) }.map {
             CloudAudioDictationModel(id: $0.id, name: $0.name)
-        }
+        })
     }
 
     func isRefreshDue(now: Date = Date()) -> Bool {

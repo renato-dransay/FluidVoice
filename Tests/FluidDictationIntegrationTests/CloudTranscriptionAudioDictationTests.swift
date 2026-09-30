@@ -208,13 +208,13 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
             if request.url?.path == "/api/v1/key" { return (200, [:], Data(#"{"data":{}}"#.utf8)) }
             let catalog = #"""
             {"data":[
-                {"id":"google/gemini-2.5-flash","name":"Gemini Flash",
+                {"id":"google/gemini-3.8-flash","name":"Gemini Flash",
                  "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
                  "supported_parameters":["response_format","structured_outputs"]},
-                {"id":"google/gemini-2.5-pro","name":"Missing audio",
+                {"id":"google/gemini-3.1-pro-preview","name":"Missing audio",
                  "architecture":{"input_modalities":["text"],"output_modalities":["text"]},
                  "supported_parameters":["response_format","structured_outputs"]},
-                {"id":"google/gemini-2.5-flash-lite","name":"Missing schema",
+                {"id":"google/gemini-3.5-flash-lite","name":"Missing schema",
                  "architecture":{"input_modalities":["audio"],"output_modalities":["text"]},
                  "supported_parameters":["response_format"]},
                 {"id":"unknown/audio-model",

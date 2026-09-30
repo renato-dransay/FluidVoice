@@ -513,8 +513,8 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(store.models.last?.id, "deepgram/nova-3")
         XCTAssertEqual(
             store.audioDictationModels.map(\.id),
-            CloudAudioDictationModel.builtIn.map(\.id) + ["google/gemini-3.5-flash", "openai/gpt-audio"],
-            "Built-in models keep their names and order; discovered ones follow sorted by name"
+            CloudAudioDictationModel.builtIn.map(\.id) + ["openai/gpt-audio"],
+            "Listed Gemini generations older than the built-in ones are hidden; other families follow"
         )
         XCTAssertEqual(CloudTranscriptionCatalogStore(defaults: defaults).audioDictationModels, store.audioDictationModels)
 
@@ -530,6 +530,31 @@ final class CloudTranscriptionClientTests: XCTestCase {
             XCTAssertEqual(error as? CloudTranscriptionError, .server(503))
         }
         XCTAssertEqual(store.audioDictationModels.last?.id, "openai/gpt-audio", "A failed fetch keeps the cached audio list")
+    }
+
+    func testAudioDictationListKeepsOnlyTheNewestModelOfEachFamily() {
+        // The audio-capable chat models OpenRouter listed on 30 September 2026.
+        let listed = [
+            "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "google/gemini-2.5-pro", "google/gemini-2.5-pro-preview",
+            "google/gemini-3-flash-preview", "google/gemini-3.1-flash-lite", "google/gemini-3.1-flash-lite-preview",
+            "google/gemini-3.1-pro-preview", "google/gemini-3.1-pro-preview-customtools", "google/gemini-3.5-flash",
+            "google/gemini-3.5-flash-lite", "google/gemini-3.6-flash", "google/gemini-3.7-flash", "google/gemini-3.8-flash",
+            "mistralai/voxtral-small-24b-2507", "openai/gpt-audio", "openai/gpt-audio-mini", "qwen/qwen3.8-omni-flash",
+            "xiaomi/mimo-v2.5", "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
+        ].map { CloudAudioDictationModel(id: $0, name: $0) }
+        let expected = [
+            "google/gemini-3.8-flash", "google/gemini-3.5-flash-lite", "google/gemini-3.1-pro-preview",
+            "mistralai/voxtral-small-24b-2507", "openai/gpt-audio", "openai/gpt-audio-mini", "qwen/qwen3.8-omni-flash",
+            "xiaomi/mimo-v2.5", "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
+        ]
+        // Older generations, previews with a stable successor and tool variants are hidden; the newest Gemini Flash leads.
+        XCTAssertEqual(CloudAudioDictationModel.current(listed).map(\.id), expected)
+    }
+
+    func testAudioDictationListPrefersAStableReleaseOverAPreviewOfTheSameVersion() {
+        let listed = ["google/gemini-4-flash-preview", "google/gemini-4-flash", "google/gemini-3.8-flash"]
+            .map { CloudAudioDictationModel(id: $0, name: $0) }
+        XCTAssertEqual(CloudAudioDictationModel.current(listed).map(\.id), ["google/gemini-4-flash"])
     }
 
     func testFailureSummaryNamesKindAndModelWithoutPayload() {

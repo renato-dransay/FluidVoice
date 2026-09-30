@@ -11,17 +11,69 @@ nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
 
-    static let defaultID = "google/gemini-2.5-flash"
-    /// These Gemini models accept WAV input and structured output. They are always offered, so
-    /// combined dictation works before the first catalog fetch and while offline.
+    // EVIDENCE: Google deprecated gemini-2.5-flash, flash-lite and pro (earliest shutdown 16 October 2026,
+    // https://github.com/llm-exe/llm-exe/issues/476), so the offline fallback uses current releases.
+    private static let fallbackDefaultID = "google/gemini-3.8-flash"
+    /// The newest Gemini Flash OpenRouter lists, which `current` always sorts first.
+    static var defaultID: String { self.catalog.first?.id ?? self.fallbackDefaultID }
+    /// Always offered, so dictation works before the first catalog fetch and while offline.
     static let builtIn: [CloudAudioDictationModel] = [
-        .init(id: defaultID, name: "Gemini 2.5 Flash"),
-        .init(id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite"),
-        .init(id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro"),
+        .init(id: fallbackDefaultID, name: "Gemini 3.8 Flash"),
+        .init(id: "google/gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite"),
     ]
-    /// Built-in models followed by every other chat model OpenRouter last listed with audio input,
-    /// text output and structured outputs.
+    /// Current audio chat models: built-in ones plus every model OpenRouter last listed with audio
+    /// input, text output and structured outputs, reduced to the newest release of each family.
     static var catalog: [CloudAudioDictationModel] { CloudTranscriptionCatalogStore.shared.audioDictationModels }
+
+    /// Keeps the newest release of each model family, preferring a stable release over a preview of
+    /// the same version, and orders Gemini Flash, Flash Lite and Pro first, then the rest by id.
+    /// JUDGMENT: OpenRouter publishes no quality ranking for audio dictation, so recency is the
+    /// only signal that reliably hides deprecated generations without hiding other vendors.
+    static func current(_ models: [CloudAudioDictationModel]) -> [CloudAudioDictationModel] {
+        var newest: [String: (model: CloudAudioDictationModel, rank: ReleaseRank)] = [:]
+        for model in models where !model.id.contains("customtools") {
+            let release = ReleaseRank(id: model.id)
+            if let current = newest[release.family], !(current.rank < release) { continue }
+            newest[release.family] = (model, release)
+        }
+        return newest.values.map(\.model).sorted {
+            let left = Self.displayOrder($0.id), right = Self.displayOrder($1.id)
+            return left == right ? $0.id < $1.id : left < right
+        }
+    }
+
+    private static func displayOrder(_ id: String) -> Int {
+        switch ReleaseRank(id: id).family {
+        case "google/gemini-flash": 0
+        case "google/gemini-flash-lite": 1
+        case "google/gemini-pro": 2
+        default: 3
+        }
+    }
+
+    /// `google/gemini-3.1-pro-preview` has family `google/gemini-pro`, version [3, 1] and is a preview.
+    private struct ReleaseRank: Comparable {
+        let family: String
+        let version: [Int]
+        let isPreview: Bool
+
+        init(id: String) {
+            let parts = id.split(separator: "/", maxSplits: 1).map(String.init)
+            let vendor = parts.count == 2 ? parts[0] + "/" : ""
+            var name = parts.last ?? id
+            self.isPreview = name.contains("-preview")
+            name = name.replacingOccurrences(of: "-preview", with: "")
+            self.version = name.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            let stripped = name.replacingOccurrences(of: "[0-9]+(\\.[0-9]+)*", with: "", options: .regularExpression)
+            let family = stripped.split(separator: "-", omittingEmptySubsequences: true).joined(separator: "-")
+            self.family = vendor + family
+        }
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            if lhs.version != rhs.version { return lhs.version.lexicographicallyPrecedes(rhs.version) }
+            return lhs.isPreview && !rhs.isPreview
+        }
+    }
 }
 
 nonisolated struct CloudAudioDictationInstructions: Codable, Equatable, Sendable {
