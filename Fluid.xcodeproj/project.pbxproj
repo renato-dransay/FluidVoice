@@ -114,6 +114,8 @@
 		A5B000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
 		BFCE25A44C043E98CAEF9E21 /* CloudTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFC18863B5750C44C2491E66 /* CloudTranscriptionClientTests.swift */; };
 		E0EC69589F4AFCF04C394AF1 /* CloudTranscriptionChunkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */; };
+		1DE0C10000000000000000A2 /* LiveCloudSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE0C10000000000000000A1 /* LiveCloudSettingsTests.swift */; };
+		1DE0C10000000000000000B2 /* LiveTranscriptAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE0C10000000000000000B1 /* LiveTranscriptAssemblerTests.swift */; };
 		116A75F50AF4D585FDAC3393 /* CloudTranscriptionSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */; };
 		F0AD00000000000000000002 /* CloudTranscriptionAudioDictationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0AD00000000000000000001 /* CloudTranscriptionAudioDictationTests.swift */; };
 		309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */; };
@@ -259,6 +261,8 @@
 		A5B00000000000000000001D /* FluidASRBaselineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FluidASRBaselineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFC18863B5750C44C2491E66 /* CloudTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionClientTests.swift; sourceTree = "<group>"; };
 		9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionChunkTests.swift; sourceTree = "<group>"; };
+		1DE0C10000000000000000A1 /* LiveCloudSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCloudSettingsTests.swift; sourceTree = "<group>"; };
+		1DE0C10000000000000000B1 /* LiveTranscriptAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptAssemblerTests.swift; sourceTree = "<group>"; };
 		839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionSettingsTests.swift; sourceTree = "<group>"; };
 		F0AD00000000000000000001 /* CloudTranscriptionAudioDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranscriptionAudioDictationTests.swift; sourceTree = "<group>"; };
 		DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkIdentityTests.swift; sourceTree = "<group>"; };
@@ -438,6 +442,8 @@
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */,
 				DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */,
+				1DE0C10000000000000000A1 /* LiveCloudSettingsTests.swift */,
+				1DE0C10000000000000000B1 /* LiveTranscriptAssemblerTests.swift */,
 				839D390ABC5D316DD7F82B31 /* CloudTranscriptionSettingsTests.swift */,
 				F0AD00000000000000000001 /* CloudTranscriptionAudioDictationTests.swift */,
 				9ABAB746E6BAF35CA9769C69 /* CloudTranscriptionChunkTests.swift */,
@@ -798,6 +804,8 @@
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				B11ABB5737781D49446C9472 /* FileCloudSpeakerAlignmentTests.swift in Sources */,
 				309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */,
+				1DE0C10000000000000000A2 /* LiveCloudSettingsTests.swift in Sources */,
+				1DE0C10000000000000000B2 /* LiveTranscriptAssemblerTests.swift in Sources */,
 				116A75F50AF4D585FDAC3393 /* CloudTranscriptionSettingsTests.swift in Sources */,
 				F0AD00000000000000000002 /* CloudTranscriptionAudioDictationTests.swift in Sources */,
 				E0EC69589F4AFCF04C394AF1 /* CloudTranscriptionChunkTests.swift in Sources */,

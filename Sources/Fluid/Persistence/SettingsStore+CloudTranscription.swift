@@ -4,9 +4,16 @@ import Foundation
 nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Sendable {
     case local
     case openRouter
+    case liveCloud
 
     var id: String { self.rawValue }
-    var displayName: String { self == .local ? "Local" : "OpenRouter" }
+    var displayName: String {
+        switch self {
+        case .local: "Local"
+        case .openRouter: "OpenRouter"
+        case .liveCloud: "Live cloud"
+        }
+    }
 }
 
 struct CloudTranscriptionPreferences {
@@ -114,8 +121,13 @@ struct CloudTranscriptionPreferences {
 extension SettingsStore {
     static let openRouterTranscriptionKeyID = "openrouter-transcription"
 
+    /// The engine dictation uses. A stored Live cloud choice that cannot run, because no provider is
+    /// active or its key is missing, reads as Local so dictation keeps working.
     var speechExecutionSource: SpeechExecutionSource {
-        get { CloudTranscriptionPreferences(defaults: .standard).source }
+        get {
+            let stored = CloudTranscriptionPreferences(defaults: .standard).source
+            return stored == .liveCloud && self.activeLiveProvider == nil ? .local : stored
+        }
         set {
             self.objectWillChange.send()
             var preferences = CloudTranscriptionPreferences(defaults: .standard)
