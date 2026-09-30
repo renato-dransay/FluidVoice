@@ -197,7 +197,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .network: "Could not reach OpenRouter. Check your connection and retry, or choose local transcription."
         case .unsupportedModel: "This transcription model is not supported by this build. Select a supported Voice Engine model."
         case .modelUnavailable: "OpenRouter cannot route this model with your account settings. Check model availability and allowed providers at https://openrouter.ai/settings/privacy, or select another model."
-        case .unsupportedWordTimings: "This model has no verified word timings. Choose a Whisper model, or verify another model by selecting it in meeting settings."
+        case .unsupportedWordTimings: "This model has no verified word timings. Choose a Whisper model, or run the word-timing check in meeting settings."
         case .invalidLanguage: "Choose Automatic or a supported two-letter language code."
         case .invalidAudio: "The recording contains invalid audio samples or could not be decoded."
         case .oversizedAudio: "The audio chunk exceeds the cloud upload limit. Split the recording and retry."

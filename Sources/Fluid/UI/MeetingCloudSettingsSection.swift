@@ -6,7 +6,7 @@ struct MeetingCloudSettingsSection: View {
     @Environment(\.theme) private var theme
 
     @State private var models = CloudTranscriptionModel.catalog
-    @State private var checkingModelID: String?
+    @State private var checkProgress: (completed: Int, total: Int, modelName: String)?
     @State private var modelStatus = ""
 
     private var usesCloud: Bool { self.settings.meetingTranscriptionBackendID == .openRouterNemotron }
@@ -24,27 +24,31 @@ struct MeetingCloudSettingsSection: View {
                 .pickerStyle(.segmented)
 
                 if self.usesCloud {
-                    Picker("Meeting model", selection: Binding(
-                        get: { self.settings.meetingCloudModelID },
-                        set: { self.selectMeetingModel($0) }
-                    )) {
-                        ForEach(self.models, id: \.id) { model in
-                            Text(Self.label(for: model)).tag(model.id)
+                    Picker("Meeting model", selection: self.$settings.meetingCloudModelID) {
+                        ForEach(self.supportedModels, id: \.id) { model in
+                            Text(model.name).tag(model.id)
                         }
-                        if !self.models.contains(where: { $0.id == self.settings.meetingCloudModelID }) {
-                            Text("\(self.settings.meetingCloudModelID) (no longer listed)").tag(self.settings.meetingCloudModelID)
+                        if !self.supportedModels.contains(where: { $0.id == self.settings.meetingCloudModelID }) {
+                            Text("\(self.name(for: self.settings.meetingCloudModelID)) (not verified)").tag(self.settings.meetingCloudModelID)
                         }
                     }
-                    .disabled(self.checkingModelID != nil)
-                    if let checkingModelID = self.checkingModelID {
-                        ProgressView("Checking word timings for \(self.name(for: checkingModelID))…").controlSize(.small)
+                    .disabled(self.checkProgress != nil)
+                    HStack(spacing: self.theme.metrics.spacing.sm) {
+                        Button(self.uncheckedModels.isEmpty ? "Re-check models without word timings" : "Check catalog models for word timings", action: self.checkCatalogModels)
+                            .meetingGlassAction()
+                            .disabled(self.checkProgress != nil || self.checkCandidates.isEmpty)
+                        if let progress = self.checkProgress {
+                            ProgressView("Checking \(progress.completed) of \(progress.total): \(progress.modelName)…").controlSize(.small)
+                        }
                     }
                     if !self.modelStatus.isEmpty {
                         Text(self.modelStatus)
                             .font(self.theme.typography.caption)
                             .textSelection(.enabled)
                     }
-                    Text("The list follows OpenRouter's transcription catalog. Meetings need word timings to label speakers, so choosing a model that is not yet verified first sends one short synthetic test clip to check them.")
+                    Text(self.uncheckedModels.isEmpty
+                        ? "Only models with verified word timings are listed, because meetings need them to label speakers."
+                        : "Only models with verified word timings are listed, because meetings need them to label speakers. OpenRouter lists \(self.uncheckedModels.count) unchecked models; checking sends each one short synthetic clip.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                     Picker("Transcript language", selection: self.$settings.meetingCloudLanguageCode) {
@@ -71,12 +75,14 @@ struct MeetingCloudSettingsSection: View {
         .task(id: self.usesCloud) { await self.refreshCatalog() }
     }
 
-    private static func label(for model: CloudTranscriptionModel) -> String {
-        switch model.wordTimingSupport {
-        case .supported: model.name
-        case .unverified: "\(model.name) (not yet verified)"
-        case .unsupported: "\(model.name) (no word timings)"
-        }
+    private var supportedModels: [CloudTranscriptionModel] { self.models.filter(\.supportsWordTimings) }
+
+    private var uncheckedModels: [CloudTranscriptionModel] { self.models.filter { $0.wordTimingSupport == .unverified } }
+
+    /// Unchecked models first; once every model has a verdict, the refusals can be rechecked in
+    /// case a provider added timings. Verified models are never rechecked.
+    private var checkCandidates: [CloudTranscriptionModel] {
+        self.uncheckedModels.isEmpty ? self.models.filter { !$0.supportsWordTimings } : self.uncheckedModels
     }
 
     private func name(for modelID: String) -> String {
@@ -97,37 +103,65 @@ struct MeetingCloudSettingsSection: View {
         }
     }
 
-    /// A model becomes the meeting model only once it has returned usable word timings.
-    /// Selecting any other model runs the check first and leaves the selection alone unless it passes.
-    private func selectMeetingModel(_ modelID: String) {
-        guard modelID != self.settings.meetingCloudModelID, let model = self.models.first(where: { $0.id == modelID }) else { return }
-        self.modelStatus = ""
-        if model.supportsWordTimings {
-            self.settings.meetingCloudModelID = modelID
-            return
-        }
+    /// Sends one synthesized clip to every unchecked model and remembers each verdict, so the
+    /// picker only ever offers models that have returned usable word timings on this Mac.
+    private func checkCatalogModels() {
+        let candidates = self.checkCandidates
+        guard self.checkProgress == nil, !candidates.isEmpty else { return }
         let apiKey = self.settings.openRouterTranscriptionAPIKey
         guard !apiKey.isEmpty else {
-            self.modelStatus = "Add your OpenRouter key in Voice Engine before checking \(model.name). The meeting model is unchanged."
+            self.modelStatus = "Add your OpenRouter key in Voice Engine before checking models."
             return
         }
-        self.checkingModelID = modelID
+        self.modelStatus = ""
+        self.checkProgress = (0, candidates.count, candidates[0].name)
         Task { @MainActor in
-            defer { self.checkingModelID = nil }
+            defer {
+                self.checkProgress = nil
+                self.models = CloudTranscriptionModel.catalog
+            }
+            var passed: [String] = []
+            var refused: [String] = []
+            var failures: [String] = []
             do {
                 let speech = try await CloudWordTimingCheckSpeech.samples()
-                let supported = try await OpenRouterTranscriptionClient().checkWordTimings(modelID: modelID, speechSamples: speech, apiKey: apiKey)
-                CloudTranscriptionCatalogStore.shared.recordWordTimingCheck(modelID: modelID, supported: supported)
-                self.models = CloudTranscriptionModel.catalog
-                if supported {
-                    self.settings.meetingCloudModelID = modelID
-                    self.modelStatus = "\(model.name) returned word timings and is now the meeting model."
-                } else {
-                    self.modelStatus = "\(model.name) returned no usable word timings, so it cannot label speakers. The meeting model is unchanged."
+                let client = OpenRouterTranscriptionClient()
+                for (index, model) in candidates.enumerated() {
+                    self.checkProgress = (index + 1, candidates.count, model.name)
+                    do {
+                        let supported = try await client.checkWordTimings(modelID: model.id, speechSamples: speech, apiKey: apiKey)
+                        CloudTranscriptionCatalogStore.shared.recordWordTimingCheck(modelID: model.id, supported: supported)
+                        if supported { passed.append(model.name) } else { refused.append(model.name) }
+                    } catch let error as CloudTranscriptionError where Self.abortsCatalogCheck(error) {
+                        throw error
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        failures.append("\(model.name): \(error.localizedDescription)")
+                    }
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                self.modelStatus = "\(error.localizedDescription) The meeting model is unchanged."
+                failures.append(error.localizedDescription)
             }
+            self.modelStatus = Self.checkSummary(passed: passed, refused: refused, failures: failures)
         }
+    }
+
+    /// Account-level failures repeat for every model, so one is enough to stop.
+    private static func abortsCatalogCheck(_ error: CloudTranscriptionError) -> Bool {
+        switch error {
+        case .missingAPIKey, .authentication, .creditsExhausted, .rateLimited, .wordTimingCheckSpeechUnavailable: true
+        default: false
+        }
+    }
+
+    private static func checkSummary(passed: [String], refused: [String], failures: [String]) -> String {
+        var lines: [String] = []
+        lines.append(passed.isEmpty ? "No additional model returned word timings." : "Word timings verified: \(passed.joined(separator: ", ")).")
+        if !refused.isEmpty { lines.append("No usable word timings: \(refused.joined(separator: ", ")).") }
+        if !failures.isEmpty { lines.append("Could not check \(failures.count): \(failures.joined(separator: " "))") }
+        return lines.joined(separator: "\n")
     }
 }
