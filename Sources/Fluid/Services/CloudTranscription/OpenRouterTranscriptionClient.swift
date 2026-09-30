@@ -205,7 +205,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
             request.httpBody = Self.multipart(boundary: boundary, fields: fields, audio: audio)
         }
         let started = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await self.send(request)
+        let (data, response) = try await self.sendLoggingTiming(request, endpoint: "transcriptions", audio: audio, audioSamples: samples.count)
         struct Response: Decodable {
             let text: String
             // Missing timings and a successful empty transcript have different meanings.
@@ -277,7 +277,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         try Task.checkCancellation()
         let started = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await self.send(request)
+        let (data, response) = try await self.sendLoggingTiming(request, endpoint: "chat", audio: audio, audioSamples: samples.count)
         struct Response: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable { let content: String? }
@@ -368,6 +368,36 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         request.timeoutInterval = 75
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         return request
+    }
+
+    /// Sizes and durations only: never the audio, the transcript, the key or an error body.
+    static func requestTimingLine(endpoint: String, audio: CloudEncodedAudio, audioSamples: Int, requestDuration: TimeInterval, status: String) -> String {
+        let audioMs = audioSamples * 1000 / CloudAudioChunker.sampleRate
+        let encodeMs = Int((audio.encodeDuration * 1000).rounded(.down))
+        let requestMs = Int((requestDuration * 1000).rounded())
+        return "CLOUD_REQUEST endpoint=\(endpoint) format=\(audio.format) audioMs=\(audioMs) uploadBytes=\(audio.data.count) encodeMs=\(encodeMs) requestMs=\(requestMs) status=\(status)"
+    }
+
+    private func sendLoggingTiming(_ request: URLRequest, endpoint: String, audio: CloudEncodedAudio, audioSamples: Int) async throws -> (Data, HTTPURLResponse) {
+        let started = ProcessInfo.processInfo.systemUptime
+        func log(_ status: String) {
+            let line = Self.requestTimingLine(
+                endpoint: endpoint,
+                audio: audio,
+                audioSamples: audioSamples,
+                requestDuration: ProcessInfo.processInfo.systemUptime - started,
+                status: status
+            )
+            DebugLogger.shared.info(line, source: "OpenRouterTranscriptionClient")
+        }
+        do {
+            let result = try await self.send(request)
+            log(String(result.1.statusCode))
+            return result
+        } catch {
+            log(CloudTranscriptionFailureSummary.kind(of: error))
+            throw error
+        }
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {

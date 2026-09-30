@@ -34,6 +34,12 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertNotNil(body.range(of: Data("filename=\"recording.flac\"\r\nContent-Type: audio/flac".utf8)))
     }
 
+    func testRequestTimingLineCarriesSizesAndDurationsOnly() {
+        let audio = CloudEncodedAudio(data: Data(count: 12_345), format: "flac", mimeType: "audio/flac", fileName: "recording.flac", encodeDuration: 0.0123)
+        let line = OpenRouterTranscriptionClient.requestTimingLine(endpoint: "chat", audio: audio, audioSamples: 32_000, requestDuration: 1.5, status: "200")
+        XCTAssertEqual(line, "CLOUD_REQUEST endpoint=chat format=flac audioMs=2000 uploadBytes=12345 encodeMs=12 requestMs=1500 status=200")
+    }
+
     func testPlainTextDoesNotRequestUnsupportedTiming() async throws {
         let recorder = CloudRequestRecorder()
         CloudURLProtocol.install { request in
