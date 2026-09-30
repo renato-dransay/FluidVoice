@@ -2458,8 +2458,14 @@ struct ContentView: View {
     }
 
     private func prepareStoppedDictationDelivery(_ text: String, keepBackup: Bool, snapshot: DictationStopSnapshot?, needsRestoration: Bool) async -> Bool {
-        if let snapshot { return await snapshot.prepareDelivery(text, keepBackup: keepBackup) }
-        return await self.prepareRecordingTargetForDelivery(text, keepBackup: keepBackup, needsRestoration: needsRestoration)
+        guard let snapshot else {
+            return await self.prepareRecordingTargetForDelivery(text, keepBackup: keepBackup, needsRestoration: needsRestoration)
+        }
+        let result = await snapshot.prepareDelivery(text, keepBackup: keepBackup)
+        let pid = snapshot.target.map { String($0.pid) } ?? "none"
+        let bundle = snapshot.target?.bundleIdentifier ?? snapshot.appInfo.bundleId
+        DebugLogger.shared.info("FOCUS_PREPARE result=\(result.rawValue) pid=\(pid) bundle=\(bundle)", source: "ContentView")
+        return result.isReady
     }
 
     private func showStoppedDictationDeliveryFailure(_ failure: TextDeliveryFailure, transcript: String, snapshot: DictationStopSnapshot?) {
@@ -2971,8 +2977,15 @@ struct ContentView: View {
         let shouldUseAIOnStop = stopSnapshot?.usesAI ?? activeDictationSlot.map {
             DictationAIPostProcessingGate.isStyleConfigured(for: $0, appBundleID: self.recordingAppInfo?.bundleId)
         } ?? DictationAIPostProcessingGate.isStyleConfigured(for: .primary, appBundleID: self.recordingAppInfo?.bundleId)
-        let shouldHideOverlayOnStop = route == .normal && !wasRewriteMode && !wasCommandMode
-            && !promptTest.isActive && !shouldUseAIOnStop && !self.settings.spokenSendEnabled
+        let shouldHideOverlayOnStop = DictationStopOverlayPolicy.shouldHideOverlayOnStop(.init(
+            isNormalRoute: route == .normal,
+            isRewrite: wasRewriteMode,
+            isCommand: wasCommandMode,
+            isPromptTestActive: promptTest.isActive,
+            usesAIOnStop: shouldUseAIOnStop,
+            spokenSendEnabled: self.settings.spokenSendEnabled,
+            usesCloudTranscription: self.asr.isUsingCloudTranscription
+        ))
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
             source: "ContentView"
@@ -3319,13 +3332,13 @@ struct ContentView: View {
         }
 
         if shouldTypeExternally {
-            let typingTarget = stopSnapshot.map { (pid: $0.target?.pid, shouldRestoreOriginalFocus: true) }
+            var typingTarget = stopSnapshot.map { (pid: $0.target?.pid, shouldRestoreOriginalFocus: true) }
                 ?? self.resolveTypingTargetPID(returnToStartingField: self.settings.returnDictationToStartingField)
             let spokenSendRequested = spokenSendParse.shouldSend
             let sendFocus = stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget
             let targetMatchesRecordingFocus = typingTarget.pid != nil
                 && typingTarget.pid == sendFocus?.pid
-            let spokenSendAllowed = spokenSendRequested
+            var spokenSendAllowed = spokenSendRequested
                 && aiFallbackReason == nil
                 && (sendsExistingDraft || !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 && targetMatchesRecordingFocus
@@ -3333,8 +3346,33 @@ struct ContentView: View {
                 && !self.isSpokenSendBlockedApp(appInfo)
             // Dispatch insertion as soon as the destination app is ready; the
             // overlay hides asynchronously after output so it cannot delay paste.
-            let focusReady = await self.prepareStoppedDictationDelivery(finalText, keepBackup: shouldCopyToClipboard, snapshot: stopSnapshot, needsRestoration: typingTarget.shouldRestoreOriginalFocus)
+            // A cloud dictation can take seconds; the field captured at stop may be gone.
+            // Record the caret the user has now before the restore attempt, which can
+            // activate the captured app and move focus away from that caret.
+            let caretBeforeRestore = TypingService.captureRecordingTargetContext()
+            let caretBeforeRestoreIsNotEditable = DeliveryTargetAssessment.assessFocusedElement().isCertainlyNotEditable
+            var focusReady = await self.prepareStoppedDictationDelivery(finalText, keepBackup: shouldCopyToClipboard, snapshot: stopSnapshot, needsRestoration: typingTarget.shouldRestoreOriginalFocus)
             guard !Task.isCancelled else { return }
+            // When the captured field cannot be restored and dictation follows the cursor,
+            // return to the caret recorded above and deliver there without spoken send.
+            if let caret = caretBeforeRestore,
+               let caretPID = DictationDeliveryFallbackPolicy.currentCaretPID(
+                   restoreSucceeded: focusReady,
+                   returnToStartingField: self.settings.returnDictationToStartingField,
+                   focusedPID: caret.pid,
+                   ownPID: ProcessInfo.processInfo.processIdentifier,
+                   focusedElementIsCertainlyNotEditable: caretBeforeRestoreIsNotEditable
+               )
+            {
+                let caretResult = await TypingService.prepareTargetForDelivery(caret)
+                DebugLogger.shared.info("FOCUS_PREPARE fallback=current_caret pid=\(caretPID) result=\(caretResult.rawValue)", source: "ContentView")
+                if caretResult.isReady {
+                    typingTarget = (pid: caretPID, shouldRestoreOriginalFocus: false)
+                    focusReady = true
+                    // Spoken send was authorized for the captured field only.
+                    spokenSendAllowed = false
+                }
+            }
 
             if spokenSendAllowed {
                 NotchContentState.shared.setSpokenSendIndicatorState(.sending)

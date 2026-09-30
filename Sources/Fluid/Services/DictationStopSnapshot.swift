@@ -77,10 +77,13 @@ struct DictationStopSnapshot {
     }
 
     @MainActor
-    func prepareDelivery(_ text: String, keepBackup: Bool) async -> Bool {
-        guard let target else { return false }
-        return await PasteDeliveryCoordinator.shared.prepareForDelivery(text, preserveTranscriptOnClipboard: keepBackup) {
-            await TypingService.prepareTargetForDelivery(target).isReady
+    func prepareDelivery(_ text: String, keepBackup: Bool) async -> TypingService.FocusPreparationResult {
+        guard let target else { return .failed }
+        var result: TypingService.FocusPreparationResult = .failed
+        let ready = await PasteDeliveryCoordinator.shared.prepareForDelivery(text, preserveTranscriptOnClipboard: keepBackup) {
+            result = await TypingService.prepareTargetForDelivery(target)
+            return result.isReady
         }
+        return ready ? result : .failed
     }
 }
