@@ -84,6 +84,9 @@ struct OverlayChipLabel: View {
     let text: String
     var badge: String?
     var showsChevron = true
+    /// When true the label gives up width to fit its row instead of forcing the row wider.
+    /// A forced-wide row pushes the rounded surface past the window, which clips its corners.
+    var compressesToFit = false
 
     var body: some View {
         HStack(spacing: self.metrics.spacing) {
@@ -103,6 +106,7 @@ struct OverlayChipLabel: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .background(Capsule().fill(Color.white.opacity(0.16)))
+                    .fixedSize()
             }
             if self.showsChevron {
                 Image(systemName: "chevron.down")
@@ -110,7 +114,7 @@ struct OverlayChipLabel: View {
                     .opacity(0.55)
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize(horizontal: !self.compressesToFit, vertical: false)
     }
 }
 

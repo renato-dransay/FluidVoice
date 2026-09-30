@@ -3033,7 +3033,8 @@ struct BottomOverlayView: View {
             metrics: self.chipMetrics,
             systemImage: self.isPillSize ? nil : self.promptSelectorIconName,
             text: self.promptSelectorDisplayLabel,
-            badge: self.isAppPromptOverrideActive ? "App" : nil
+            badge: self.isAppPromptOverrideActive ? "App" : nil,
+            compressesToFit: true
         )
         .help(self.selectedPromptLabel)
         .overlayChipSurface(
@@ -3582,8 +3583,11 @@ struct BottomOverlayView: View {
                 }
                 self.promptSelectorView
                 self.actionsSelectorView
+                    .fixedSize()
             }
-            .fixedSize()
+            // The chips take what they need first; only the prompt label shrinks when the
+            // row is short, so the row never grows past the panel.
+            .layoutPriority(1)
         }
         .frame(maxWidth: .infinity)
     }
