@@ -1179,6 +1179,57 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
 
+                // Meeting Detection Card. Same keys as the FluidMeet settings sheet.
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Label("Meeting Detection", systemImage: "person.2.wave.2")
+                                .font(.fluidSystem(.headline))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Button("FluidMeet Settings") {
+                                AppNavigationRouter.shared.request(.meetingTranscription)
+                            }
+                            .fluidOutlinedButton()
+                            .controlSize(.small)
+                        }
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            self.optionToggleRow(
+                                title: "Detect Meetings Automatically",
+                                description: "Offer to record Zoom, Teams, Webex, and Google Meet calls. Recording always starts with you.",
+                                isOn: Binding(
+                                    get: { self.settings.meetingAutoDetectEnabled },
+                                    set: { enabled in
+                                        self.settings.meetingAutoDetectEnabled = enabled
+                                        // Mirrors the FluidMeet sheet: browser detection is a sub-option.
+                                        if enabled == false {
+                                            self.settings.meetingAutoDetectBrowserEnabled = false
+                                        }
+                                    }
+                                )
+                            )
+                            .settingsSearchTarget(.meetingDetection)
+
+                            Divider().opacity(0.2)
+
+                            self.optionToggleRow(
+                                title: "Include Browser Meetings",
+                                description: "Check the frontmost tab and window titles in Chrome, Safari, Arc, Edge, Brave, and Vivaldi, including installed web apps. Addresses and titles are never stored or sent.",
+                                isOn: Binding(
+                                    get: { self.settings.meetingAutoDetectBrowserEnabled },
+                                    set: { self.settings.meetingAutoDetectBrowserEnabled = $0 }
+                                )
+                            )
+                            .disabled(!self.settings.meetingAutoDetectEnabled)
+                            .opacity(self.settings.meetingAutoDetectEnabled ? 1 : 0.5)
+                            .settingsSearchTarget(.meetingBrowserDetection)
+                        }
+                    }
+                    .padding(16)
+                }
+                .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
+
                 // Audio Devices Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {

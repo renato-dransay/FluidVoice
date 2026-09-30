@@ -23,6 +23,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     let selectedAppleSpeechLocaleIdentifier: String?
     /// Stable final-meeting backend ID. Optional so backups from before backend selection decode.
     let meetingTranscriptionBackendID: String?
+    /// Optional so backups from before these were backed up still decode; nil keeps the current value.
+    let meetingAutoDetectEnabled: Bool?
+    let meetingAutoDetectBrowserEnabled: Bool?
     let hotkeyShortcut: HotkeyShortcut
     // Older backup files only contain hotkeyShortcut; nil restores that legacy single shortcut.
     // swiftlint:disable:next discouraged_optional_collection

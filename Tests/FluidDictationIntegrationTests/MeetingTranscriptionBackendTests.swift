@@ -448,6 +448,46 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(settingsStore.meetingTranscriptionBackendID, .productionDefault)
     }
 
+    func testMeetingDetectionTogglesRoundTripThroughBackupAndLegacyBackupsKeepCurrentValues() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["MeetingAutoDetectEnabled", "MeetingAutoDetectBrowserEnabled"]
+        let oldValues = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, oldValue) in zip(keys, oldValues) {
+                if let oldValue { defaults.set(oldValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        let settingsStore = SettingsStore.shared
+        settingsStore.meetingAutoDetectEnabled = false
+        settingsStore.meetingAutoDetectBrowserEnabled = true
+
+        let document = try await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.meetingAutoDetectEnabled, false)
+        XCTAssertEqual(document.settings.meetingAutoDetectBrowserEnabled, true)
+
+        let encoded = try BackupService.shared.encode(document)
+        let decoded = try BackupService.shared.decode(encoded)
+        settingsStore.meetingAutoDetectEnabled = true
+        settingsStore.meetingAutoDetectBrowserEnabled = false
+        settingsStore.restore(from: decoded.settings)
+        XCTAssertFalse(settingsStore.meetingAutoDetectEnabled)
+        XCTAssertTrue(settingsStore.meetingAutoDetectBrowserEnabled)
+
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var payload = try XCTUnwrap(root["settings"] as? [String: Any])
+        for key in ["meetingAutoDetectEnabled", "meetingAutoDetectBrowserEnabled"] {
+            payload.removeValue(forKey: key)
+        }
+        root["settings"] = payload
+        let legacy = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacy.settings.meetingAutoDetectEnabled)
+        settingsStore.meetingAutoDetectEnabled = true
+        settingsStore.meetingAutoDetectBrowserEnabled = false
+        settingsStore.restore(from: legacy.settings)
+        XCTAssertTrue(settingsStore.meetingAutoDetectEnabled, "older backups leave the current value alone")
+        XCTAssertFalse(settingsStore.meetingAutoDetectBrowserEnabled)
+    }
+
     func testSelectionIsFrozenDuringExecutionAndRefreshedForNextAttempt() async throws {
         let firstID = Self.fixtureBackendID
         let secondID = MeetingBackendID(rawValue: "fixture-second")

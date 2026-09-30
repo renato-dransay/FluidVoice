@@ -3558,6 +3558,8 @@ final class SettingsStore: ObservableObject {
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
             meetingTranscriptionBackendID: self.meetingTranscriptionBackendID.rawValue,
+            meetingAutoDetectEnabled: self.meetingAutoDetectEnabled,
+            meetingAutoDetectBrowserEnabled: self.meetingAutoDetectBrowserEnabled,
             hotkeyShortcut: self.hotkeyShortcut,
             primaryDictationShortcuts: self.primaryDictationShortcuts,
             promptModeHotkeyShortcut: self.promptModeHotkeyShortcut,
@@ -3702,6 +3704,12 @@ final class SettingsStore: ObservableObject {
         self.meetingTranscriptionBackendID = payload.meetingTranscriptionBackendID.map {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
+        if let meetingAutoDetectEnabled = payload.meetingAutoDetectEnabled {
+            self.meetingAutoDetectEnabled = meetingAutoDetectEnabled
+        }
+        if let meetingAutoDetectBrowserEnabled = payload.meetingAutoDetectBrowserEnabled {
+            self.meetingAutoDetectBrowserEnabled = meetingAutoDetectBrowserEnabled
+        }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
         self.promptModeShortcutEnabled = payload.promptModeShortcutEnabled
