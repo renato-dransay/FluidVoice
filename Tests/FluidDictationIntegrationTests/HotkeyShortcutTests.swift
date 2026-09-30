@@ -380,6 +380,17 @@ final class HotkeyShortcutTests: XCTestCase {
 
     @MainActor
     func testBottomOverlayReopenStartsAtEmptyHeightBeforeQueuedResize() async throws {
+        try await self.assertBottomOverlayGrowsWithPreviewAndReopensEmpty(size: .medium)
+    }
+
+    /// The large overlay used to reserve a fixed canvas; it now sizes to its content like medium.
+    @MainActor
+    func testLargeBottomOverlayGrowsWithPreviewAndReopensEmpty() async throws {
+        try await self.assertBottomOverlayGrowsWithPreviewAndReopensEmpty(size: .large)
+    }
+
+    @MainActor
+    private func assertBottomOverlayGrowsWithPreviewAndReopensEmpty(size: SettingsStore.OverlaySize) async throws {
         let defaults = UserDefaults.standard
         let overlaySizeKey = "OverlaySize"
         let streamingPreviewKey = "EnableStreamingPreview"
@@ -399,7 +410,7 @@ final class HotkeyShortcutTests: XCTestCase {
             NotchContentState.shared.updateTranscription("")
         }
 
-        SettingsStore.shared.overlaySize = .medium
+        SettingsStore.shared.overlaySize = size
         SettingsStore.shared.enableStreamingPreview = true
         let audioPublisher = Just(CGFloat.zero).eraseToAnyPublisher()
         let controller = BottomOverlayWindowController.shared
