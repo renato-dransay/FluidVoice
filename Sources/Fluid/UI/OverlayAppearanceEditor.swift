@@ -258,7 +258,7 @@ private struct OverlayAppearanceSample: View {
                     .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.96))
                     .lineLimit(self.size == .small ? 1 : 3)
-                    .frame(maxWidth: .infinity, minHeight: self.size == .large ? self.layout.previewBoxHeight : 20, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, minHeight: 20, alignment: .topLeading)
             }
             HStack {
                 Image(nsImage: Self.appIcon)
