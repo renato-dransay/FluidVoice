@@ -52,6 +52,12 @@ final class MeetingAutoDetector {
         var pid: Int32
         /// Set only for Tier 1 native evidence — the window auto-detection actually found.
         var windowID: UInt32?
+        /// Browser tier: the meeting service behind the evidence, e.g. "Google Meet".
+        var serviceName: String? = nil
+        /// A meeting name the app itself exposes (Teams window title, Meet page heading).
+        var exposedTitle: String? = nil
+        /// Lowercase "host/path" of the in-call link, for matching a calendar event's conference link.
+        var conferenceFragment: String? = nil
     }
 
     var onPromptRequested: ((PromptRequest) -> Void)?
@@ -82,6 +88,9 @@ final class MeetingAutoDetector {
         /// Browser tier only: which sources currently see the in-call page. Evidence is lost only
         /// when every source misses, so an Accessibility miss cannot flap a title-backed episode.
         var browserEvidenceSources: Set<BrowserEvidenceSource> = []
+        /// Meeting name the app exposes for the current evidence; never logged.
+        var exposedTitle: String?
+        var lastMeetingNameReadAt: Date?
     }
 
     private enum BrowserEvidenceSource: String, Hashable {
@@ -199,7 +208,7 @@ final class MeetingAutoDetector {
     private func pollTick(runGeneration: UInt64) async {
         guard self.isCurrentRun(runGeneration) else { return }
         let now = self.clock.now()
-        if self.isNativeDetectionEnabled() {
+        if self.isNativeDetectionEnabled() || self.isBrowserDetectionEnabled() {
             await self.pollAudioProcessActivity(at: now, expectedRunGeneration: runGeneration)
             guard self.isCurrentRun(runGeneration) else { return }
         }
@@ -237,18 +246,43 @@ final class MeetingAutoDetector {
         }
     }
 
-    private func pollBrowserTabsIfDue(at now: Date, runGeneration: UInt64) async {
+    /// Test entry point: one browser poll without the run-loop guards.
+    func pollBrowserTabs(at now: Date) async {
+        await self.pollBrowserTabsIfDue(at: now, runGeneration: nil)
+    }
+
+    private func isCurrentRunIfTracked(_ generation: UInt64?) -> Bool {
+        generation.map(self.isCurrentRun) ?? true
+    }
+
+    private func pollBrowserTabsIfDue(at now: Date, runGeneration: UInt64?) async {
         for (pid, record) in self.records where record.tier == .browserTier2 {
-            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled() else { return }
+            guard self.isCurrentRunIfTracked(runGeneration), self.isBrowserDetectionEnabled() else { return }
             let lastPoll = self.lastBrowserPollAt[pid]
             guard lastPoll.map { now.timeIntervalSince($0) >= 2 } ?? true else { continue }
             let url = await self.browserTabReader.frontmostTabURL(bundleIdentifier: record.bundleIdentifier, processID: pid)
-            guard self.isCurrentRun(runGeneration), self.isBrowserDetectionEnabled(),
+            guard self.isCurrentRunIfTracked(runGeneration), self.isBrowserDetectionEnabled(),
                   self.records[pid]?.incarnation == record.incarnation
             else { continue }
             self.lastBrowserPollAt[pid] = now
             self.handleBrowserTabURL(url, pid: pid, bundleIdentifier: record.bundleIdentifier, at: self.clock.now())
+            await self.readMeetingNameIfDue(pid: pid, incarnation: record.incarnation, bundleIdentifier: record.bundleIdentifier, at: now, runGeneration: runGeneration)
         }
+    }
+
+    /// Google Meet keeps the event name in the page, not the tab title. Read it at most every 10 s
+    /// while the in-call page is live and no name is known yet.
+    private func readMeetingNameIfDue(pid: Int32, incarnation: UInt64, bundleIdentifier: String, at now: Date, runGeneration: UInt64?) async {
+        guard let record = self.records[pid], record.incarnation == incarnation, record.hasLiveWindow,
+              record.exposedTitle == nil, record.windowEvidenceKey?.hasPrefix("url:meet.google.com") == true,
+              record.lastMeetingNameReadAt.map({ now.timeIntervalSince($0) >= 10 }) ?? true
+        else { return }
+        self.records[pid]?.lastMeetingNameReadAt = now
+        let name = await self.browserTabReader.frontmostMeetingName(bundleIdentifier: bundleIdentifier, processID: pid)
+        guard self.isCurrentRunIfTracked(runGeneration), self.records[pid]?.incarnation == incarnation, let name else { return }
+        self.records[pid]?.exposedTitle = name
+        DebugLogger.shared.log("meeting-name-found source=page bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
+        self.publishAutomaticTarget()
     }
 
     // MARK: - Workspace events
@@ -331,14 +365,31 @@ final class MeetingAutoDetector {
         await self.pollAudioProcessActivity(at: now, expectedRunGeneration: nil)
     }
 
+    private func isTierEnabled(_ tier: MeetingDetectionTier) -> Bool {
+        tier == .nativeTier1 ? self.isNativeDetectionEnabled() : self.isBrowserDetectionEnabled()
+    }
+
+    private func isAnyTierEnabled() -> Bool {
+        self.isNativeDetectionEnabled() || self.isBrowserDetectionEnabled()
+    }
+
+    /// The process whose audio helpers speak for a record: itself, or the host browser for an
+    /// installed web app (the shim never opens the microphone; the browser's helper does).
+    private func audioOwnerPID(for record: CandidateRecord) -> Int32? {
+        guard record.tier == .browserTier2,
+              let host = MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: record.bundleIdentifier)
+        else { return record.pid }
+        return self.records.values.filter { $0.bundleIdentifier == host }.map(\.pid).min()
+    }
+
     private func pollAudioProcessActivity(at now: Date, expectedRunGeneration: UInt64?) async {
         guard !Task.isCancelled,
-              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isAnyTierEnabled() }) ?? true
         else { return }
-        let candidates = self.records.filter { $0.value.tier == .nativeTier1 }
+        let candidates = self.records.filter { self.isTierEnabled($0.value.tier) }
         let snapshot = await self.audioProcessActivity.snapshot()
         guard !Task.isCancelled,
-              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true
+              expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isAnyTierEnabled() }) ?? true
         else { return }
         guard let activeInputByPID = MeetingAudioProcessResolver.activeOwnerInputByPID(snapshot: snapshot) else {
             if !self.audioQueryUnknown {
@@ -356,9 +407,24 @@ final class MeetingAutoDetector {
         self.audioQueryUnknown = false
         for (pid, record) in candidates {
             guard !Task.isCancelled,
-                  expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isNativeDetectionEnabled() }) ?? true,
+                  expectedRunGeneration.map({ self.runGeneration == $0 && self.pollTask != nil && self.isTierEnabled(record.tier) }) ?? true,
                   self.records[pid]?.incarnation == record.incarnation
             else { continue }
+            if record.tier == .browserTier2 {
+                // Browsers play media all day, so only a running microphone input counts, and it
+                // must belong to the browser (or the web app's host browser) itself.
+                guard let ownerPID = self.audioOwnerPID(for: record) else { continue }
+                let ownerBundle = MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: record.bundleIdentifier) ?? record.bundleIdentifier
+                let ownerMatches = snapshot.owners.contains { $0.processID == ownerPID && $0.bundleIdentifier == ownerBundle }
+                let hasInput = ownerMatches && activeInputByPID[ownerPID] == true
+                // A browser the user has been sitting in never re-activates, so being in front
+                // when its microphone opens is the frontmost evidence (same rule as the device edge).
+                if hasInput, self.records[pid]?.lastFrontmostAt == nil, self.workspaceEvents.frontmostProcessID == pid {
+                    self.records[pid]?.lastFrontmostAt = now
+                }
+                self.handleAudioProcessActivity(hasInput, pid: pid, at: now)
+                continue
+            }
             let isActive = activeInputByPID[pid] != nil
             let hasInput = activeInputByPID[pid] == true
             guard !isActive || snapshot.owners.contains(where: { $0.processID == pid && $0.bundleIdentifier == record.bundleIdentifier }) else { continue }
@@ -376,7 +442,7 @@ final class MeetingAutoDetector {
     }
 
     func handleAudioProcessActivity(_ isActive: Bool, pid: Int32, at now: Date) {
-        guard var record = self.records[pid], record.tier == .nativeTier1 else { return }
+        guard var record = self.records[pid] else { return }
         record.processAudioObserved = true
         if isActive, record.processAudioWasActive {
             // A continuous stream is still fresh evidence. Refreshing here allows a late window
@@ -479,6 +545,9 @@ final class MeetingAutoDetector {
                 self.records[pid]?.windowEvidenceAt = now
                 self.records[pid]?.windowEvidenceKey = "win:\(matched.windowID)"
                 self.records[pid]?.windowEvidenceWindowID = matched.windowID
+                if let name = matched.title.flatMap(MeetingExposedTitleMatcher.meetingName(fromWindowTitle:)) {
+                    self.records[pid]?.exposedTitle = name
+                }
                 if !wasLiveWindow {
                     DebugLogger.shared.log("window-evidence-found bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
                 }
@@ -522,11 +591,20 @@ final class MeetingAutoDetector {
     private func handleBrowserWindowSnapshot(_ snapshots: [WindowSnapshot], at now: Date) {
         for pid in self.records.keys where self.records[pid]?.tier == .browserTier2 {
             guard let record = self.records[pid] else { continue }
-            let rooms = snapshots
-                .filter { $0.processID == pid && $0.layer == 0 }
-                .compactMap { $0.title.flatMap(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle:)) }
-            // Stay on the room already backing the evidence; otherwise CG order is front-to-back.
-            let room = rooms.first { Self.browserEvidenceKey($0) == record.windowEvidenceKey } ?? rooms.first
+            let windows = snapshots.filter { $0.processID == pid && $0.layer == 0 }
+            if self.records[pid]?.exposedTitle == nil,
+               let name = windows.lazy.compactMap({ $0.title.flatMap(MeetingExposedTitleMatcher.meetingName(fromWindowTitle:)) }).first
+            {
+                self.records[pid]?.exposedTitle = name
+            }
+            // A live episode stays alive while its room title exists in any window of the browser,
+            // but new evidence must come from the browser's frontmost window (CG lists windows
+            // front-to-back), matching the URL path's focused-tab semantics: a call parked in a
+            // background window never prompts while the user works in another window.
+            let rooms = windows.compactMap { $0.title.flatMap(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle:)) }
+            let liveRoom = record.hasLiveWindow ? rooms.first { Self.browserEvidenceKey($0) == record.windowEvidenceKey } : nil
+            let frontmostRoom = windows.first?.title.flatMap(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle:))
+            let room = liveRoom ?? frontmostRoom
             self.applyBrowserEvidence(room, source: .title, pid: pid, bundleIdentifier: record.bundleIdentifier, at: now)
         }
     }
@@ -569,6 +647,8 @@ final class MeetingAutoDetector {
         let wasLiveWindow = record.hasLiveWindow
         if record.windowEvidenceKey != key {
             record.browserEvidenceSources = []
+            record.exposedTitle = nil
+            record.lastMeetingNameReadAt = nil
         }
         record.browserEvidenceSources.insert(source)
         record.windowEvidenceAt = now
@@ -710,20 +790,34 @@ final class MeetingAutoDetector {
 
     func resolvedTarget(for episodeID: UUID) -> ResolvedTarget? {
         guard let episode = self.episodesByKey.values.first(where: { $0.id == episodeID }) else { return nil }
-        return self.captureTarget(bundleIdentifier: episode.bundleIdentifier, pid: episode.pid, windowID: episode.windowID)
+        return self.captureTarget(for: episode)
+    }
+
+    private func captureTarget(for episode: Episode) -> ResolvedTarget? {
+        guard var target = self.captureTarget(bundleIdentifier: episode.bundleIdentifier, pid: episode.pid, windowID: episode.windowID) else {
+            return nil
+        }
+        let evidenceKey = String(episode.key.drop(while: { $0 != "|" }).dropFirst())
+        target.serviceName = Self.serviceName(forEvidenceKey: evidenceKey)
+        target.conferenceFragment = evidenceKey.hasPrefix("url:") ? String(evidenceKey.dropFirst(4)).lowercased() : nil
+        target.exposedTitle = self.records[episode.pid]?.exposedTitle
+        return target
     }
 
     // JUDGMENT: Chromium renders web-app audio in the host browser's audio-service helper, whose
     // responsible process is the browser, while the shim (`app_mode_loader`) is launched
     // separately. ScreenCaptureKit attributes app audio by responsible process, so capturing the
-    // shim would record silence. When the host is not armed, keep the shim so Start fails closed.
+    // shim would record silence, so a web app without a resolved host has no capture target at all.
     /// Maps an installed web app's shim to its host browser for capture. The prompt still names
-    /// the web app; only the audio source changes.
-    private func captureTarget(bundleIdentifier: String, pid: Int32, windowID: UInt32?) -> ResolvedTarget {
-        guard let host = MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: bundleIdentifier),
-              let hostPID = self.records.values.filter({ $0.bundleIdentifier == host }).map(\.pid).min()
-        else {
+    /// the web app; only the audio source changes. nil means Start must be refused: the shim is
+    /// never offered as a source because ScreenCaptureKit would accept it and record silence.
+    private func captureTarget(bundleIdentifier: String, pid: Int32, windowID: UInt32?) -> ResolvedTarget? {
+        guard let host = MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: bundleIdentifier) else {
             return ResolvedTarget(bundleIdentifier: bundleIdentifier, pid: pid, windowID: windowID)
+        }
+        guard let hostPID = self.records.values.filter({ $0.bundleIdentifier == host }).map(\.pid).min() else {
+            DebugLogger.shared.log("capture-target-unresolved host=\(host) bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
+            return nil
         }
         return ResolvedTarget(bundleIdentifier: host, pid: hostPID, windowID: nil)
     }
@@ -741,9 +835,7 @@ final class MeetingAutoDetector {
             return true
         }
         // Ambiguity requires an explicit source, never arbitrary dictionary order.
-        let target = eligible.count == 1 ? eligible.first.map {
-            self.captureTarget(bundleIdentifier: $0.bundleIdentifier, pid: $0.pid, windowID: $0.windowID)
-        } : nil
+        let target = eligible.count == 1 ? eligible.first.flatMap { self.captureTarget(for: $0) } : nil
         guard target != self.automaticTarget else { return }
         self.automaticTarget = target
         self.onAutomaticTargetChanged?(target)
@@ -786,6 +878,8 @@ final class MeetingAutoDetector {
                 record.windowEvidenceAt = nil
                 record.windowEvidenceKey = nil
                 record.windowEvidenceWindowID = nil
+                record.exposedTitle = nil
+                record.lastMeetingNameReadAt = nil
             }
             self.records[pid] = record
         }
