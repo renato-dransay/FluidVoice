@@ -391,6 +391,36 @@ struct MeetingRecordingSettingsSheet: View {
                                 .accessibilityLabel("Also check browser tabs")
                         }
                     }
+
+                    Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Use calendar for meeting names",
+                        detail: "Name recordings after the matching calendar event and offer attendee names in the speaker picker. "
+                            + "Reads Mac Calendar; add your Google account under System Settings > Internet Accounts with Calendars enabled to include Google Calendar.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle(
+                            "Use calendar for meeting names",
+                            isOn: Binding(
+                                get: { self.draft.calendarNamesEnabled },
+                                set: { enabled in
+                                    self.draft.calendarNamesEnabled = enabled
+                                    guard enabled else { return }
+                                    // Same rule as Settings: the prompt appears only from this toggle.
+                                    Task { @MainActor in
+                                        let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                                        if !granted {
+                                            self.draft.calendarNamesEnabled = false
+                                        }
+                                    }
+                                }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .meetingHoverFeedback()
+                        .accessibilityLabel("Use calendar for meeting names")
+                    }
                 }
             }
 

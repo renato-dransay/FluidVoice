@@ -50,6 +50,7 @@ enum SettingsSearchTarget: Hashable {
     case pasteCheck
     case meetingDetection
     case meetingBrowserDetection
+    case meetingCalendarNames
 
     case audio
     case inputDevicePriority
@@ -110,7 +111,7 @@ enum SettingsSearchTarget: Hashable {
             return .shortcuts
 
         case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck,
-             .meetingDetection, .meetingBrowserDetection:
+             .meetingDetection, .meetingBrowserDetection, .meetingCalendarNames:
             return .notifications
 
         case .audio, .inputDevicePriority, .outputDevice:
@@ -361,6 +362,11 @@ enum SettingsSearchIndex {
             target: .meetingBrowserDetection,
             title: "Include Browser Meetings",
             terms: ["browser tab web app meeting google meet zoom teams chrome vivaldi safari arc edge brave"]
+        ),
+        .init(
+            target: .meetingCalendarNames,
+            title: "Use Calendar for Meeting Names",
+            terms: ["calendar event title attendees google eventkit"]
         ),
         .init(
             target: .aiEnhancementFailures,

@@ -1224,6 +1224,11 @@ struct SettingsView: View {
                             .disabled(!self.settings.meetingAutoDetectEnabled)
                             .opacity(self.settings.meetingAutoDetectEnabled ? 1 : 0.5)
                             .settingsSearchTarget(.meetingBrowserDetection)
+
+                            Divider().opacity(0.2)
+
+                            self.meetingCalendarNamesRows
+                                .settingsSearchTarget(.meetingCalendarNames)
                         }
                     }
                     .padding(16)
@@ -2257,6 +2262,47 @@ struct SettingsView: View {
             )
             if self.isRecording(target), let message = self.shortcutRecordingMessage {
                 Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
+            }
+        }
+    }
+}
+
+// MARK: - Meeting calendar names
+
+private extension SettingsView {
+    /// Calendar access is requested from this toggle only, never when a meeting is detected.
+    var meetingCalendarNamesRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            self.optionToggleRow(
+                title: "Use calendar for meeting names",
+                description: "Name recordings after the matching calendar event and offer attendee names in the speaker picker. Nothing is written to your calendar.",
+                isOn: Binding(
+                    get: { self.settings.meetingCalendarNamesEnabled },
+                    set: { enabled in
+                        self.settings.meetingCalendarNamesEnabled = enabled
+                        guard enabled else { return }
+                        Task { @MainActor in
+                            let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                            if !granted {
+                                self.settings.meetingCalendarNamesEnabled = false
+                            }
+                        }
+                    }
+                )
+            )
+            Text("Reads Mac Calendar. Add your Google account under System Settings > Internet Accounts with Calendars enabled to include Google Calendar.")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            let calendarAuthorization = EventKitMeetingCalendarProvider.authorizationState
+            if calendarAuthorization == .denied || calendarAuthorization == .restricted {
+                Button("Open Calendar Privacy Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .fluidOutlinedButton()
+                .controlSize(.small)
             }
         }
     }
