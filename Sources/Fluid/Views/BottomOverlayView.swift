@@ -2009,7 +2009,7 @@ private struct BottomOverlayPromptMenuView: View {
         .padding(.horizontal, self.isCompact ? 3 : 8)
         .padding(.vertical, self.isCompact ? 3 : 4)
         .bottomOverlaySurface(self.settings.bottomOverlayAppearance, cornerRadius: self.isCompact ? 9 : 8)
-        .frame(width: self.isCompact ? 96 : min(self.maxWidth, 250), alignment: .leading)
+        .frame(width: self.isCompact ? 96 : min(self.maxWidth, self.settings.overlaySize == .large ? 280 : 250), alignment: .leading)
         .preferredColorScheme(.dark)
         .onHover { hovering in
             self.onHoverChanged(hovering)
@@ -2223,6 +2223,19 @@ private struct BottomOverlayActionsMenuView: View {
             ) {
                 self.contentState.onUndoLastAIRequested?()
             }
+
+            Divider()
+                .padding(.vertical, 4)
+
+            // Replaces the gear chip that used to sit above the large overlay.
+            self.actionRow(
+                title: "Preferences",
+                icon: "gearshape",
+                rowID: "open_preferences",
+                enabled: true
+            ) {
+                self.contentState.onOpenPreferencesRequested?()
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -2381,7 +2394,6 @@ struct BottomOverlayView: View {
     @State private var isPillExpanded = false
     @State private var pillHoverWorkItem: DispatchWorkItem?
     @State private var isHoveringActionsChip = false
-    @State private var isHoveringSettingsChip = false
     @State private var modeSelectorFrameInScreen: CGRect = .zero
     @State private var modeSelectorWindow: NSWindow?
     @State private var promptSelectorFrameInScreen: CGRect = .zero
@@ -2411,10 +2423,6 @@ struct BottomOverlayView: View {
         let minBarHeight: CGFloat
         let maxBarHeight: CGFloat
         let containerWidth: CGFloat
-        let overlayWidth: CGFloat
-        let overlayHeight: CGFloat
-        let previewBoxHeight: CGFloat
-        let usesFixedCanvas: Bool
         let showsTopControls: Bool
         let showsPreview: Bool
         let showsModeLabel: Bool
@@ -2437,10 +2445,6 @@ struct BottomOverlayView: View {
                     minBarHeight: 4,
                     maxBarHeight: 28,
                     containerWidth: 100,
-                    overlayWidth: 100,
-                    overlayHeight: 46,
-                    previewBoxHeight: 0,
-                    usesFixedCanvas: false,
                     showsTopControls: false,
                     showsPreview: false,
                     showsModeLabel: false
@@ -2461,10 +2465,6 @@ struct BottomOverlayView: View {
                     minBarHeight: 5,
                     maxBarHeight: 16,
                     containerWidth: 200,
-                    overlayWidth: 300,
-                    overlayHeight: 124,
-                    previewBoxHeight: 0,
-                    usesFixedCanvas: false,
                     showsTopControls: false,
                     showsPreview: true,
                     showsModeLabel: true
@@ -2484,19 +2484,17 @@ struct BottomOverlayView: View {
                     barSpacing: 4.5,
                     minBarHeight: 6,
                     maxBarHeight: 28,
-                    containerWidth: 340,
-                    overlayWidth: 380,
-                    overlayHeight: 156,
-                    previewBoxHeight: 0,
-                    usesFixedCanvas: false,
+                    // JUDGMENT: 360 fits language, prompt and actions chips at 11pt
+                    // beside the waveform without squeezing the prompt label.
+                    containerWidth: 360,
                     showsTopControls: true,
                     showsPreview: true,
                     showsModeLabel: true
                 )
             case .large:
                 return LayoutConstants(
-                    hPadding: 18,
-                    vPadding: 12,
+                    hPadding: 20,
+                    vPadding: 14,
                     waveformWidth: 180,
                     waveformHeight: 48,
                     iconSize: 26,
@@ -2508,11 +2506,7 @@ struct BottomOverlayView: View {
                     barSpacing: 6.0,
                     minBarHeight: 8,
                     maxBarHeight: 44,
-                    containerWidth: 600,
-                    overlayWidth: 600,
-                    overlayHeight: 288,
-                    previewBoxHeight: 92,
-                    usesFixedCanvas: true,
+                    containerWidth: 560,
                     showsTopControls: true,
                     showsPreview: true,
                     showsModeLabel: true
@@ -2525,12 +2519,15 @@ struct BottomOverlayView: View {
         LayoutConstants.get(for: self.settings.overlaySize)
     }
 
-    private var isCompactControls: Bool {
-        self.settings.overlaySize == .medium
+    private var chipMetrics: OverlayChipMetrics {
+        OverlayChipMetrics.forSize(self.settings.overlaySize)
     }
 
-    private var waveformHorizontalOffset: CGFloat {
-        self.settings.overlaySize == .medium ? -28 : 0
+    /// Bars plus a little breathing room; the row's spacers own the rest of the width.
+    private var waveformRowWidth: CGFloat {
+        CGFloat(self.layout.barCount) * self.layout.barWidth
+            + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
+            + 12
     }
 
     private var isPillSize: Bool {
@@ -2691,58 +2688,30 @@ struct BottomOverlayView: View {
         ) == nil ? "Default" : nil
     }
 
+    /// Full label; the chip truncates it through layout so the shape never jumps.
     private var promptSelectorDisplayLabel: String {
-        if self.layout.showsTopControls {
-            let label = self.selectedPromptLabel
-            return label.count > 12 ? "\(label.prefix(11))…" : label
-        }
-        if self.activePromptMode?.normalized == .dictate {
-            let label = self.selectedPromptLabel
-            let limit = self.isCompactControls ? 12 : 18
-            guard label.count > limit else { return label }
-            return "\(label.prefix(limit - 1))…"
+        if self.layout.showsTopControls || self.activePromptMode?.normalized != .dictate {
+            let label = self.selectedPromptLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return label.isEmpty ? "Default" : label
         }
         let selectedLabel = self.selectedPromptLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = self.promptSelectorBuiltInLabel ?? selectedLabel
-        guard !label.isEmpty else { return "Default" }
-
-        let maxLength: Int
-        if self.promptSelectorBuiltInLabel == nil {
-            maxLength = 11
-        } else if self.isCompactControls {
-            maxLength = self.isAppPromptOverrideActive ? 8 : 14
-        } else {
-            maxLength = self.isAppPromptOverrideActive ? 11 : 16
-        }
-
-        guard label.count > maxLength else { return label }
-        let prefixLength = max(maxLength - 3, 1)
-        return "\(label.prefix(prefixLength))..."
+        return label.isEmpty ? "Default" : label
     }
 
     private var promptSelectorIconName: String? {
         switch self.promptSelectorBuiltInLabel {
         case "Basic"?:
             return "bolt.fill"
+        case "No cleanup"?:
+            return "text.alignleft"
         case SettingsStore.DictationModeLabels.smart?:
             return "sparkles"
+        case SettingsStore.DictationModeLabels.externalDefault?:
+            return "wand.and.stars"
         default:
-            return nil
+            return "text.quote"
         }
-    }
-
-    private var promptSelectorFontSize: CGFloat {
-        if self.isPillSize { return 8 }
-        if self.isCompactControls { return 9 }
-        return max(self.layout.modeFontSize - 3, 9)
-    }
-
-    private var promptSelectorLabelFontSize: CGFloat {
-        max(self.promptSelectorFontSize - 1, 8)
-    }
-
-    private var promptSelectorVerticalPadding: CGFloat {
-        4
     }
 
     private var promptMenuGap: CGFloat {
@@ -2751,25 +2720,8 @@ struct BottomOverlayView: View {
         return max(0, self.layout.vPadding * 0.05)
     }
 
-    private var promptSelectorCornerRadius: CGFloat {
-        max(self.layout.cornerRadius * 0.42, 8)
-    }
-
     private var promptSelectorMaxWidth: CGFloat {
         self.isPillSize ? 220 : self.layout.waveformWidth * 1.75
-    }
-
-    private var promptSelectorTriggerMaxWidth: CGFloat {
-        guard self.layout.showsTopControls else { return 120 }
-        // Use 6pt more on each side of the selector while retaining a 6pt
-        // clearance from the visible bars and a 12pt outer trailing inset.
-        // Keep the waveform and leading app control in place.
-        let rowWidth = self.layout.containerWidth - self.layout.hPadding * 2
-        let barsWidth = CGFloat(self.layout.barCount) * self.layout.barWidth
-            + CGFloat(max(self.layout.barCount - 1, 0)) * self.layout.barSpacing
-        let waveformRight = rowWidth / 2 + self.waveformHorizontalOffset + barsWidth / 2
-        return max(0, rowWidth + 6 - waveformRight - 6 - 32 - 4
-            - (self.showsCloudLanguageSelector && !self.isCompactControls ? 72 : 0))
     }
 
     private var showsCloudLanguageSelector: Bool {
@@ -2779,7 +2731,7 @@ struct BottomOverlayView: View {
     }
 
     private var previewMaxHeight: CGFloat {
-        self.layout.usesFixedCanvas ? self.layout.previewBoxHeight : self.layout.transFontSize * 4.2
+        self.layout.transFontSize * 4.2
     }
 
     private var shouldReservePreviewArea: Bool {
@@ -2791,17 +2743,8 @@ struct BottomOverlayView: View {
             )
     }
 
-    private var overlayFrameHeight: CGFloat? {
-        guard self.layout.usesFixedCanvas else { return nil }
-        return self.shouldReservePreviewArea ? self.layout.overlayHeight : nil
-    }
-
     private var previewMaxWidth: CGFloat {
-        if self.layout.usesFixedCanvas {
-            return self.layout.waveformWidth * 2.2
-        }
-
-        return max(self.layout.waveformWidth * 2.2, self.layout.containerWidth - self.layout.hPadding * 2)
+        max(self.layout.waveformWidth * 2.2, self.layout.containerWidth - self.layout.hPadding * 2)
     }
 
     private var dynamicPreviewBaseMinHeight: CGFloat {
@@ -2873,7 +2816,6 @@ struct BottomOverlayView: View {
 
     private func refreshDynamicPreviewSizeIfNeeded(for previewText: String) {
         guard self.shouldReservePreviewArea else { return }
-        guard !self.layout.usesFixedCanvas else { return }
         let nextBucket = self.previewResizeBucket(for: previewText)
         guard nextBucket != self.dynamicPreviewResizeBucket else { return }
         self.dynamicPreviewResizeBucket = nextBucket
@@ -2920,39 +2862,6 @@ struct BottomOverlayView: View {
 
     private var overlayAnimatedOpacity: Double {
         1.0
-    }
-
-    private func chipBackground(isHovered: Bool, disabled: Bool) -> some View {
-        let fillColor: Color
-        if disabled {
-            fillColor = Color.black.opacity(0.95)
-        } else if isHovered {
-            fillColor = Color(red: 0.13, green: 0.13, blue: 0.16)
-        } else {
-            fillColor = Color.black
-        }
-
-        let topStrokeOpacity: Double = disabled ? 0.10 : (isHovered ? 0.36 : 0.14)
-        let bottomStrokeOpacity: Double = disabled ? 0.06 : (isHovered ? 0.22 : 0.08)
-        let hoverShadowColor: Color = (isHovered && !disabled) ? Color.white.opacity(0.16) : .clear
-
-        return RoundedRectangle(cornerRadius: self.promptSelectorCornerRadius)
-            .fill(fillColor)
-            .overlay(
-                RoundedRectangle(cornerRadius: self.promptSelectorCornerRadius)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(topStrokeOpacity),
-                                Color.white.opacity(bottomStrokeOpacity),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .shadow(color: hoverShadowColor, radius: 6, x: 0, y: 1)
     }
 
     private func closePromptMenu() {
@@ -3084,26 +2993,12 @@ struct BottomOverlayView: View {
     }
 
     private var modeSelectorTrigger: some View {
-        HStack(spacing: 5) {
-            if !self.isCompactControls {
-                Text("Mode:")
-                    .font(.fluidSystem(size: self.promptSelectorFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            Text(self.modeLabel)
-                .font(.fluidSystem(size: self.promptSelectorFontSize, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
-                .lineLimit(1)
-            Image(systemName: "chevron.up")
-                .font(.fluidSystem(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(.horizontal, 8)
-        .padding(.vertical, self.promptSelectorVerticalPadding)
-        .fluidDropdownSurface(cornerRadius: self.promptSelectorCornerRadius)
+        OverlayChipLabel(metrics: self.chipMetrics, text: self.modeLabel)
+            .overlayChipSurface(
+                self.chipMetrics,
+                isHovered: self.isHoveringModeChip,
+                isDisabled: self.contentState.isProcessing
+            )
     }
 
     private var modeSelectorView: some View {
@@ -3133,48 +3028,18 @@ struct BottomOverlayView: View {
     }
 
     private var promptSelectorTrigger: some View {
-        HStack(spacing: self.layout.showsTopControls ? 7 : 5) {
-            if !self.isPillSize, !self.layout.showsTopControls, let promptSelectorIconName = self.promptSelectorIconName {
-                Image(systemName: promptSelectorIconName)
-                    .font(.fluidSystem(size: max(self.promptSelectorFontSize - 1, 9), weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
-            }
-            Text(self.promptSelectorDisplayLabel)
-                .help(self.selectedPromptLabel)
-                .accessibilityLabel(self.selectedPromptLabel)
-                .font(.fluidSystem(size: self.promptSelectorFontSize, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if self.isAppPromptOverrideActive {
-                Text("App")
-                    .font(.fluidSystem(size: max(self.promptSelectorFontSize - 2, 8), weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule()
-                            .fill(Color.white.opacity(0.15))
-                    )
-            }
-            Image(systemName: "chevron.down")
-                .font(.fluidSystem(size: max(self.promptSelectorFontSize - 1, 8), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, self.promptSelectorVerticalPadding)
-        .frame(
-            width: self.layout.showsTopControls ? self.promptSelectorTriggerMaxWidth : nil,
-            alignment: .trailing
+        let isInteractive = self.isPromptSelectableMode && !self.contentState.isProcessing
+        return OverlayChipLabel(
+            metrics: self.chipMetrics,
+            systemImage: self.isPillSize ? nil : self.promptSelectorIconName,
+            text: self.promptSelectorDisplayLabel,
+            badge: self.isAppPromptOverrideActive ? "App" : nil
         )
         .help(self.selectedPromptLabel)
-        .background(
-            RoundedRectangle(cornerRadius: self.promptSelectorCornerRadius, style: .continuous)
-                .fill(
-                    self.isHoveringPromptChip && self.isPromptSelectableMode && !self.contentState.isProcessing
-                        ? Color.white.opacity(0.10)
-                        : Color.clear
-                )
+        .overlayChipSurface(
+            self.chipMetrics,
+            isHovered: self.isHoveringPromptChip && isInteractive,
+            isDisabled: !isInteractive
         )
         .overlay(alignment: .top) {
             if self.isHoveringPromptChip, self.isPromptSelectableMode, !self.contentState.isProcessing, !self.isPillSize {
@@ -3226,7 +3091,6 @@ struct BottomOverlayView: View {
                     }
             } else {
                 self.promptSelectorTrigger
-                    .opacity(0.6)
                     .onHover { _ in
                         self.isHoveringPromptChip = false
                     }
@@ -3236,16 +3100,21 @@ struct BottomOverlayView: View {
 
     private var actionsSelectorTrigger: some View {
         let actionsDisabled = self.contentState.isProcessing
-        return HStack(spacing: 0) {
-            Image(systemName: "ellipsis")
-                .font(.fluidSystem(size: 16, weight: .bold))
-                .foregroundStyle(.white.opacity(actionsDisabled ? 0.3 : 0.78))
-        }
-        .frame(width: 32, height: 32)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(self.isHoveringActionsChip && !actionsDisabled ? Color.white.opacity(0.1) : Color.clear)
-        )
+        return Image(systemName: "ellipsis")
+            .font(.fluidSystem(size: self.chipMetrics.iconSize + 1, weight: .bold))
+            .frame(width: self.chipMetrics.height, height: self.chipMetrics.height - self.chipMetrics.verticalPadding * 2)
+            .overlayChipSurface(
+                OverlayChipMetrics(
+                    fontSize: self.chipMetrics.fontSize,
+                    iconSize: self.chipMetrics.iconSize,
+                    horizontalPadding: 0,
+                    verticalPadding: self.chipMetrics.verticalPadding,
+                    spacing: 0,
+                    maxLabelWidth: 0
+                ),
+                isHovered: self.isHoveringActionsChip && !actionsDisabled,
+                isDisabled: actionsDisabled
+            )
         .overlay(alignment: .top) {
             if self.isHoveringActionsChip, !actionsDisabled {
                 Text("Actions")
@@ -3295,34 +3164,6 @@ struct BottomOverlayView: View {
                 )
                 BottomOverlayActionsMenuController.shared.toggleFromTap()
             }
-    }
-
-    private var settingsChip: some View {
-        let disabled = false
-        return HStack(spacing: 0) {
-            Image(systemName: "gearshape")
-                .font(.fluidSystem(size: max(self.promptSelectorFontSize + 1, 10), weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, self.promptSelectorVerticalPadding)
-        .background(
-            self.chipBackground(
-                isHovered: self.isHoveringSettingsChip,
-                disabled: disabled
-            )
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            self.isHoveringSettingsChip = hovering
-        }
-        .onTapGesture {
-            self.closePromptMenu()
-            self.closeModeMenu()
-            self.closeActionsMenu()
-            self.contentState.onOpenPreferencesRequested?()
-        }
-        .help("Open Preferences")
     }
 
     private func failureIconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
@@ -3421,7 +3262,7 @@ struct BottomOverlayView: View {
             detail: TextDeliveryFailure.userFacingDetail(forMessage: message),
             transcript: self.contentState.textDeliveryFailureTranscript,
             fontSize: self.layout.transFontSize,
-            compact: self.layout.usesFixedCanvas,
+            compact: false,
             maxWidth: self.previewMaxWidth
         ) {
             self.contentState.clearTextDeliveryFailure()
@@ -3474,227 +3315,77 @@ struct BottomOverlayView: View {
 
     var body: some View {
         VStack(spacing: max(4, self.layout.vPadding / 2)) {
-            if self.layout.showsTopControls, !self.isCompactControls {
-                HStack {
-                    Spacer(minLength: 4)
-                    self.settingsChip
-                }
-                .padding(.horizontal, self.layout.hPadding)
-            }
-
             VStack(spacing: self.layout.vPadding / 2) {
                 if self.shouldReservePreviewArea {
-                    if self.layout.usesFixedCanvas {
-                        // Transcription text area (fixed-height in large mode)
-                        Group {
-                            if self.shouldSuppressPreviewDuringRelease {
-                                Color.clear
-                            } else if self.shouldShowTextDeliveryFailure {
-                                self.textDeliveryFailureView
-                            } else if self.shouldShowAIProcessingFailure {
-                                self.aiProcessingFailureView
-                            } else if self.shouldShowProcessingPreview {
-                                self.scrollablePreviewText(self.processingPreviewText)
-                            } else if self.shouldShowProcessingStatus {
-                                // Temporarily hidden; the waveform sweep carries processing state.
-                                // ShimmerText(
-                                //     text: self.processingStatusText,
-                                //     color: self.modeColor,
-                                //     font: .fluidSystem(size: self.layout.transFontSize, weight: .medium)
-                                // )
-                                // .id(self.processingStatusCycleID)
-                                // .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                                Color.clear
-                            } else if self.contentState.isProcessing {
-                                Color.clear
-                            } else if self.hasTranscription {
-                                let previewText = self.transcriptionPreviewText
-                                if !previewText.isEmpty {
-                                    ScrollViewReader { proxy in
-                                        ScrollView(.vertical, showsIndicators: false) {
-                                            Text(previewText)
-                                                .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
-                                                .foregroundStyle(.white.opacity(0.96))
-                                                .multilineTextAlignment(.leading)
-                                                .lineLimit(nil)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                            Color.clear.frame(height: 1).id("bottom")
-                                        }
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                        .clipped()
-                                        .onAppear {
-                                            DispatchQueue.main.async {
-                                                proxy.scrollTo("bottom", anchor: .bottom)
-                                            }
-                                        }
-                                        .onChange(of: previewText) { _, _ in
-                                            DispatchQueue.main.async {
-                                                proxy.scrollTo("bottom", anchor: .bottom)
-                                            }
-                                        }
-                                    }
+                    Group {
+                        if self.shouldSuppressPreviewDuringRelease {
+                            Color.clear
+                        } else if self.shouldShowTextDeliveryFailure {
+                            self.textDeliveryFailureView
+                        } else if self.shouldShowAIProcessingFailure {
+                            self.aiProcessingFailureView
+                        } else if self.shouldShowProcessingPreview {
+                            self.dynamicPreviewText(self.processingPreviewText)
+                        } else if self.hasTranscription && !self.contentState.isProcessing {
+                            let previewText = self.transcriptionPreviewText
+                            if !previewText.isEmpty {
+                                if self.settings.overlaySize == .small {
+                                    Text(previewText)
+                                        .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.96))
+                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(1)
+                                        .truncationMode(.head)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, max(2, self.transcriptionVerticalPadding - 1))
+                                } else {
+                                    Text(previewText)
+                                        .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.96))
+                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(Int(self.previewMaxHeight / max(self.estimatedPreviewLineHeight, 1)))
+                                        .truncationMode(.head)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(width: self.previewMaxWidth, alignment: .leading)
+                                        .padding(.vertical, self.transcriptionVerticalPadding)
                                 }
-                            } else {
-                                Color.clear
                             }
+                        } else if self.shouldShowProcessingStatus {
+                            // Temporarily hidden; the waveform sweep carries processing state.
+                            // ShimmerText(
+                            //     text: self.processingStatusText,
+                            //     color: self.modeColor,
+                            //     font: .fluidSystem(size: self.layout.transFontSize, weight: .medium)
+                            // )
+                            // .id(self.processingStatusCycleID)
+                            Color.clear
+                        } else if self.contentState.isProcessing {
+                            Color.clear
+                        } else {
+                            Color.clear
                         }
-                        .padding(.vertical, self.transcriptionVerticalPadding)
-                        .frame(
-                            maxWidth: .infinity,
-                            minHeight: self.previewMaxHeight,
-                            maxHeight: self.previewMaxHeight,
-                            alignment: .topLeading
-                        )
-                    } else {
-                        // Original dynamic preview behavior for small/medium
-                        Group {
-                            if self.shouldSuppressPreviewDuringRelease {
-                                Color.clear
-                            } else if self.shouldShowTextDeliveryFailure {
-                                self.textDeliveryFailureView
-                            } else if self.shouldShowAIProcessingFailure {
-                                self.aiProcessingFailureView
-                            } else if self.shouldShowProcessingPreview {
-                                self.dynamicPreviewText(self.processingPreviewText)
-                            } else if self.hasTranscription && !self.contentState.isProcessing {
-                                let previewText = self.transcriptionPreviewText
-                                if !previewText.isEmpty {
-                                    if self.settings.overlaySize == .small {
-                                        Text(previewText)
-                                            .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.96))
-                                            .multilineTextAlignment(.leading)
-                                            .lineLimit(1)
-                                            .truncationMode(.head)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(.vertical, max(2, self.transcriptionVerticalPadding - 1))
-                                    } else {
-                                        Text(previewText)
-                                            .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.96))
-                                            .multilineTextAlignment(.leading)
-                                            .lineLimit(Int(self.previewMaxHeight / max(self.estimatedPreviewLineHeight, 1)))
-                                            .truncationMode(.head)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                            .frame(width: self.previewMaxWidth, alignment: .leading)
-                                            .padding(.vertical, self.transcriptionVerticalPadding)
-                                    }
-                                }
-                            } else if self.shouldShowProcessingStatus {
-                                // Temporarily hidden; the waveform sweep carries processing state.
-                                // ShimmerText(
-                                //     text: self.processingStatusText,
-                                //     color: self.modeColor,
-                                //     font: .fluidSystem(size: self.layout.transFontSize, weight: .medium)
-                                // )
-                                // .id(self.processingStatusCycleID)
-                                Color.clear
-                            } else if self.contentState.isProcessing {
-                                Color.clear
-                            } else {
-                                Color.clear
-                            }
+                    }
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .preference(key: DynamicPreviewHeightPreferenceKey.self, value: proxy.size.height)
                         }
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear
-                                    .preference(key: DynamicPreviewHeightPreferenceKey.self, value: proxy.size.height)
-                            }
-                        )
-                        .frame(
-                            maxWidth: self.previewMaxWidth,
-                            minHeight: self.effectiveDynamicPreviewMinHeight,
-                            maxHeight: self.effectiveDynamicPreviewLockedHeight
-                        )
-                        .animation(
-                            self.reduceMotion ? nil : BottomOverlayWindowController.growthAnimation,
-                            value: self.dynamicPreviewResizeBucket
-                        )
-                    }
-                }
-
-                // Waveform + Mode label row
-                HStack(spacing: self.isPillSize ? 4 : self.layout.hPadding / 1.5) {
-                    if !self.layout.showsTopControls {
-                        self.leadingAppContextView
-                    }
-
-                    // Waveform visualization
-                    BottomWaveformView(
-                        color: self.modeColor,
-                        layout: self.layout,
-                        visibleBarCount: self.isPillSize && self.showsSpokenSendIndicator ? 6 : nil
                     )
                     .frame(
-                        width: self.isPillSize && self.showsSpokenSendIndicator
-                            ? 32
-                            : self.layout.waveformWidth,
-                        height: self.layout.waveformHeight
+                        maxWidth: self.previewMaxWidth,
+                        minHeight: self.effectiveDynamicPreviewMinHeight,
+                        maxHeight: self.effectiveDynamicPreviewLockedHeight
                     )
-
-                    if self.isPillSize, self.isPillExpanded {
-                        self.promptSelectorView
-                            .fixedSize()
-                            .transition(self.reduceMotion ? .opacity : .pillChip)
-                        if self.showsCloudLanguageSelector {
-                            CloudDictationLanguageSelector()
-                                .fixedSize()
-                        }
-                    }
-
-                    // Compact overlays still need a visible mode because they have no selector.
-                    if self.layout.showsModeLabel, !self.layout.showsTopControls {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(self.modeLabel)
-                                .font(.fluidSystem(size: self.layout.modeFontSize, weight: .semibold))
-                                .foregroundStyle(self.modeColor)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-
-                            if !self.appServices.asr.isAsrReady &&
-                                (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
-                                && self.settings.overlaySize != .small
-                            {
-                                Text("Loading model…")
-                                    .font(.fluidSystem(size: max(self.layout.modeFontSize - 2, 9), weight: .medium))
-                                    .foregroundStyle(.orange.opacity(0.85))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .animation(
-                            self.reduceMotion ? nil : .easeOut(duration: 0.14),
-                            value: self.contentState.spokenSendIndicatorState
-                        )
-                    }
-
-                    if !self.isPillSize, !self.layout.showsTopControls, self.showsCloudLanguageSelector {
-                        CloudDictationLanguageSelector()
-                    }
+                    .animation(
+                        self.reduceMotion ? nil : BottomOverlayWindowController.growthAnimation,
+                        value: self.dynamicPreviewResizeBucket
+                    )
                 }
-                .offset(x: self.waveformHorizontalOffset)
-                .frame(maxWidth: self.isPillSize ? nil : .infinity, alignment: .center)
-                .overlay(alignment: .leading) {
-                    if self.layout.showsTopControls {
-                        HStack(spacing: 8) {
-                            self.leadingAppContextView
-                            if self.isCompactControls, self.showsCloudLanguageSelector {
-                                CloudDictationLanguageSelector()
-                            }
-                        }
-                    }
-                }
-                .overlay(alignment: .trailing) {
-                    if self.layout.showsTopControls {
-                        HStack(spacing: 4) {
-                            if !self.isCompactControls, self.showsCloudLanguageSelector {
-                                CloudDictationLanguageSelector()
-                            }
-                            self.promptSelectorView
-                            self.actionsSelectorView
-                        }
-                        .offset(x: 6)
-                    }
+
+                if self.layout.showsTopControls {
+                    self.controlRow
+                } else {
+                    self.compactControlRow
                 }
             }
             .padding(.horizontal, self.layout.hPadding)
@@ -3773,10 +3464,7 @@ struct BottomOverlayView: View {
             }
         }
         .frame(
-            width: self.isPillSize
-                ? PillShadowMetrics.canvasWidth
-                : (self.layout.usesFixedCanvas ? self.layout.overlayWidth : self.layout.containerWidth),
-            height: self.overlayFrameHeight,
+            width: self.isPillSize ? PillShadowMetrics.canvasWidth : self.layout.containerWidth,
             alignment: .top
         )
         // Reserve space around the pill so its drop shadow isn't clipped by the (content-sized) window.
@@ -3805,16 +3493,13 @@ struct BottomOverlayView: View {
             self.isHoveringModeChip = false
             self.isHoveringPromptChip = false
             self.isHoveringActionsChip = false
-            self.isHoveringSettingsChip = false
             switch self.contentState.mode {
             case .dictation: self.contentState.promptPickerMode = .dictate
             case .edit, .write, .rewrite: self.contentState.promptPickerMode = .edit
             case .command: break
             }
-            if !self.layout.usesFixedCanvas {
-                self.dynamicPreviewResizeBucket = self.previewResizeBucket(for: self.currentPreviewSizingText)
-                BottomOverlayWindowController.shared.refreshSizeForContent()
-            }
+            self.dynamicPreviewResizeBucket = self.previewResizeBucket(for: self.currentPreviewSizingText)
+            BottomOverlayWindowController.shared.refreshSizeForContent()
         }
         .onChange(of: self.contentState.isProcessing) { _, processing in
             self.processingStatusVisible = processing
@@ -3827,21 +3512,15 @@ struct BottomOverlayView: View {
             self.isHoveringModeChip = false
             self.isHoveringPromptChip = false
             self.isHoveringActionsChip = false
-            self.isHoveringSettingsChip = false
-            if !self.layout.usesFixedCanvas {
-                self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
-            }
+            self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }
         .onChange(of: self.contentState.isAIProcessingFailureVisible) { _, _ in
-            guard !self.layout.usesFixedCanvas else { return }
             self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }
         .onChange(of: self.contentState.isTextDeliveryFailureVisible) { _, _ in
-            guard !self.layout.usesFixedCanvas else { return }
             self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }
         .onChange(of: self.processingStatusVisible) { _, _ in
-            guard !self.layout.usesFixedCanvas else { return }
             self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }
         .onChange(of: self.contentState.isBottomOverlayReleaseTransitioning) { _, transitioning in
@@ -3849,7 +3528,6 @@ struct BottomOverlayView: View {
                 self.frozenDynamicPreviewHeight = nil
                 return
             }
-            guard !self.layout.usesFixedCanvas else { return }
             if transitioning {
                 let measuredHeight = self.dynamicPreviewMeasuredHeight > 0
                     ? self.dynamicPreviewMeasuredHeight
@@ -3861,7 +3539,6 @@ struct BottomOverlayView: View {
             }
         }
         .onPreferenceChange(DynamicPreviewHeightPreferenceKey.self) { measuredHeight in
-            guard !self.layout.usesFixedCanvas else { return }
             guard measuredHeight > 0 else { return }
             self.dynamicPreviewMeasuredHeight = measuredHeight
         }
@@ -3879,7 +3556,6 @@ struct BottomOverlayView: View {
             self.isHoveringModeChip = false
             self.isHoveringPromptChip = false
             self.isHoveringActionsChip = false
-            self.isHoveringSettingsChip = false
         }
         // TODO: Add tap-to-expand for command mode history (future enhancement)
         // .contentShape(Rectangle())
@@ -3888,6 +3564,92 @@ struct BottomOverlayView: View {
         //         NotchOverlayManager.shared.onNotchClicked?()
         //     }
         // }
+    }
+
+    /// Medium and large: app on the left, waveform in the open space, and every
+    /// control in one trailing cluster so they share a baseline, height and style.
+    private var controlRow: some View {
+        HStack(spacing: 0) {
+            self.leadingAppContextView
+            Spacer(minLength: self.controlRowGap)
+            BottomWaveformView(color: self.modeColor, layout: self.layout, visibleBarCount: nil)
+                .frame(width: self.waveformRowWidth, height: self.layout.waveformHeight)
+            Spacer(minLength: self.controlRowGap)
+            HStack(spacing: self.chipMetrics.spacing + 1) {
+                if self.showsCloudLanguageSelector {
+                    CloudDictationLanguageSelector(metrics: self.chipMetrics)
+                        .fixedSize()
+                }
+                self.promptSelectorView
+                self.actionsSelectorView
+            }
+            .fixedSize()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var controlRowGap: CGFloat {
+        self.settings.overlaySize == .large ? 12 : 6
+    }
+
+    /// Pill and small: waveform first, with the mode label and optional chips beside it.
+    private var compactControlRow: some View {
+        HStack(spacing: self.isPillSize ? 4 : self.layout.hPadding / 1.5) {
+            self.leadingAppContextView
+
+            // Waveform visualization
+            BottomWaveformView(
+                color: self.modeColor,
+                layout: self.layout,
+                visibleBarCount: self.isPillSize && self.showsSpokenSendIndicator ? 6 : nil
+            )
+            .frame(
+                width: self.isPillSize
+                    ? (self.showsSpokenSendIndicator ? 32 : self.layout.waveformWidth)
+                    : self.waveformRowWidth,
+                height: self.layout.waveformHeight
+            )
+
+            if self.isPillSize, self.isPillExpanded {
+                self.promptSelectorView
+                    .fixedSize()
+                    .transition(self.reduceMotion ? .opacity : .pillChip)
+                if self.showsCloudLanguageSelector {
+                    CloudDictationLanguageSelector(metrics: self.chipMetrics)
+                        .fixedSize()
+                }
+            }
+
+            // Compact overlays still need a visible mode because they have no selector.
+            if self.layout.showsModeLabel, !self.layout.showsTopControls {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.modeLabel)
+                        .font(.fluidSystem(size: self.layout.modeFontSize, weight: .semibold))
+                        .foregroundStyle(self.modeColor)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                    if !self.appServices.asr.isAsrReady &&
+                        (self.appServices.asr.isLoadingModel || self.appServices.asr.isDownloadingModel)
+                        && self.settings.overlaySize != .small
+                    {
+                        Text("Loading model…")
+                            .font(.fluidSystem(size: max(self.layout.modeFontSize - 2, 9), weight: .medium))
+                            .foregroundStyle(.orange.opacity(0.85))
+                            .lineLimit(1)
+                    }
+                }
+                .animation(
+                    self.reduceMotion ? nil : .easeOut(duration: 0.14),
+                    value: self.contentState.spokenSendIndicatorState
+                )
+            }
+
+            if !self.isPillSize, self.showsCloudLanguageSelector {
+                CloudDictationLanguageSelector(metrics: self.chipMetrics)
+            }
+        }
+        .frame(maxWidth: self.isPillSize ? nil : .infinity, alignment: .center)
     }
 }
 
