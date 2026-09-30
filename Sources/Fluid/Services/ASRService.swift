@@ -6453,10 +6453,11 @@ final class ASRService: ObservableObject {
     ) async throws {
         try Task.checkCancellation()
         if self.isUsingCloudTranscription {
-            let provider = self.transcriptionProvider
-            try await provider.prepare(progressHandler: nil)
-            try Task.checkCancellation()
-            self.isAsrReady = provider.isReady
+            // Readiness for cloud dictation is local: a saved key and a valid frozen configuration.
+            // The request itself reports authentication and availability errors, so validating over
+            // the network here only delays the stop key. Validate connection and onboarding still check.
+            guard self.transcriptionProvider.isReady else { throw CloudTranscriptionError.missingAPIKey }
+            self.isAsrReady = true
             self.modelsExistOnDisk = false
             self.isLoadingModel = false
             self.isDownloadingModel = false
