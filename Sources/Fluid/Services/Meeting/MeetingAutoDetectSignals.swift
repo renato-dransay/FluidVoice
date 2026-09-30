@@ -897,12 +897,15 @@ final class CGWindowSnapshotProvider: WindowSnapshotProviding {
 @MainActor
 final class AXBrowserTabReader: BrowserTabReading {
     private static let messagingTimeoutSeconds: Float = 0.3
+    // JUDGMENT: Vivaldi draws its browser UI as a web page, so the tab's web area sits inside the
+    // UI page's DOM groups, several levels deeper than in Chrome. 14/450 leaves headroom for that
+    // nesting; the messaging timeout and circuit breaker still bound a slow or frozen browser.
     /// Safari nests its web area about six levels below the window (split group, tab group,
     /// groups, scroll area); Chrome and Edge sit shallower. Chrome-side subtrees are skipped by role.
-    private static let maxDepth = 9
+    private static let maxDepth = 14
     private static let maxChildrenPerLevel = 24
     /// Upper bound on elements visited per read; keeps a sprawling window from stalling the poll loop.
-    private static let maxVisitedElements = 300
+    private static let maxVisitedElements = 450
     private nonisolated static let skippedRoles: Set<String> = ["AXToolbar", "AXMenuBar", "AXMenu", "AXPopUpButton", "AXButton", "AXTextField", "AXStaticText", "AXImage"]
     private static let circuitBreakerThreshold = 2
 
@@ -967,35 +970,55 @@ final class AXBrowserTabReader: BrowserTabReading {
 
         var timedOut = false
         var budget = Self.maxVisitedElements
-        if let found = self.findWebAreaURL(root: windowElement, depth: 0, budget: &budget, timedOut: &timedOut) {
+        var fallback: BrowserTabURL?
+        if let found = self.findWebAreaURL(root: windowElement, depth: 0, budget: &budget, timedOut: &timedOut, fallback: &fallback) {
             return .found(found)
+        }
+        if let fallback {
+            return .found(fallback)
         }
         return timedOut ? .timedOut : .notFound("document=\(document == nil ? "nil" : "set") webarea=miss")
     }
 
-    /// Depth-first over container roles only; each level checks its own children for a web area first.
-    private nonisolated static func findWebAreaURL(root: AXUIElement, depth: Int, budget: inout Int, timedOut: inout Bool) -> BrowserTabURL? {
+    /// Depth-first over container roles only; each level checks its own children for a web area
+    /// first. Returns the first in-call page. A web area without a web URL (Vivaldi's own
+    /// `chrome-extension://` UI page, `about:blank`) is searched as a container, ahead of its
+    /// siblings, because the tab's web area is nested inside it. The first ordinary web page is
+    /// kept in `fallback` so the caller can still report "found, not in call".
+    private nonisolated static func findWebAreaURL(
+        root: AXUIElement,
+        depth: Int,
+        budget: inout Int,
+        timedOut: inout Bool,
+        fallback: inout BrowserTabURL?
+    ) -> BrowserTabURL? {
         guard depth < self.maxDepth, budget > 0 else { return nil }
         var childrenValue: CFTypeRef?
         let status = AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenValue)
         if status == .cannotComplete { timedOut = true; return nil }
         guard status == .success, let children = childrenValue as? [AXUIElement] else { return nil }
 
+        var hostPages: [AXUIElement] = []
         var containers: [AXUIElement] = []
         for child in children.prefix(Self.maxChildrenPerLevel) {
             budget -= 1
             guard budget > 0 else { return nil }
             let role = self.stringAttribute(child, attribute: kAXRoleAttribute as String) ?? ""
             if role == "AXWebArea" {
-                if let urlString = self.stringAttribute(child, attribute: "AXURL"), let url = self.parse(urlString) {
+                guard let url = self.stringAttribute(child, attribute: "AXURL").flatMap(self.parse) else {
+                    hostPages.append(child)
+                    continue
+                }
+                if MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) {
                     return url
                 }
+                if fallback == nil { fallback = url }
                 continue
             }
             if !Self.skippedRoles.contains(role) { containers.append(child) }
         }
-        for child in containers {
-            if let found = self.findWebAreaURL(root: child, depth: depth + 1, budget: &budget, timedOut: &timedOut) {
+        for child in hostPages + containers {
+            if let found = self.findWebAreaURL(root: child, depth: depth + 1, budget: &budget, timedOut: &timedOut, fallback: &fallback) {
                 return found
             }
             if timedOut || budget <= 0 { return nil }
@@ -1012,8 +1035,13 @@ final class AXBrowserTabReader: BrowserTabReading {
         return nil
     }
 
-    private nonisolated static func parse(_ urlString: String) -> BrowserTabURL? {
-        guard let components = URLComponents(string: urlString), let host = components.host else { return nil }
+    /// Only http(s) pages count as tabs. Browser-internal pages (`vivaldi://`, `chrome://`,
+    /// `chrome-extension://` UI pages, `about:blank`) return nil so the search looks past them.
+    nonisolated static func parse(_ urlString: String) -> BrowserTabURL? {
+        guard let components = URLComponents(string: urlString),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = components.host, !host.isEmpty
+        else { return nil }
         return BrowserTabURL(host: host, path: components.path)
     }
 }

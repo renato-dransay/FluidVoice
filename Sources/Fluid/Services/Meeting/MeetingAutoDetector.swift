@@ -79,6 +79,14 @@ final class MeetingAutoDetector {
         var windowEvidenceWindowID: UInt32?
         var hasLiveWindow = false
         var windowLostAt: Date?
+        /// Browser tier only: which sources currently see the in-call page. Evidence is lost only
+        /// when every source misses, so an Accessibility miss cannot flap a title-backed episode.
+        var browserEvidenceSources: Set<BrowserEvidenceSource> = []
+    }
+
+    private enum BrowserEvidenceSource: String, Hashable {
+        case url
+        case title
     }
 
     private enum AudioEvidenceSource: Equatable {
@@ -196,10 +204,16 @@ final class MeetingAutoDetector {
             guard self.isCurrentRun(runGeneration) else { return }
         }
         if self.shouldCollectEvidence(at: now) {
-            if self.isNativeDetectionEnabled() {
-                let nativePIDs = Set(self.records.filter { $0.value.tier == .nativeTier1 }.keys)
+            let nativePIDs = self.isNativeDetectionEnabled() ? Set(self.records.filter { $0.value.tier == .nativeTier1 }.keys) : []
+            let browserPIDs = self.isBrowserDetectionEnabled() ? Set(self.records.filter { $0.value.tier == .browserTier2 }.keys) : []
+            if !nativePIDs.isEmpty || !browserPIDs.isEmpty {
+                // One window-list query serves both tiers; each handler only reads its own records.
+                let snapshots = self.windowSnapshotProvider.snapshot(interestPIDs: nativePIDs.union(browserPIDs))
                 if !nativePIDs.isEmpty {
-                    self.handleWindowSnapshot(self.windowSnapshotProvider.snapshot(interestPIDs: nativePIDs), at: now)
+                    self.handleNativeWindowSnapshot(snapshots, at: now)
+                }
+                if !browserPIDs.isEmpty {
+                    self.handleBrowserWindowSnapshot(snapshots, at: now)
                 }
             }
             if self.isBrowserDetectionEnabled() {
@@ -405,9 +419,19 @@ final class MeetingAutoDetector {
         return delta >= -5 && delta <= Self.frontmostLeadSeconds
     }
 
-    // MARK: - Window evidence (Tier 1)
+    // MARK: - Window evidence
 
+    /// Test and caller entry point: routes one snapshot to both tiers.
     func handleWindowSnapshot(_ snapshots: [WindowSnapshot], at now: Date) {
+        self.handleNativeWindowSnapshot(snapshots, at: now)
+        if self.isBrowserDetectionEnabled() {
+            self.handleBrowserWindowSnapshot(snapshots, at: now)
+        }
+    }
+
+    /// Tier 1. The Zoom title-enrichment task re-enters here with only Zoom's windows, so this
+    /// must never touch browser records (that partial snapshot would read as a browser title miss).
+    private func handleNativeWindowSnapshot(_ snapshots: [WindowSnapshot], at now: Date) {
         for pid in self.records.keys where self.records[pid]?.tier == .nativeTier1 {
             guard let bundleIdentifier = self.records[pid]?.bundleIdentifier else { continue }
             let ownedWindows = snapshots.filter { $0.processID == pid && $0.layer == 0 }
@@ -437,7 +461,7 @@ final class MeetingAutoDetector {
                         return
                     }
                     self.publishHealth(.ready)
-                    self.handleWindowSnapshot(
+                    self.handleNativeWindowSnapshot(
                         ownedWindows.map { snapshot in
                             snapshot.windowID == unreadableWindow.windowID
                                 ? WindowSnapshot(processID: snapshot.processID, windowID: snapshot.windowID, title: title, layer: snapshot.layer)
@@ -489,25 +513,71 @@ final class MeetingAutoDetector {
     // MARK: - Browser evidence (Tier 2)
 
     func handleBrowserTabURL(_ url: BrowserTabURL?, pid: Int32, bundleIdentifier: String, at now: Date) {
-        guard let url, MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) else {
-            // Unreadable AXURL (nil) or the tab navigated off an in-call URL: fail closed and,
-            // if this record had live evidence, start the loss clock so the episode can end.
-            if self.records[pid]?.hasLiveWindow == true {
-                self.records[pid]?.hasLiveWindow = false
-                if self.records[pid]?.windowLostAt == nil {
-                    self.records[pid]?.windowLostAt = now
+        let inCallURL = url.flatMap { MeetingInCallURLMatcher.isInCallURL(host: $0.host, path: $0.path) ? $0 : nil }
+        self.applyBrowserEvidence(inCallURL, source: .url, pid: pid, bundleIdentifier: bundleIdentifier, at: now)
+    }
+
+    /// Browser tier title evidence needs Screen Recording (CG redacts titles without it) but no
+    /// Accessibility trust, so detection still works when the AX URL read fails.
+    private func handleBrowserWindowSnapshot(_ snapshots: [WindowSnapshot], at now: Date) {
+        for pid in self.records.keys where self.records[pid]?.tier == .browserTier2 {
+            guard let record = self.records[pid] else { continue }
+            let rooms = snapshots
+                .filter { $0.processID == pid && $0.layer == 0 }
+                .compactMap { $0.title.flatMap(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle:)) }
+            // Stay on the room already backing the evidence; otherwise CG order is front-to-back.
+            let room = rooms.first { Self.browserEvidenceKey($0) == record.windowEvidenceKey } ?? rooms.first
+            self.applyBrowserEvidence(room, source: .title, pid: pid, bundleIdentifier: record.bundleIdentifier, at: now)
+        }
+    }
+
+    private static func browserEvidenceKey(_ url: BrowserTabURL) -> String {
+        "url:\(url.host)\(url.path)"
+    }
+
+    /// Single writer for browser-tier window evidence. Title and URL evidence for the same room
+    /// share one canonical `url:` key, so they back one episode and one automatic target.
+    private func applyBrowserEvidence(
+        _ evidence: BrowserTabURL?,
+        source: BrowserEvidenceSource,
+        pid: Int32,
+        bundleIdentifier: String,
+        at now: Date
+    ) {
+        guard var record = self.records[pid] else { return }
+        // The focused-tab URL owns the key when both sources are live. A title for another Meet
+        // window never re-keys live evidence (that would mint a second episode and prompt); it
+        // counts as this source missing the current room instead.
+        let usableEvidence = evidence.flatMap { candidate in
+            !record.hasLiveWindow || source == .url || record.windowEvidenceKey == Self.browserEvidenceKey(candidate) ? candidate : nil
+        }
+        guard let evidence = usableEvidence else {
+            // Unreadable AXURL (nil), no matching title, or the tab navigated off an in-call URL:
+            // fail closed and, once no source sees the call, start the loss clock.
+            record.browserEvidenceSources.remove(source)
+            if record.browserEvidenceSources.isEmpty, record.hasLiveWindow {
+                record.hasLiveWindow = false
+                if record.windowLostAt == nil {
+                    record.windowLostAt = now
                     DebugLogger.shared.log("window-evidence-lost bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
                 }
             }
+            self.records[pid] = record
             return
         }
-        let wasLiveWindow = self.records[pid]?.hasLiveWindow == true
-        self.records[pid]?.windowEvidenceAt = now
-        self.records[pid]?.windowEvidenceKey = "url:\(url.host)\(url.path)"
-        self.records[pid]?.hasLiveWindow = true
-        self.records[pid]?.windowLostAt = nil
+        let key = Self.browserEvidenceKey(evidence)
+        let wasLiveWindow = record.hasLiveWindow
+        if record.windowEvidenceKey != key {
+            record.browserEvidenceSources = []
+        }
+        record.browserEvidenceSources.insert(source)
+        record.windowEvidenceAt = now
+        record.windowEvidenceKey = key
+        record.hasLiveWindow = true
+        record.windowLostAt = nil
+        self.records[pid] = record
         if !wasLiveWindow {
-            DebugLogger.shared.log("window-evidence-found bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
+            DebugLogger.shared.log("window-evidence-found source=\(source.rawValue) bundle=\(bundleIdentifier)", source: "MeetingAutoDetector")
         }
         self.attemptConfirm(pid: pid, at: now)
     }
@@ -640,7 +710,22 @@ final class MeetingAutoDetector {
 
     func resolvedTarget(for episodeID: UUID) -> ResolvedTarget? {
         guard let episode = self.episodesByKey.values.first(where: { $0.id == episodeID }) else { return nil }
-        return ResolvedTarget(bundleIdentifier: episode.bundleIdentifier, pid: episode.pid, windowID: episode.windowID)
+        return self.captureTarget(bundleIdentifier: episode.bundleIdentifier, pid: episode.pid, windowID: episode.windowID)
+    }
+
+    // JUDGMENT: Chromium renders web-app audio in the host browser's audio-service helper, whose
+    // responsible process is the browser, while the shim (`app_mode_loader`) is launched
+    // separately. ScreenCaptureKit attributes app audio by responsible process, so capturing the
+    // shim would record silence. When the host is not armed, keep the shim so Start fails closed.
+    /// Maps an installed web app's shim to its host browser for capture. The prompt still names
+    /// the web app; only the audio source changes.
+    private func captureTarget(bundleIdentifier: String, pid: Int32, windowID: UInt32?) -> ResolvedTarget {
+        guard let host = MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: bundleIdentifier),
+              let hostPID = self.records.values.filter({ $0.bundleIdentifier == host }).map(\.pid).min()
+        else {
+            return ResolvedTarget(bundleIdentifier: bundleIdentifier, pid: pid, windowID: windowID)
+        }
+        return ResolvedTarget(bundleIdentifier: host, pid: hostPID, windowID: nil)
     }
 
     private func publishAutomaticTarget() {
@@ -657,7 +742,7 @@ final class MeetingAutoDetector {
         }
         // Ambiguity requires an explicit source, never arbitrary dictionary order.
         let target = eligible.count == 1 ? eligible.first.map {
-            ResolvedTarget(bundleIdentifier: $0.bundleIdentifier, pid: $0.pid, windowID: $0.windowID)
+            self.captureTarget(bundleIdentifier: $0.bundleIdentifier, pid: $0.pid, windowID: $0.windowID)
         } : nil
         guard target != self.automaticTarget else { return }
         self.automaticTarget = target

@@ -367,7 +367,7 @@ struct MeetingRecordingSettingsSheet: View {
                     Divider()
                     MeetingAdaptiveSetupRow(
                         title: "Detect meetings automatically",
-                        detail: "Offer to record Zoom, Teams, and Webex meetings. Recording always starts with you.",
+                        detail: "Offer to record Zoom, Teams, Webex, and Google Meet calls. Recording always starts with you.",
                         trailingSwitch: true
                     ) {
                         Toggle("Detect meetings automatically", isOn: self.$draft.autoDetectEnabled)
@@ -381,7 +381,7 @@ struct MeetingRecordingSettingsSheet: View {
                         Divider()
                         MeetingAdaptiveSetupRow(
                             title: "Include browser meetings",
-                            detail: "Check the frontmost tab for supported meeting sites. Tab addresses are never stored or sent.",
+                            detail: "Check the frontmost tab and window titles in Chrome, Safari, Arc, Edge, Brave, and Vivaldi for supported meeting sites. Addresses and titles are never stored or sent.",
                             trailingSwitch: true
                         ) {
                             Toggle("Include browser meetings", isOn: self.$draft.browserDetectionEnabled)

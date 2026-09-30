@@ -1151,6 +1151,204 @@ final class MeetingAutoDetectorTests: XCTestCase {
         XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.google.Chrome.app.abcdef"), .browserTier2)
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.tinyspeck.slackmacgap"))
         XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.apple.FaceTime"))
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.vivaldi.Vivaldi"), .browserTier2)
+        XCTAssertEqual(MeetingAppRegistry.tier(forBundleIdentifier: "com.vivaldi.Vivaldi.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"), .browserTier2)
+        XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.vivaldi.Vivaldi.application"))
+        XCTAssertNil(MeetingAppRegistry.tier(forBundleIdentifier: "com.vivaldi.Vivaldi.app."))
+    }
+
+    func testRegistryMapsPWABundleToHostBrowser() {
+        XCTAssertEqual(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.vivaldi.Vivaldi.app.kjgf"), "com.vivaldi.Vivaldi")
+        XCTAssertEqual(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.google.Chrome.app.abc"), "com.google.Chrome")
+        XCTAssertEqual(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.microsoft.edgemac.app.abc"), "com.microsoft.edgemac")
+        XCTAssertNil(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.vivaldi.Vivaldi"))
+        XCTAssertNil(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.google.Chrome"))
+        XCTAssertNil(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "us.zoom.xos"))
+        XCTAssertNil(MeetingAppRegistry.hostBrowserBundleIdentifier(forPWABundleIdentifier: "com.example.app.abc"))
+    }
+
+    func testMeetWindowTitleMatcherAcceptsRoomTitlesAndRejectsOthers() {
+        let room = BrowserTabURL(host: "meet.google.com", path: "/abc-defg-hij")
+        for title in ["Meet – abc-defg-hij", "Meet – abc-defg-hij - Vivaldi", "Meet - abc-defg-hij - Google Chrome", "Meet — abc-defg-hij"] {
+            XCTAssertEqual(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle: title), room, title)
+        }
+        for title in ["Google Meet", "Meet", "Meet – landing", "Meet – ABC-DEFG-HIJ", "Meet – abc-defg-hij-klm", "Zoom Meeting - Google Chrome", "Meeting | Microsoft Teams", "YouTube - Vivaldi", ""] {
+            XCTAssertNil(MeetingInCallTitleMatcher.inCallURL(fromWindowTitle: title), title)
+        }
+    }
+
+    func testBrowserTabURLParseRequiresWebScheme() {
+        XCTAssertEqual(AXBrowserTabReader.parse("https://meet.google.com/abc-defg-hij"), BrowserTabURL(host: "meet.google.com", path: "/abc-defg-hij"))
+        XCTAssertEqual(AXBrowserTabReader.parse("http://zoom.us/wc/123"), BrowserTabURL(host: "zoom.us", path: "/wc/123"))
+        for url in ["chrome-extension://mpognobbkildjkofajifpdfhcoklimli/browser.html", "vivaldi://startpage", "chrome://newtab/", "about:blank", "file:///tmp/a.html", "not a url"] {
+            XCTAssertNil(AXBrowserTabReader.parse(url), url)
+        }
+    }
+
+    // MARK: - Browser window-title evidence (Accessibility-free)
+
+    func testMeetWindowTitleConfirmsVivaldiTabWithoutURL() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleBrowserTabURL(nil, pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij - Vivaldi", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.prompts.first?.tier, .browserTier2)
+        XCTAssertEqual(h.prompts.first?.bundleIdentifier, "com.vivaldi.Vivaldi")
+        XCTAssertEqual(h.prompts.first?.serviceName, "Google Meet")
+        XCTAssertEqual(h.detector.automaticTarget, .init(bundleIdentifier: "com.vivaldi.Vivaldi", pid: 9, windowID: nil))
+    }
+
+    func testMeetWindowTitleConfirmsPWAShim() {
+        let h = DetectorHarness()
+        let shim = "com.vivaldi.Vivaldi.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: shim, processID: 41), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 41, windowID: 3, title: "Meet – abc-defg-hij", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.prompts.first?.bundleIdentifier, shim)
+        XCTAssertEqual(h.prompts.first?.serviceName, "Google Meet")
+    }
+
+    func testPWAEpisodeResolvesCaptureTargetToHostBrowser() throws {
+        let h = DetectorHarness()
+        let shim = "com.vivaldi.Vivaldi.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"
+        h.detector.handleBackfill([
+            .init(kind: .launched, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 40),
+            .init(kind: .launched, bundleIdentifier: shim, processID: 41),
+        ])
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: shim, processID: 41), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 41, windowID: 3, title: "Meet – abc-defg-hij", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        let prompt = try XCTUnwrap(h.prompts.first)
+        XCTAssertEqual(prompt.bundleIdentifier, shim, "the prompt still names the web app")
+        let host = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "com.vivaldi.Vivaldi", pid: 40, windowID: nil)
+        XCTAssertEqual(h.detector.resolvedTarget(for: prompt.episodeID), host)
+        XCTAssertEqual(h.detector.automaticTarget, host)
+    }
+
+    func testPWAEpisodeKeepsShimWhenHostNotArmed() throws {
+        let h = DetectorHarness()
+        let shim = "com.google.Chrome.app.abcdef"
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: shim, processID: 41), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 41, windowID: 3, title: "Meet – abc-defg-hij", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        let prompt = try XCTUnwrap(h.prompts.first)
+        XCTAssertEqual(h.detector.resolvedTarget(for: prompt.episodeID), .init(bundleIdentifier: shim, pid: 41, windowID: nil))
+    }
+
+    func testTitleAndURLForSameRoomShareOneEpisode() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij - Vivaldi", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        h.advance(2)
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij"), pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij - Vivaldi", layer: 0)], at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertNotNil(h.detector.automaticTarget)
+    }
+
+    func testURLMissDoesNotEndTitleSustainedEpisode() {
+        let h = DetectorHarness()
+        let title = [WindowSnapshot(processID: 9, windowID: 1, title: "Meet – abc-defg-hij - Vivaldi", layer: 0)]
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleWindowSnapshot(title, at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        for _ in 0..<31 {
+            h.advance(2)
+            h.detector.handleBrowserTabURL(nil, pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+            h.detector.handleWindowSnapshot(title, at: h.clock.now())
+            h.detector.tick(at: h.clock.now())
+        }
+        XCTAssertTrue(h.invalidated.isEmpty)
+        XCTAssertNotNil(h.detector.automaticTarget)
+    }
+
+    func testTitleMissDoesNotEndURLSustainedEpisode() {
+        let h = DetectorHarness()
+        let url = BrowserTabURL(host: "meet.google.com", path: "/abc-defg-hij")
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.google.Chrome", processID: 8), at: h.clock.now())
+        h.detector.handleBrowserTabURL(url, pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        for _ in 0..<31 {
+            h.advance(2)
+            h.detector.handleWindowSnapshot([.init(processID: 8, windowID: 1, title: "Untitled", layer: 0)], at: h.clock.now())
+            h.detector.handleBrowserTabURL(url, pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+            h.detector.tick(at: h.clock.now())
+        }
+        XCTAssertTrue(h.invalidated.isEmpty)
+        XCTAssertNotNil(h.detector.automaticTarget)
+    }
+
+    func testBothSourcesLostEndsEpisode() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij - Vivaldi", layer: 0)], at: h.clock.now())
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij"), pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        h.detector.handleBrowserTabURL(nil, pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+        XCTAssertNotNil(h.detector.automaticTarget, "one source still sees the call")
+        h.detector.handleWindowSnapshot([], at: h.clock.now())
+        XCTAssertNil(h.detector.automaticTarget)
+        h.advance(61)
+        h.detector.tick(at: h.clock.now())
+        XCTAssertEqual(h.invalidated, [h.prompts[0].episodeID])
+    }
+
+    func testTitleDoesNotRekeyLiveURLEvidence() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij"), pid: 9, bundleIdentifier: "com.vivaldi.Vivaldi", at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        let target = h.detector.automaticTarget
+        XCTAssertNotNil(target)
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 2, title: "Meet – xyz-wxyz-xyz - Vivaldi", layer: 0)], at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        XCTAssertEqual(h.detector.automaticTarget, target)
+    }
+
+    func testTitleOnlyEvidenceForAnotherRoomCountsAsLoss() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1)
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 2, title: "Meet – xyz-wxyz-xyz", layer: 0)], at: h.clock.now())
+        XCTAssertNil(h.detector.automaticTarget, "a different room must not silently keep the old episode alive")
+    }
+
+    func testGenericBrowserTitlesNeverConfirm() {
+        for title in ["Zoom Meeting - Vivaldi", "Meeting | Microsoft Teams", "YouTube - Vivaldi", "Google Meet"] {
+            let h = DetectorHarness()
+            h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+            h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: title, layer: 0)], at: h.clock.now())
+            h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+            XCTAssertTrue(h.prompts.isEmpty, title)
+        }
+    }
+
+    func testNativeOnlySnapshotDoesNotClearBrowserURLEvidence() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.google.Chrome", processID: 8), at: h.clock.now())
+        h.detector.handleBrowserTabURL(.init(host: "meet.google.com", path: "/abc-defg-hij"), pid: 8, bundleIdentifier: "com.google.Chrome", at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertNotNil(h.detector.automaticTarget)
+        h.detector.handleWindowSnapshot([.init(processID: 100, windowID: 900, title: "Zoom Workplace", layer: 0)], at: h.clock.now())
+        XCTAssertNotNil(h.detector.automaticTarget)
+    }
+
+    func testBrowserTitleEvidenceRequiresBrowserToggle() {
+        let h = DetectorHarness()
+        h.detector.handleWorkspaceEvent(.init(kind: .activated, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 9), at: h.clock.now())
+        h.browserEnabled = false
+        h.detector.handleWindowSnapshot([.init(processID: 9, windowID: 1, title: "Meet – abc-defg-hij", layer: 0)], at: h.clock.now())
+        h.detector.handleMicEdge(.init(isActive: true), at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty)
     }
 
     func testInCallURLMatcherAcceptsRoomsAndRejectsLandingPages() {

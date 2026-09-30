@@ -209,7 +209,8 @@ final class MeetingDetectionPromptController: ObservableObject {
         let appName = resolved.flatMap {
             FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
         } ?? "Meeting"
-        self.appDisplayName = request.serviceName.map { "\($0) · in \(appName)" } ?? appName
+        // An installed web app is named after its service ("Google Meet"), so don't repeat it.
+        self.appDisplayName = request.serviceName.map { $0 == appName ? appName : "\($0) · in \(appName)" } ?? appName
 
         let panel = self.panelOrCreate()
         self.placeAtDefaultPosition(panel)
