@@ -10,6 +10,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     @State private var status = ""
     @State private var isValidating = false
     @State private var retryTask: Task<Void, Never>?
+    @State private var models = CloudTranscriptionModel.catalog
     @State private var availableModelIDs: Set<String> = []
     @State private var hasValidatedCatalog = false
     @State private var availableDictationModelIDs: Set<String> = []
@@ -35,6 +36,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         }
         .padding(16)
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
+        .task { await self.refreshCatalog(force: false) }
         .onDisappear { self.retryTask?.cancel() }
         .onChange(of: self.settings.cloudTranscriptionModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudDictationMode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
@@ -106,13 +108,13 @@ struct OpenRouterTranscriptionSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Picker(self.isCombinedMode ? "File transcription model" : "Dictation and file model", selection: self.$settings.cloudTranscriptionModelID) {
-            ForEach(CloudTranscriptionModel.catalog, id: \.id) { model in
+            ForEach(self.models, id: \.id) { model in
                 Text(model.name).tag(model.id)
                     .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
             }
         }
         self.languageControls
-        Text("File transcription uses the transcription endpoint without Cleanup Styles. Whisper models support word timestamps. GPT transcription models produce plain text. Completed meetings have a separate model selection in meeting settings.")
+        Text("The model list follows OpenRouter's transcription catalog. File transcription skips Cleanup Styles. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
             .font(.caption).foregroundStyle(.secondary)
     }
 
@@ -228,6 +230,8 @@ struct OpenRouterTranscriptionSettingsView: View {
         let combinedDictation = self.isCombinedMode
         Task { @MainActor in
             defer { self.isValidating = false }
+            // Validation reports what OpenRouter lists now, so refresh the cached catalog first.
+            await self.refreshCatalog(force: true)
             do {
                 if combinedDictation {
                     let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
@@ -241,6 +245,20 @@ struct OpenRouterTranscriptionSettingsView: View {
                     self.status = "Key verified. \(models.count) transcription models listed. Your account must allow a provider serving the selected model; access is checked when transcribing."
                 }
             } catch { self.status = error.localizedDescription }
+        }
+    }
+
+    /// The catalog is fetched only once a key is saved, so a local-only setup never contacts
+    /// OpenRouter. A failed fetch keeps the cached list; validation reports connection errors.
+    private func refreshCatalog(force: Bool) async {
+        guard !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
+        do {
+            try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient(), force: force)
+            self.models = CloudTranscriptionModel.catalog
+        } catch is CancellationError {
+            return
+        } catch {
+            DebugLogger.shared.warning("OpenRouter transcription catalog refresh failed: \(error)", source: "OpenRouterTranscriptionSettingsView")
         }
     }
 

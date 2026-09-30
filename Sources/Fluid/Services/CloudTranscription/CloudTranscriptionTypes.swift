@@ -97,26 +97,38 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
     static let supportedLanguageCodes: Set<String> = Set(Locale.LanguageCode.isoLanguageCodes.map(\.identifier).filter { $0.count == 2 })
 }
 
+nonisolated enum CloudWordTimingSupport: String, Codable, Sendable {
+    case supported
+    case unsupported
+    /// Listed by OpenRouter, but no check on this Mac has asked the model for word timings yet.
+    case unverified
+}
+
 nonisolated struct CloudTranscriptionModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
-    let supportsWordTimings: Bool
-
+    let wordTimingSupport: CloudWordTimingSupport
     // Provider tags and prompt support verified against the provider and OpenRouter STT docs.
     // DeepInfra is deliberately omitted: its prompt forwarding has not been verified.
-    var languageHintProviderTags: [String] {
-        self.supportsWordTimings ? ["groq", "together"] : ["openai"]
-    }
+    // Models discovered from the catalog have no verified tags, so they receive no prompt.
+    let languageHintProviderTags: [String]
+
+    var supportsWordTimings: Bool { self.wordTimingSupport == .supported }
 
     static let defaultDictationID = "openai/whisper-large-v3-turbo"
     static let defaultMeetingID = "openai/whisper-large-v3"
-    // Capability allowlist is deliberate: catalog discovery cannot prove word-timing support.
-    static let catalog: [CloudTranscriptionModel] = [
-        .init(id: defaultDictationID, name: "Whisper Large v3 Turbo", supportsWordTimings: true),
-        .init(id: defaultMeetingID, name: "Whisper Large v3", supportsWordTimings: true),
-        .init(id: "openai/gpt-4o-transcribe", name: "GPT-4o Transcribe", supportsWordTimings: false),
-        .init(id: "openai/gpt-4o-mini-transcribe", name: "GPT-4o Mini Transcribe", supportsWordTimings: false),
+    /// Capabilities verified against provider documentation. These are always offered, so cloud
+    /// transcription works before the first catalog fetch and while offline.
+    static let builtIn: [CloudTranscriptionModel] = [
+        .init(id: defaultDictationID, name: "Whisper Large v3 Turbo", wordTimingSupport: .supported, languageHintProviderTags: ["groq", "together"]),
+        .init(id: defaultMeetingID, name: "Whisper Large v3", wordTimingSupport: .supported, languageHintProviderTags: ["groq", "together"]),
+        .init(id: "openai/gpt-4o-transcribe", name: "GPT-4o Transcribe", wordTimingSupport: .unsupported, languageHintProviderTags: ["openai"]),
+        .init(id: "openai/gpt-4o-mini-transcribe", name: "GPT-4o Mini Transcribe", wordTimingSupport: .unsupported, languageHintProviderTags: ["openai"]),
     ]
+    /// Built-in models followed by every other model OpenRouter last listed. Catalog discovery
+    /// cannot prove word-timing support, so a listed model stays unverified until a check on
+    /// this Mac receives usable timings from it.
+    static var catalog: [CloudTranscriptionModel] { CloudTranscriptionCatalogStore.shared.models }
 }
 
 nonisolated struct CloudTranscriptionWord: Codable, Equatable, Sendable {
@@ -172,6 +184,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
     case missingAPIKey, authentication, creditsExhausted, rateLimited, timeout, network
     case unsupportedModel, modelUnavailable, unsupportedWordTimings, invalidLanguage, invalidAudio, oversizedAudio
     case malformedResponse, invalidWordTimings, server(Int), catalogUnavailable, liveTranscriptionUnavailable
+    case wordTimingCheckSpeechUnavailable, wordTimingCheckInconclusive
     case dictationTooLong, truncatedDictationResponse
 
     var errorDescription: String? {
@@ -184,7 +197,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .network: "Could not reach OpenRouter. Check your connection and retry, or choose local transcription."
         case .unsupportedModel: "This transcription model is not supported by this build. Select a supported Voice Engine model."
         case .modelUnavailable: "OpenRouter cannot route this model with your account settings. Check model availability and allowed providers at https://openrouter.ai/settings/privacy, or select another model."
-        case .unsupportedWordTimings: "This model does not support validated word timings. Choose a Whisper model."
+        case .unsupportedWordTimings: "This model has no verified word timings. Choose a Whisper model, or verify another model by selecting it in meeting settings."
         case .invalidLanguage: "Choose Automatic or a supported two-letter language code."
         case .invalidAudio: "The recording contains invalid audio samples or could not be decoded."
         case .oversizedAudio: "The audio chunk exceeds the cloud upload limit. Split the recording and retry."
@@ -193,6 +206,8 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .server(let status): "OpenRouter transcription failed (HTTP \(status)). Retry or choose local transcription."
         case .catalogUnavailable: "OpenRouter did not list a supported transcription model. Try validation again later."
         case .liveTranscriptionUnavailable: "Cloud transcription runs after recording stops. Select a local model for live captions."
+        case .wordTimingCheckSpeechUnavailable: "Could not generate the spoken test clip for the word-timing check. Confirm a system voice is installed, then try again."
+        case .wordTimingCheckInconclusive: "The model returned no text for the spoken test clip, so its word timings could not be checked. Try again or choose another model."
         case .dictationTooLong: "Transcribe + Style supports recordings up to 120 seconds. Record a shorter dictation or choose Transcription Only for longer recordings."
         case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
