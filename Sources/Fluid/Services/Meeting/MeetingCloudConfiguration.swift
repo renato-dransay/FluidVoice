@@ -23,7 +23,7 @@ nonisolated enum MeetingCloudConfigurationError: LocalizedError, Equatable {
         case .missingAPIKey:
             return "Add your OpenRouter transcription key in Voice Engine settings before transcribing this meeting."
         case .unsupportedModel:
-            return "Choose a verified Whisper model for meeting transcription. Speaker labels require word timings."
+            return "Choose a meeting model verified for word timings in meeting settings. Speaker labels require them."
         case .unsupportedLanguage:
             return "Choose automatic detection or a supported language in meeting settings."
         case .incompatibleOptions:

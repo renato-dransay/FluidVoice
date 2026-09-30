@@ -65,7 +65,7 @@ final class CloudTranscriptionClientTests: XCTestCase {
     }
 
     func testOptionalLanguageHintsUseProviderOptionsWithoutForcingLanguageOrRouting() async throws {
-        for model in CloudTranscriptionModel.catalog {
+        for model in CloudTranscriptionModel.builtIn {
             let recorder = CloudRequestRecorder()
             CloudURLProtocol.install { request in
                 recorder.append(request)
@@ -175,6 +175,214 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(recorder.requests.last?.url?.query, "output_modalities=transcription")
     }
 
+    func testCatalogListsEveryTranscriptionModelWithoutCredentials() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"},{"id":"unnamed/model"}]}"#.utf8))
+        }
+        let entries = try await self.client().transcriptionCatalog()
+        XCTAssertEqual(entries, [
+            CloudTranscriptionCatalogEntry(id: "deepgram/nova-3", name: "Deepgram: Nova-3"),
+            CloudTranscriptionCatalogEntry(id: "unnamed/model", name: "unnamed/model"),
+        ])
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.url?.path, "/api/v1/models")
+        XCTAssertEqual(request.url?.query, "output_modalities=transcription")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "The public catalog must not receive the key")
+    }
+
+    func testEmptyOrUnreadableCatalogFailsInsteadOfListingNothing() async throws {
+        for (body, expected) in [(#"{"data":[]}"#, CloudTranscriptionError.catalogUnavailable), ("not json", .malformedResponse)] {
+            CloudURLProtocol.install { _ in (200, [:], Data(body.utf8)) }
+            do {
+                _ = try await self.client().transcriptionCatalog()
+                XCTFail("Expected \(expected)")
+            } catch {
+                XCTAssertEqual(error as? CloudTranscriptionError, expected)
+            }
+        }
+    }
+
+    func testWordTimingCheckRequestsTimingsFromAModelOutsideTheCatalog() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"text":"The quick fox.","words":[{"word":"The","start":0,"end":0.2},{"word":"quick","start":0.2,"end":0.5},{"word":"fox.","start":0.5,"end":0.9}]}"#.utf8))
+        }
+        let supported = try await self.client().checkWordTimings(
+            modelID: "unlisted/new-model", speechSamples: [Float](repeating: 0.1, count: 16_000), apiKey: "test-key"
+        )
+        XCTAssertTrue(supported)
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.url?.path, "/api/v1/audio/transcriptions")
+        let body = try XCTUnwrap(request.httpBody)
+        XCTAssertNotNil(body.range(of: Data("name=\"model\"\r\n\r\nunlisted/new-model".utf8)))
+        XCTAssertNotNil(body.range(of: Data("name=\"response_format\"\r\n\r\nverbose_json".utf8)))
+        XCTAssertNotNil(body.range(of: Data("name=\"timestamp_granularities[]\"\r\n\r\nword".utf8)))
+    }
+
+    func testWordTimingCheckReportsUnsupportedWhenTimingsAreMissingOrInvalid() async throws {
+        let responses = [
+            #"{"text":"The quick fox."}"#,
+            #"{"text":"The quick fox.","words":[]}"#,
+            #"{"text":"The quick fox.","words":[{"word":"The","start":0.4,"end":0.2}]}"#,
+        ]
+        for body in responses {
+            CloudURLProtocol.install { _ in (200, [:], Data(body.utf8)) }
+            let supported = try await self.checkWordTimings()
+            XCTAssertFalse(supported, "\(body) must not verify word timings")
+        }
+    }
+
+    func testWordTimingCheckTreatsARefusalAsUnsupportedOnlyWhenPlainTextStillWorks() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            let asksForTimings = request.httpBody?.range(of: Data("verbose_json".utf8)) != nil
+            return asksForTimings
+                ? (400, [:], Data(#"{"error":{"message":"verbose_json is not supported"}}"#.utf8))
+                : (200, [:], Data(#"{"text":"The quick fox."}"#.utf8))
+        }
+        let supported = try await self.checkWordTimings()
+        XCTAssertFalse(supported)
+        XCTAssertEqual(recorder.requests.count, 2)
+        let plain = try XCTUnwrap(recorder.requests.last?.httpBody)
+        XCTAssertNotNil(plain.range(of: Data("name=\"response_format\"\r\n\r\njson".utf8)))
+        XCTAssertNil(plain.range(of: Data("timestamp_granularities".utf8)))
+
+        // A provider that rejects the clip outright says nothing about timings.
+        CloudURLProtocol.install { _ in (400, [:], Data(#"{"error":{"message":"unsupported audio"}}"#.utf8)) }
+        do {
+            _ = try await self.checkWordTimings()
+            XCTFail("A request refused in both forms must not become a verdict")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .server(400))
+        }
+    }
+
+    func testWordTimingCheckNeverTurnsAFailedRequestIntoAVerdict() async throws {
+        let responses: [(Int, String, CloudTranscriptionError)] = [
+            (200, #"{"text":" ","words":[]}"#, .wordTimingCheckInconclusive),
+            (200, #"{"text":""}"#, .wordTimingCheckInconclusive),
+            (401, "{}", .authentication),
+            (402, "{}", .creditsExhausted),
+            (404, "{}", .modelUnavailable),
+            (500, "{}", .server(500)),
+            (200, "not json", .malformedResponse),
+        ]
+        for (status, body, expected) in responses {
+            CloudURLProtocol.install { _ in (status, [:], Data(body.utf8)) }
+            do {
+                _ = try await self.checkWordTimings()
+                XCTFail("HTTP \(status) \(body) must throw \(expected)")
+            } catch {
+                XCTAssertEqual(error as? CloudTranscriptionError, expected)
+            }
+        }
+    }
+
+    func testTranscriptionStillRejectsAModelOutsideTheCatalogBeforeUploading() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"text":"unexpected"}"#.utf8))
+        }
+        do {
+            _ = try await self.client().transcribe(samples: [0.1], configuration: .init(modelID: "unlisted/new-model"), apiKey: "test-key", wordTimings: false)
+            XCTFail("An unlisted model must fail before uploading audio")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedModel)
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
+    func testCatalogStoreOffersBuiltInModelsBeforeAnyFetch() throws {
+        let (store, _, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        XCTAssertEqual(store.models, CloudTranscriptionModel.builtIn)
+        XCTAssertTrue(store.isRefreshDue())
+        XCTAssertEqual(store.models.filter(\.supportsWordTimings).map(\.id), ["openai/whisper-large-v3-turbo", "openai/whisper-large-v3"])
+    }
+
+    func testCatalogStoreAddsListedModelsAsUnverifiedAndKeepsBuiltInCapabilities() throws {
+        let (store, defaults, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        store.replaceListedModels([
+            .init(id: "mistralai/voxtral-mini-transcribe", name: "Mistral: Voxtral Mini Transcribe"),
+            .init(id: "openai/whisper-large-v3", name: "OpenAI: Whisper Large V3"),
+            .init(id: " deepgram/nova-3 ", name: "  "),
+            .init(id: "mistralai/voxtral-mini-transcribe", name: "Duplicate"),
+            .init(id: "", name: "Blank"),
+        ])
+        XCTAssertEqual(store.models.map(\.id), CloudTranscriptionModel.builtIn.map(\.id) + ["deepgram/nova-3", "mistralai/voxtral-mini-transcribe"])
+        let whisper = try XCTUnwrap(store.models.first { $0.id == "openai/whisper-large-v3" })
+        XCTAssertEqual(whisper, CloudTranscriptionModel.builtIn[1], "A listing must not rename or downgrade a built-in model")
+        let nova = try XCTUnwrap(store.models.first { $0.id == "deepgram/nova-3" })
+        XCTAssertEqual(nova.name, "deepgram/nova-3")
+        XCTAssertEqual(nova.wordTimingSupport, .unverified)
+        XCTAssertFalse(nova.supportsWordTimings)
+        XCTAssertTrue(nova.languageHintProviderTags.isEmpty, "Unverified providers receive no prompt")
+        XCTAssertEqual(CloudTranscriptionCatalogStore(defaults: defaults).models, store.models, "The listing must survive a relaunch")
+    }
+
+    func testCatalogStoreRemembersWordTimingChecksAndNeverDowngradesDocumentedSupport() throws {
+        let (store, defaults, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        store.replaceListedModels([.init(id: "deepgram/nova-3", name: "Deepgram: Nova-3"), .init(id: "google/chirp-3", name: "Google: Chirp 3")])
+        store.recordWordTimingCheck(modelID: "deepgram/nova-3", supported: true)
+        store.recordWordTimingCheck(modelID: "google/chirp-3", supported: false)
+        store.recordWordTimingCheck(modelID: "openai/whisper-large-v3", supported: false)
+        store.recordWordTimingCheck(modelID: "openai/gpt-4o-transcribe", supported: true)
+        let restored = CloudTranscriptionCatalogStore(defaults: defaults)
+        let support = Dictionary(uniqueKeysWithValues: restored.models.map { ($0.id, $0.wordTimingSupport) })
+        XCTAssertEqual(support["deepgram/nova-3"], .supported)
+        XCTAssertEqual(support["google/chirp-3"], .unsupported)
+        XCTAssertEqual(support["openai/whisper-large-v3"], .supported)
+        XCTAssertEqual(support["openai/gpt-4o-transcribe"], .supported)
+        XCTAssertEqual(support["openai/gpt-4o-mini-transcribe"], .unsupported)
+        store.recordWordTimingCheck(modelID: "deepgram/nova-3", supported: false)
+        XCTAssertEqual(store.models.first { $0.id == "deepgram/nova-3" }?.wordTimingSupport, .unsupported, "A later check replaces the earlier result")
+    }
+
+    func testCatalogStoreRefreshesOnlyWhenStaleAndKeepsTheListOnFailure() async throws {
+        let (store, _, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
+        }
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let fetched = try await store.refresh(using: self.client(), now: start)
+        XCTAssertTrue(fetched)
+        XCTAssertEqual(store.models.last?.id, "deepgram/nova-3")
+        let skipped = try await store.refresh(using: self.client(), now: start.addingTimeInterval(CloudTranscriptionCatalogStore.refreshInterval - 1))
+        XCTAssertFalse(skipped)
+        XCTAssertEqual(recorder.requests.count, 1)
+
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"data":[{"id":"google/chirp-3","name":"Google: Chirp 3"}]}"#.utf8))
+        }
+        let forced = try await store.refresh(using: self.client(), force: true, now: start.addingTimeInterval(60))
+        XCTAssertTrue(forced)
+        XCTAssertEqual(store.models.map(\.id), CloudTranscriptionModel.builtIn.map(\.id) + ["google/chirp-3"], "A withdrawn model stops being offered")
+
+        CloudURLProtocol.install { _ in (503, [:], Data()) }
+        let stale = start.addingTimeInterval(CloudTranscriptionCatalogStore.refreshInterval * 2)
+        do {
+            _ = try await store.refresh(using: self.client(), now: stale)
+            XCTFail("A failed fetch must be reported")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .server(503))
+        }
+        XCTAssertEqual(store.models.last?.id, "google/chirp-3", "A failed fetch keeps the cached list")
+        XCTAssertTrue(store.isRefreshDue(now: stale), "A failed fetch stays due")
+        store.replaceListedModels([], now: stale)
+        XCTAssertEqual(store.models.last?.id, "google/chirp-3", "An empty listing never clears the catalog")
+    }
+
     func testCancellationAndTimeoutRemainDistinct() async throws {
         for code in [URLError.cancelled, URLError.timedOut] {
             CloudURLProtocol.install { _ in throw URLError(code) }
@@ -227,6 +435,17 @@ final class CloudTranscriptionClientTests: XCTestCase {
 
     private func client() -> OpenRouterTranscriptionClient {
         OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false)
+    }
+
+    private func checkWordTimings() async throws -> Bool {
+        try await self.client().checkWordTimings(modelID: "unlisted/new-model", speechSamples: [Float](repeating: 0.1, count: 16_000), apiKey: "test-key")
+    }
+
+    /// A store on scratch defaults, so tests never touch the catalog the app itself reads.
+    private func catalogStore() throws -> (store: CloudTranscriptionCatalogStore, defaults: UserDefaults, cleanup: () -> Void) {
+        let suite = "CloudTranscriptionCatalogStoreTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        return (CloudTranscriptionCatalogStore(defaults: defaults), defaults, { defaults.removePersistentDomain(forName: suite) })
     }
 }
 

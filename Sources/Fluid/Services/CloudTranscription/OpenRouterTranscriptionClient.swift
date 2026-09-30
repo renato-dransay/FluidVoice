@@ -21,6 +21,55 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         }
     }
 
+    /// Every transcription model OpenRouter currently lists. The catalog is public, so this sends
+    /// no credentials and proves nothing about what the account may use.
+    func transcriptionCatalog() async throws -> [CloudTranscriptionCatalogEntry] {
+        let (data, _) = try await self.send(self.publicRequest(path: "models?output_modalities=transcription"))
+        struct Catalog: Decodable { let data: [Entry] }
+        struct Entry: Decodable {
+            let id: String
+            let name: String?
+        }
+        guard let catalog = try? JSONDecoder().decode(Catalog.self, from: data) else { throw CloudTranscriptionError.malformedResponse }
+        guard !catalog.data.isEmpty else { throw CloudTranscriptionError.catalogUnavailable }
+        return catalog.data.map { CloudTranscriptionCatalogEntry(id: $0.id, name: $0.name ?? $0.id) }
+    }
+
+    /// Asks a model for word timings on one short spoken clip. Catalog metadata cannot prove the
+    /// capability, so meetings trust only this result. False means the model transcribed the clip
+    /// but refused, omitted or garbled the timings; any other failure throws and proves nothing.
+    func checkWordTimings(modelID: String, speechSamples: [Float], apiKey: String) async throws -> Bool {
+        let configuration = CloudTranscriptionConfiguration(modelID: modelID)
+        do {
+            let result = try await self.requestTranscription(
+                samples: speechSamples, configuration: configuration, apiKey: apiKey, wordTimings: true, validatesTimings: false
+            )
+            try Self.requireTranscript(result)
+            do {
+                try result.validateTimings(duration: Double(speechSamples.count) / 16_000)
+                return true
+            } catch CloudTranscriptionError.invalidWordTimings {
+                return false
+            }
+        } catch CloudTranscriptionError.server(400) {
+            // OpenRouter answers 400 when a model cannot return verbose_json, but also when a provider
+            // rejects the request for an unrelated reason. Only if the same clip transcribes as plain
+            // text was the timing request itself what the model refused.
+            let plain = try await self.requestTranscription(
+                samples: speechSamples, configuration: configuration, apiKey: apiKey, wordTimings: false, validatesTimings: false
+            )
+            try Self.requireTranscript(plain)
+            return false
+        }
+    }
+
+    /// Silence legitimately has no words, so an empty transcript cannot show whether timings work.
+    private static func requireTranscript(_ result: CloudTranscriptionResult) throws {
+        guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CloudTranscriptionError.wordTimingCheckInconclusive
+        }
+    }
+
     func validate(apiKey: String) async throws -> [CloudTranscriptionModel] {
         // The catalog is public. Authenticate separately so a readable catalog never validates a bad key.
         _ = try await self.send(self.request(path: "key", apiKey: apiKey))
@@ -71,12 +120,20 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         if let instructions = configuration.audioDictation {
             return try await self.transcribeAndStyle(samples: samples, configuration: configuration, instructions: instructions, apiKey: apiKey)
         }
+        return try await self.requestTranscription(samples: samples, configuration: configuration, apiKey: apiKey, wordTimings: wordTimings, validatesTimings: wordTimings)
+    }
+
+    /// Sends one transcription request without checking the model against the catalog.
+    private func requestTranscription(
+        samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool, validatesTimings: Bool
+    ) async throws -> CloudTranscriptionResult {
         var request = try self.request(path: "audio/transcriptions", apiKey: apiKey)
         let wav = try CloudWAVEncoder.encode(samples: samples)
         guard wav.count <= 25_000_000 else { throw CloudTranscriptionError.oversizedAudio }
         request.httpMethod = "POST"
         if let prompt = configuration.languageHintPrompt,
-           let model = CloudTranscriptionModel.catalog.first(where: { $0.id == configuration.modelID }) {
+           let model = CloudTranscriptionModel.catalog.first(where: { $0.id == configuration.modelID }),
+           !model.languageHintProviderTags.isEmpty {
             // OpenRouter ignores top-level multipart prompts. Its JSON provider options
             // forward hints only to the provider serving the request, without pinning it.
             var body: [String: Any] = [
@@ -128,7 +185,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
             await MainActor.run { CloudTranscriptionUsageStore.shared.record(record) }
             NotificationCenter.default.post(name: .cloudTranscriptionCompleted, object: record)
         }
-        if wordTimings { try result.validateTimings(duration: Double(samples.count) / 16_000) }
+        if validatesTimings { try result.validateTimings(duration: Double(samples.count) / 16_000) }
         try Task.checkCancellation()
         return result
     }
@@ -250,10 +307,15 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     private func request(path: String, apiKey: String) throws -> URLRequest {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw CloudTranscriptionError.missingAPIKey }
+        var request = try self.publicRequest(path: path)
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    private func publicRequest(path: String) throws -> URLRequest {
         guard let baseURL = Self.baseURL, let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else { throw CloudTranscriptionError.network }
         var request = URLRequest(url: url)
         request.timeoutInterval = 75
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         return request
     }
