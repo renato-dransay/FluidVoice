@@ -484,7 +484,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     private func panelOrCreate() -> MeetingFloatingCaptionsPanel {
         if let panel { return panel }
         let content = AnyView(
-            AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
+            MeetingOverlayThemed {
                 MeetingDetectionPromptContent(controller: self)
             }
         )
@@ -512,10 +512,41 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 }
 
+/// Meeting prompts float over other apps like the dictation overlay, so they share its surface:
+/// the configured overlay material, tint, opacity and highlight, on a dark palette with the
+/// current accent color. Both are read live, so changes apply without recreating the panel.
+private struct MeetingOverlayThemed<Content: View>: View {
+    @ObservedObject private var settings = SettingsStore.shared
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        self.content
+            .environment(\.meetingOverlayAppearance, self.settings.bottomOverlayAppearance)
+            .appTheme(AppTheme.adaptive(accent: self.settings.accentColor, colorScheme: .dark))
+            .preferredColorScheme(.dark)
+    }
+}
+
+private struct MeetingOverlayAppearanceKey: EnvironmentKey {
+    static let defaultValue = BottomOverlayAppearance.smokedGlass
+}
+
+private extension EnvironmentValues {
+    var meetingOverlayAppearance: BottomOverlayAppearance {
+        get { self[MeetingOverlayAppearanceKey.self] }
+        set { self[MeetingOverlayAppearanceKey.self] = newValue }
+    }
+}
+
 private struct MeetingDetectionPromptContent: View {
     @ObservedObject var controller: MeetingDetectionPromptController
 
     @Environment(\.theme) private var theme
+    @Environment(\.meetingOverlayAppearance) private var overlayAppearance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -594,15 +625,7 @@ private struct MeetingDetectionPromptContent: View {
             height: MeetingDetectionPromptController.panelSize.height,
             alignment: .top
         )
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.98))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
+        .bottomOverlaySurface(self.overlayAppearance, cornerRadius: 16, castsShadow: true)
         .onHover { hovering in
             if hovering {
                 self.controller.pauseAutoDismiss()
@@ -667,7 +690,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     private func panelOrCreate() -> MeetingFloatingCaptionsPanel {
         if let panel { return panel }
         let content = AnyView(
-            AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
+            MeetingOverlayThemed {
                 MeetingStillRecordingNudgeContent(controller: self)
             }
         )
@@ -692,6 +715,7 @@ private struct MeetingStillRecordingNudgeContent: View {
     @ObservedObject var controller: MeetingStillRecordingNudgeController
 
     @Environment(\.theme) private var theme
+    @Environment(\.meetingOverlayAppearance) private var overlayAppearance
 
     var body: some View {
         HStack(spacing: 10) {
@@ -710,15 +734,7 @@ private struct MeetingStillRecordingNudgeContent: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(width: 260, height: 64)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.96))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 4)
+        .bottomOverlaySurface(self.overlayAppearance, cornerRadius: 14, castsShadow: true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Meeting may have ended. Stop and transcribe?")
     }
