@@ -11,19 +11,16 @@ struct OpenRouterTranscriptionSettingsView: View {
     @State private var isValidating = false
     @State private var retryTask: Task<Void, Never>?
     @State private var models = CloudTranscriptionModel.catalog
+    @State private var audioModels = CloudAudioDictationModel.catalog
     @State private var availableModelIDs: Set<String> = []
     @State private var hasValidatedCatalog = false
     @State private var availableDictationModelIDs: Set<String> = []
     @State private var hasValidatedDictationCatalog = false
 
-    private var isCombinedMode: Bool { self.settings.cloudDictationMode == .transcribeAndStyle }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("OpenRouter voice engine").font(.headline)
-            Text(self.isCombinedMode
-                ? "Audio and your selected Cleanup Style are sent together after recording stops. The voice model returns the transcript and styled text in one request, with no separate AI cleanup."
-                : "Audio is sent to OpenRouter after recording stops. Cleanup Styles can optionally run a separate text cleanup request.")
+            Text("Each dictation is one request: after recording stops, the audio and your selected Cleanup Style go to the dictation model together, and it returns the finished text. There is no separate cleanup request.")
                 .font(.callout).foregroundStyle(.secondary)
 
             if self.showsActivationControl {
@@ -39,7 +36,6 @@ struct OpenRouterTranscriptionSettingsView: View {
         .task { await self.refreshCatalog(force: false) }
         .onDisappear { self.retryTask?.cancel() }
         .onChange(of: self.settings.cloudTranscriptionModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
-        .onChange(of: self.settings.cloudDictationMode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudDictationModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudTranscriptionPrimaryLanguageCode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudTranscriptionSecondaryLanguageCode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
@@ -91,31 +87,47 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     @ViewBuilder
     private var modelControls: some View {
-        Picker("Dictation mode", selection: self.$settings.cloudDictationMode) {
-            Text("Transcription only").tag(CloudDictationMode.transcriptionOnly)
-            Text("Transcribe + style").tag(CloudDictationMode.transcribeAndStyle)
-        }
-        .accessibilityIdentifier("openrouter-dictation-mode")
-        if self.isCombinedMode {
-            Picker("Dictation voice model", selection: self.$settings.cloudDictationModelID) {
-                ForEach(CloudAudioDictationModel.catalog, id: \.id) { model in
-                    Text(model.name).tag(model.id)
-                        .disabled(self.hasValidatedDictationCatalog && !self.availableDictationModelIDs.contains(model.id))
-                }
-            }
-            .accessibilityIdentifier("openrouter-audio-dictation-model")
-            Text("Choose the instructions in Cleanup Styles, including app and shortcut rules. Off returns unstyled dictation. Recordings are limited to 120 seconds; failures never trigger another AI request automatically.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        Picker(self.isCombinedMode ? "File transcription model" : "Dictation and file model", selection: self.$settings.cloudTranscriptionModelID) {
-            ForEach(self.models, id: \.id) { model in
+        self.dictationControls
+        Divider()
+        self.importedFileControls
+    }
+
+    @ViewBuilder
+    private var dictationControls: some View {
+        Label("Dictation", systemImage: "mic").font(.callout)
+        Picker("Dictation model", selection: self.$settings.cloudDictationModelID) {
+            ForEach(self.audioModels, id: \.id) { model in
                 Text(model.name).tag(model.id)
-                    .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
+                    .disabled(self.hasValidatedDictationCatalog && !self.availableDictationModelIDs.contains(model.id))
             }
         }
-        self.languageControls
-        Text("The model list follows OpenRouter's transcription catalog. File transcription skips Cleanup Styles. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
+        .accessibilityIdentifier("openrouter-audio-dictation-model")
+        Text("Choose the style in Cleanup Styles, including app and shortcut rules. Off returns the plain transcript from the same single request. Recordings are limited to 8 minutes; a failure never triggers another request automatically.")
             .font(.caption).foregroundStyle(.secondary)
+        Text("The list shows the newest audio-capable models OpenRouter offers, one per model family.")
+            .font(.caption).foregroundStyle(.secondary)
+        self.languageControls
+    }
+
+    /// Imported files, the local API and voice command and rewrite modes use the transcription model.
+    @ViewBuilder
+    private var importedFileControls: some View {
+        Label("Imported files and commands", systemImage: "doc.badge.arrow.up").font(.callout)
+        Picker("Transcription model", selection: self.$settings.cloudTranscriptionModelID) {
+            self.transcriptionModelOptions
+        }
+        .accessibilityIdentifier("openrouter-transcription-model")
+        Text("Dictation never uses this model. Imported audio and video, the local API, and the command and rewrite modes use it on the transcription endpoint, without Cleanup Styles.")
+            .font(.caption).foregroundStyle(.secondary)
+        Text("The model list follows OpenRouter's transcription catalog. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var transcriptionModelOptions: some View {
+        ForEach(self.models, id: \.id) { model in
+            Text(model.name).tag(model.id)
+                .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
+        }
     }
 
     private var languageControls: some View {
@@ -227,23 +239,19 @@ struct OpenRouterTranscriptionSettingsView: View {
         self.isValidating = true
         self.status = ""
         let apiKey = self.settings.openRouterTranscriptionAPIKey
-        let combinedDictation = self.isCombinedMode
         Task { @MainActor in
             defer { self.isValidating = false }
             // Validation reports what OpenRouter lists now, so refresh the cached catalog first.
             await self.refreshCatalog(force: true)
             do {
-                if combinedDictation {
-                    let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
-                    self.availableDictationModelIDs = Set(models.map(\.id))
-                    self.hasValidatedDictationCatalog = true
-                    self.status = "Key verified. \(models.count) audio dictation models listed. Your account must allow a provider serving the selected model; access is checked when dictating."
-                } else {
-                    let models = try await OpenRouterTranscriptionClient().validate(apiKey: apiKey)
-                    self.availableModelIDs = Set(models.map(\.id))
-                    self.hasValidatedCatalog = true
-                    self.status = "Key verified. \(models.count) transcription models listed. Your account must allow a provider serving the selected model; access is checked when transcribing."
-                }
+                let client = OpenRouterTranscriptionClient()
+                let dictationModels = try await client.validateAudioDictation(apiKey: apiKey)
+                self.availableDictationModelIDs = Set(dictationModels.map(\.id))
+                self.hasValidatedDictationCatalog = true
+                let transcriptionModels = try await client.validate(apiKey: apiKey)
+                self.availableModelIDs = Set(transcriptionModels.map(\.id))
+                self.hasValidatedCatalog = true
+                self.status = "Key verified. \(dictationModels.count) dictation models and \(transcriptionModels.count) transcription models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
             } catch { self.status = error.localizedDescription }
         }
     }
@@ -255,6 +263,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         do {
             try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient(), force: force)
             self.models = CloudTranscriptionModel.catalog
+            self.audioModels = CloudAudioDictationModel.catalog
         } catch is CancellationError {
             return
         } catch {

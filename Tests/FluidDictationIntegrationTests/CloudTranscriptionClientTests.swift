@@ -349,8 +349,14 @@ final class CloudTranscriptionClientTests: XCTestCase {
         let (store, _, cleanup) = try self.catalogStore()
         defer { cleanup() }
         let recorder = CloudRequestRecorder()
+        let audioCatalog = #"""
+        {"data":[{"id":"google/gemini-3.5-flash","name":"Google: Gemini 3.5 Flash",
+         "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+         "supported_parameters":["response_format","structured_outputs"]}]}
+        """#
         CloudURLProtocol.install { request in
             recorder.append(request)
+            guard request.url?.query == "output_modalities=transcription" else { return (200, [:], Data(audioCatalog.utf8)) }
             return (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
         }
         let start = Date(timeIntervalSince1970: 1_000_000)
@@ -359,10 +365,11 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(store.models.last?.id, "deepgram/nova-3")
         let skipped = try await store.refresh(using: self.client(), now: start.addingTimeInterval(CloudTranscriptionCatalogStore.refreshInterval - 1))
         XCTAssertFalse(skipped)
-        XCTAssertEqual(recorder.requests.count, 1)
+        XCTAssertEqual(recorder.requests.count, 2, "One transcription fetch and one audio fetch")
 
         CloudURLProtocol.install { request in
             recorder.append(request)
+            guard request.url?.query == "output_modalities=transcription" else { return (200, [:], Data(audioCatalog.utf8)) }
             return (200, [:], Data(#"{"data":[{"id":"google/chirp-3","name":"Google: Chirp 3"}]}"#.utf8))
         }
         let forced = try await store.refresh(using: self.client(), force: true, now: start.addingTimeInterval(60))
@@ -431,6 +438,166 @@ final class CloudTranscriptionClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError)
         }
+    }
+
+    func testAudioDictationCatalogKeepsOnlyStructuredAudioChatModelsWithoutCredentials() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            let catalog = #"""
+            {"data":[
+                {"id":"google/gemini-3.5-flash","name":"Google: Gemini 3.5 Flash",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"google/gemini-3.5-flash:batch","name":"Google: Gemini 3.5 Flash (batch)",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"openrouter/auto","name":"Auto Router",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"~google/gemini-flash-latest","name":"Google: Gemini Flash Latest",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"openai/gpt-audio",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"openai/gpt-5","name":"Text only",
+                 "architecture":{"input_modalities":["text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"some/audio-no-schema","name":"No schema",
+                 "architecture":{"input_modalities":["audio"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format"]}
+            ]}
+            """#
+            return (200, [:], Data(catalog.utf8))
+        }
+        let entries = try await self.client().audioDictationCatalog()
+        XCTAssertEqual(entries, [
+            CloudTranscriptionCatalogEntry(id: "google/gemini-3.5-flash", name: "Google: Gemini 3.5 Flash"),
+            CloudTranscriptionCatalogEntry(id: "openai/gpt-audio", name: "openai/gpt-audio"),
+        ])
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.url?.path, "/api/v1/models")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testCatalogStoreListsAudioDictationModelsAndRefreshesBothCatalogs() async throws {
+        let (store, defaults, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        XCTAssertEqual(store.audioDictationModels, CloudAudioDictationModel.builtIn)
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            if request.url?.query == "output_modalities=transcription" {
+                return (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
+            }
+            let catalog = #"""
+            {"data":[
+                {"id":"google/gemini-2.5-flash","name":"Google: Gemini 2.5 Flash",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"openai/gpt-audio","name":"OpenAI: GPT Audio",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]},
+                {"id":"google/gemini-3.5-flash","name":"Google: Gemini 3.5 Flash",
+                 "architecture":{"input_modalities":["audio","text"],"output_modalities":["text"]},
+                 "supported_parameters":["response_format","structured_outputs"]}
+            ]}
+            """#
+            return (200, [:], Data(catalog.utf8))
+        }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let fetched = try await store.refresh(using: self.client(), now: now)
+        XCTAssertTrue(fetched)
+        XCTAssertEqual(recorder.requests.map { $0.url?.query }, ["output_modalities=transcription", nil])
+        XCTAssertEqual(store.models.last?.id, "deepgram/nova-3")
+        XCTAssertEqual(
+            store.audioDictationModels.map(\.id),
+            CloudAudioDictationModel.builtIn.map(\.id) + ["openai/gpt-audio"],
+            "Listed Gemini generations older than the built-in ones are hidden; other families follow"
+        )
+        XCTAssertEqual(CloudTranscriptionCatalogStore(defaults: defaults).audioDictationModels, store.audioDictationModels)
+
+        CloudURLProtocol.install { request in
+            request.url?.query == "output_modalities=transcription"
+                ? (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
+                : (503, [:], Data())
+        }
+        do {
+            _ = try await store.refresh(using: self.client(), force: true, now: now.addingTimeInterval(60))
+            XCTFail("A failed audio catalog fetch must be reported")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .server(503))
+        }
+        XCTAssertEqual(store.audioDictationModels.last?.id, "openai/gpt-audio", "A failed fetch keeps the cached audio list")
+    }
+
+    func testAudioDictationListKeepsOnlyTheNewestModelOfEachFamily() {
+        // The audio-capable chat models OpenRouter listed on 30 September 2026.
+        let listed = [
+            "google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "google/gemini-2.5-pro", "google/gemini-2.5-pro-preview",
+            "google/gemini-3-flash-preview", "google/gemini-3.1-flash-lite", "google/gemini-3.1-flash-lite-preview",
+            "google/gemini-3.1-pro-preview", "google/gemini-3.1-pro-preview-customtools", "google/gemini-3.5-flash",
+            "google/gemini-3.5-flash-lite", "google/gemini-3.6-flash", "google/gemini-3.7-flash", "google/gemini-3.8-flash",
+            "mistralai/voxtral-small-24b-2507", "openai/gpt-audio", "openai/gpt-audio-mini", "qwen/qwen3.8-omni-flash",
+            "xiaomi/mimo-v2.5", "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
+        ].map { CloudAudioDictationModel(id: $0, name: $0) }
+        let expected = [
+            "google/gemini-3.8-flash", "google/gemini-3.5-flash-lite", "google/gemini-3.1-pro-preview",
+            "mistralai/voxtral-small-24b-2507", "openai/gpt-audio", "openai/gpt-audio-mini", "qwen/qwen3.8-omni-flash",
+            "xiaomi/mimo-v2.5", "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed",
+        ]
+        // Older generations, previews with a stable successor and tool variants are hidden; the newest Gemini Flash leads.
+        XCTAssertEqual(CloudAudioDictationModel.current(listed).map(\.id), expected)
+    }
+
+    func testAudioDictationListPrefersAStableReleaseOverAPreviewOfTheSameVersion() {
+        let listed = ["google/gemini-4-flash-preview", "google/gemini-4-flash", "google/gemini-3.8-flash"]
+            .map { CloudAudioDictationModel(id: $0, name: $0) }
+        XCTAssertEqual(CloudAudioDictationModel.current(listed).map(\.id), ["google/gemini-4-flash"])
+    }
+
+    func testFailedAudioCatalogFetchKeepsTheRefreshDue() async throws {
+        let (store, _, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        CloudURLProtocol.install { request in
+            request.url?.query == "output_modalities=transcription"
+                ? (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
+                : (503, [:], Data())
+        }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        do {
+            _ = try await store.refresh(using: self.client(), now: now)
+            XCTFail("A failed audio catalog fetch must be reported")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .server(503))
+        }
+        XCTAssertEqual(store.models.last?.id, "deepgram/nova-3", "The transcription list that did arrive is kept")
+        XCTAssertTrue(store.isRefreshDue(now: now.addingTimeInterval(60)), "A partial refresh must not postpone the next attempt")
+    }
+
+    func testFailureSummaryNamesKindAndModelWithoutPayload() {
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CloudTranscriptionError.server(400), modelID: "deepgram/nova-3"),
+            "Cloud transcription failed: server(400); model=deepgram/nova-3. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CloudTranscriptionError.modelUnavailable, modelID: nil),
+            "Cloud transcription failed: modelUnavailable; model=unknown. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CancellationError(), modelID: "openai/whisper-large-v3"),
+            "Cloud transcription failed: cancelled; model=openai/whisper-large-v3. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: URLError(.notConnectedToInternet), modelID: "openai/whisper-large-v3"),
+            "Cloud transcription failed: URLError.-1009; model=openai/whisper-large-v3. No transcript or request payload logged."
+        )
+        struct Leaky: LocalizedError { var errorDescription: String? { "PRIVATE transcript and test-key" } }
+        let line = CloudTranscriptionFailureSummary.line(for: Leaky(), modelID: "openai/whisper-large-v3")
+        XCTAssertTrue(line.contains("Leaky"), "Unknown errors are named by type")
+        XCTAssertFalse(line.contains("PRIVATE"), "An error description can carry transcript text and must never be logged")
+        XCTAssertFalse(line.contains("test-key"))
     }
 
     private func client() -> OpenRouterTranscriptionClient {

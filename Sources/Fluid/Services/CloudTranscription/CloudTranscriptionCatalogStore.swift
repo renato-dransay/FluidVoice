@@ -5,26 +5,31 @@ nonisolated struct CloudTranscriptionCatalogEntry: Codable, Equatable, Sendable 
     let name: String
 }
 
-/// OpenRouter's transcription catalog as last fetched, plus the word-timing checks run on this Mac.
-/// Reads are synchronous and lock-protected because configuration validation runs off the main actor.
+/// OpenRouter's transcription and audio-chat catalogs as last fetched, plus the word-timing checks
+/// run on this Mac. Reads are synchronous and lock-protected because configuration validation runs
+/// off the main actor.
 nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
     static let shared = CloudTranscriptionCatalogStore(defaults: .standard)
     /// The catalog changes rarely, so one fetch per interval keeps settings from calling out on every visit.
     static let refreshInterval: TimeInterval = 6 * 60 * 60
 
     private static let entriesKey = "CloudTranscriptionCatalogEntries"
+    private static let audioEntriesKey = "CloudAudioDictationCatalogEntries"
     private static let refreshedAtKey = "CloudTranscriptionCatalogRefreshedAt"
     private static let checksKey = "CloudTranscriptionWordTimingChecks"
 
     private let defaults: UserDefaults
     private let lock = NSLock()
     private var listed: [CloudTranscriptionCatalogEntry]
+    private var audioListed: [CloudTranscriptionCatalogEntry]
     private var checks: [String: Bool]
     private var refreshedAt: Date?
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
         self.listed = defaults.data(forKey: Self.entriesKey)
+            .flatMap { try? JSONDecoder().decode([CloudTranscriptionCatalogEntry].self, from: $0) } ?? []
+        self.audioListed = defaults.data(forKey: Self.audioEntriesKey)
             .flatMap { try? JSONDecoder().decode([CloudTranscriptionCatalogEntry].self, from: $0) } ?? []
         self.checks = defaults.dictionary(forKey: Self.checksKey) as? [String: Bool] ?? [:]
         let stamp = defaults.double(forKey: Self.refreshedAtKey)
@@ -47,15 +52,54 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
         return builtIn + discovered
     }
 
+    var audioDictationModels: [CloudAudioDictationModel] {
+        let listed = self.lock.withLock { self.audioListed }
+        let builtInIDs = Set(CloudAudioDictationModel.builtIn.map(\.id))
+        return CloudAudioDictationModel.current(CloudAudioDictationModel.builtIn + listed.filter { !builtInIDs.contains($0.id) }.map {
+            CloudAudioDictationModel(id: $0.id, name: $0.name)
+        })
+    }
+
     func isRefreshDue(now: Date = Date()) -> Bool {
         guard let refreshedAt = self.lock.withLock({ self.refreshedAt }) else { return true }
         // A clock moved backwards must not postpone the refresh indefinitely.
         return now < refreshedAt || now.timeIntervalSince(refreshedAt) >= Self.refreshInterval
     }
 
-    /// Replaces the listed models, so a model OpenRouter withdrew stops being offered.
+    /// Replaces the listed transcription models, so a model OpenRouter withdrew stops being offered.
     /// An empty list is ignored: it means a bad response, never an empty catalog.
     func replaceListedModels(_ entries: [CloudTranscriptionCatalogEntry], now: Date = Date()) {
+        guard self.storeListedModels(entries) else { return }
+        self.markRefreshed(now)
+    }
+
+    @discardableResult
+    private func storeListedModels(_ entries: [CloudTranscriptionCatalogEntry]) -> Bool {
+        guard let (normalized, data) = Self.normalize(entries) else { return false }
+        self.lock.withLock {
+            self.listed = normalized
+            self.defaults.set(data, forKey: Self.entriesKey)
+        }
+        return true
+    }
+
+    private func markRefreshed(_ now: Date) {
+        self.lock.withLock {
+            self.refreshedAt = now
+            self.defaults.set(now.timeIntervalSince1970, forKey: Self.refreshedAtKey)
+        }
+    }
+
+    /// Replaces the listed audio-chat models used by combined dictation. Same empty-list rule.
+    func replaceListedAudioDictationModels(_ entries: [CloudTranscriptionCatalogEntry]) {
+        guard let (normalized, data) = Self.normalize(entries) else { return }
+        self.lock.withLock {
+            self.audioListed = normalized
+            self.defaults.set(data, forKey: Self.audioEntriesKey)
+        }
+    }
+
+    private static func normalize(_ entries: [CloudTranscriptionCatalogEntry]) -> (entries: [CloudTranscriptionCatalogEntry], data: Data)? {
         var seen = Set<String>()
         let normalized = entries.compactMap { entry -> CloudTranscriptionCatalogEntry? in
             let id = entry.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -66,13 +110,8 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
             let order = $0.name.localizedCaseInsensitiveCompare($1.name)
             return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }
-        guard !normalized.isEmpty, let data = try? JSONEncoder().encode(normalized) else { return }
-        self.lock.withLock {
-            self.listed = normalized
-            self.refreshedAt = now
-            self.defaults.set(data, forKey: Self.entriesKey)
-            self.defaults.set(now.timeIntervalSince1970, forKey: Self.refreshedAtKey)
-        }
+        guard !normalized.isEmpty, let data = try? JSONEncoder().encode(normalized) else { return nil }
+        return (normalized, data)
     }
 
     func recordWordTimingCheck(modelID: String, supported: Bool) {
@@ -82,12 +121,16 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
         }
     }
 
-    /// Fetches the public catalog when the cached copy is stale, or always when forced.
-    /// A failed fetch throws and leaves the cached list in place. Returns whether a fetch ran.
+    /// Fetches both public catalogs when the cached copy is stale, or always when forced.
+    /// A failed fetch throws and leaves the cached lists in place. Returns whether a fetch ran.
     @discardableResult
     func refresh(using client: OpenRouterTranscriptionClient, force: Bool = false, now: Date = Date()) async throws -> Bool {
         guard force || self.isRefreshDue(now: now) else { return false }
-        self.replaceListedModels(try await client.transcriptionCatalog(), now: now)
+        // Each list is saved as soon as it arrives, so a failure in the second fetch keeps the first,
+        // but the refresh counts as done only once both arrived; otherwise the next visit retries.
+        self.storeListedModels(try await client.transcriptionCatalog())
+        self.replaceListedAudioDictationModels(try await client.audioDictationCatalog())
+        self.markRefreshed(now)
         return true
     }
 }

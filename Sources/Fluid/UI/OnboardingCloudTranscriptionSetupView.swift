@@ -43,8 +43,7 @@ struct OnboardingCloudTranscriptionSetupView: View {
 
     private func activate() {
         guard !self.isActivating else { return }
-        let mode = self.settings.cloudDictationMode
-        let modelID = mode == .transcribeAndStyle ? self.settings.cloudDictationModelID : self.settings.cloudTranscriptionModelID
+        let modelID = self.settings.cloudDictationModelID
         let apiKey = self.settings.openRouterTranscriptionAPIKey
         let primaryLanguageCode = self.settings.cloudTranscriptionPrimaryLanguageCode
         let secondaryLanguageCode = self.settings.cloudTranscriptionSecondaryLanguageCode
@@ -57,19 +56,10 @@ struct OnboardingCloudTranscriptionSetupView: View {
                 self.activationTask = nil
             }
             do {
-                let availableModelIDs: Set<String>
-                if mode == .transcribeAndStyle {
-                    let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
-                    availableModelIDs = Set(models.map(\.id))
-                } else {
-                    let models = try await OpenRouterTranscriptionClient().validate(apiKey: apiKey)
-                    availableModelIDs = Set(models.map(\.id))
-                }
+                let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
+                let availableModelIDs = Set(models.map(\.id))
                 try Task.checkCancellation()
-                let currentModelID = self.settings.cloudDictationMode == .transcribeAndStyle
-                    ? self.settings.cloudDictationModelID : self.settings.cloudTranscriptionModelID
-                guard self.settings.cloudDictationMode == mode,
-                      currentModelID == modelID,
+                guard self.settings.cloudDictationModelID == modelID,
                       self.settings.openRouterTranscriptionAPIKey == apiKey,
                       self.settings.cloudTranscriptionPrimaryLanguageCode == primaryLanguageCode,
                       self.settings.cloudTranscriptionSecondaryLanguageCode == secondaryLanguageCode,
@@ -79,17 +69,11 @@ struct OnboardingCloudTranscriptionSetupView: View {
                     return
                 }
                 guard availableModelIDs.contains(modelID) else {
-                    self.errorMessage = mode == .transcribeAndStyle
-                        ? "The selected audio dictation model is unavailable on OpenRouter. Choose another model."
-                        : "The selected transcription model is unavailable on OpenRouter. Choose another model."
+                    self.errorMessage = "The selected dictation model is unavailable on OpenRouter. Choose another model."
                     return
                 }
                 self.settings.speechExecutionSource = .openRouter
                 self.viewModel.asr.resetTranscriptionProvider()
-                if mode == .transcriptionOnly {
-                    try await self.viewModel.asr.ensureAsrReady(source: .onboarding)
-                    try Task.checkCancellation()
-                }
                 self.dismiss()
             } catch is CancellationError {
                 return

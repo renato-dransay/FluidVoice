@@ -79,11 +79,6 @@ struct CloudTranscriptionPreferences {
         }
     }
 
-    var dictationMode: CloudDictationMode {
-        get { CloudDictationMode(rawValue: self.defaults.string(forKey: "CloudDictationMode") ?? "") ?? .transcriptionOnly }
-        set { self.defaults.set(newValue.rawValue, forKey: "CloudDictationMode") }
-    }
-
     var dictationModelID: String {
         get {
             let stored = self.defaults.string(forKey: "CloudDictationModel") ?? ""
@@ -130,16 +125,9 @@ extension SettingsStore {
 
     var usesCloudTranscription: Bool { self.speechExecutionSource == .openRouter }
 
-    var usesCombinedCloudDictation: Bool { self.usesCloudTranscription && self.cloudDictationMode == .transcribeAndStyle }
-
-    var cloudDictationMode: CloudDictationMode {
-        get { CloudTranscriptionPreferences(defaults: .standard).dictationMode }
-        set {
-            self.objectWillChange.send()
-            var preferences = CloudTranscriptionPreferences(defaults: .standard)
-            preferences.dictationMode = newValue
-        }
-    }
+    /// Every OpenRouter dictation is one request: audio and the resolved Cleanup Style go to the
+    /// audio dictation model together, and Off asks that model for the plain transcript.
+    var usesCombinedCloudDictation: Bool { self.usesCloudTranscription }
 
     var cloudDictationModelID: String {
         get { CloudTranscriptionPreferences(defaults: .standard).dictationModelID }

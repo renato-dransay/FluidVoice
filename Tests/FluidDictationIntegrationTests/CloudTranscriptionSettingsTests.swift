@@ -15,7 +15,6 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertEqual(preferences.source, .local)
         XCTAssertEqual(preferences.configuration.modelID, "openai/whisper-large-v3-turbo")
         XCTAssertNil(preferences.configuration.languageCode)
-        XCTAssertEqual(preferences.dictationMode, .transcriptionOnly)
         XCTAssertEqual(preferences.dictationModelID, CloudAudioDictationModel.defaultID)
         XCTAssertNil(preferences.configuration.audioDictation)
         XCTAssertNil(preferences.primaryLanguageCode)
@@ -139,29 +138,18 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertFalse((defaults.persistentDomain(forName: suite) ?? [:]).keys.contains { $0.lowercased().contains("apikey") })
     }
 
-    func testCombinedModePersistsSeparatelyFromFileTranscriptionConfiguration() throws {
+    func testDictationModelPersistsSeparatelyFromFileTranscriptionConfiguration() throws {
         let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
-        preferences.dictationMode = .transcribeAndStyle
-        preferences.dictationModelID = "google/gemini-2.5-pro"
+        preferences.dictationModelID = "google/gemini-3.5-flash-lite"
         preferences.modelID = "openai/whisper-large-v3"
         let restored = CloudTranscriptionPreferences(defaults: defaults)
-        XCTAssertEqual(restored.dictationMode, .transcribeAndStyle)
-        XCTAssertEqual(restored.dictationModelID, "google/gemini-2.5-pro")
+        XCTAssertEqual(restored.dictationModelID, "google/gemini-3.5-flash-lite")
         XCTAssertEqual(restored.configuration.modelID, "openai/whisper-large-v3")
         XCTAssertNil(restored.configuration.audioDictation)
         preferences.dictationModelID = "unvalidated/audio-model"
-        XCTAssertEqual(preferences.dictationModelID, "google/gemini-2.5-pro")
-    }
-
-    func testUnknownStoredModeKeepsLegacyTranscription() throws {
-        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set("unknown-mode", forKey: "CloudDictationMode")
-        let preferences = CloudTranscriptionPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.dictationMode, .transcriptionOnly)
+        XCTAssertEqual(preferences.dictationModelID, "google/gemini-3.5-flash-lite")
     }
 }
