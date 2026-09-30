@@ -3338,7 +3338,7 @@ struct ContentView: View {
             let sendFocus = stopSnapshot == nil ? self.recordingFocusTarget : stopSnapshot?.focusTarget
             let targetMatchesRecordingFocus = typingTarget.pid != nil
                 && typingTarget.pid == sendFocus?.pid
-            let spokenSendAllowed = spokenSendRequested
+            var spokenSendAllowed = spokenSendRequested
                 && aiFallbackReason == nil
                 && (sendsExistingDraft || !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 && targetMatchesRecordingFocus
@@ -3346,20 +3346,32 @@ struct ContentView: View {
                 && !self.isSpokenSendBlockedApp(appInfo)
             // Dispatch insertion as soon as the destination app is ready; the
             // overlay hides asynchronously after output so it cannot delay paste.
+            // A cloud dictation can take seconds; the field captured at stop may be gone.
+            // Record the caret the user has now before the restore attempt, which can
+            // activate the captured app and move focus away from that caret.
+            let caretBeforeRestore = TypingService.captureRecordingTargetContext()
+            let caretBeforeRestoreIsNotEditable = DeliveryTargetAssessment.assessFocusedElement().isCertainlyNotEditable
             var focusReady = await self.prepareStoppedDictationDelivery(finalText, keepBackup: shouldCopyToClipboard, snapshot: stopSnapshot, needsRestoration: typingTarget.shouldRestoreOriginalFocus)
             guard !Task.isCancelled else { return }
-            // A cloud dictation can take seconds; the field captured at stop may be gone.
-            // When it cannot be restored and dictation follows the cursor, deliver to the caret the user has now.
-            if let caretPID = DictationDeliveryFallbackPolicy.currentCaretPID(
-                restoreSucceeded: focusReady,
-                returnToStartingField: self.settings.returnDictationToStartingField,
-                focusedPID: TypingService.currentFocusedPID(),
-                ownPID: ProcessInfo.processInfo.processIdentifier,
-                focusedElementIsCertainlyNotEditable: DeliveryTargetAssessment.assessFocusedElement().isCertainlyNotEditable
-            ) {
-                DebugLogger.shared.info("FOCUS_PREPARE fallback=current_caret pid=\(caretPID)", source: "ContentView")
-                typingTarget = (pid: caretPID, shouldRestoreOriginalFocus: false)
-                focusReady = true
+            // When the captured field cannot be restored and dictation follows the cursor,
+            // return to the caret recorded above and deliver there without spoken send.
+            if let caret = caretBeforeRestore,
+               let caretPID = DictationDeliveryFallbackPolicy.currentCaretPID(
+                   restoreSucceeded: focusReady,
+                   returnToStartingField: self.settings.returnDictationToStartingField,
+                   focusedPID: caret.pid,
+                   ownPID: ProcessInfo.processInfo.processIdentifier,
+                   focusedElementIsCertainlyNotEditable: caretBeforeRestoreIsNotEditable
+               )
+            {
+                let caretResult = await TypingService.prepareTargetForDelivery(caret)
+                DebugLogger.shared.info("FOCUS_PREPARE fallback=current_caret pid=\(caretPID) result=\(caretResult.rawValue)", source: "ContentView")
+                if caretResult.isReady {
+                    typingTarget = (pid: caretPID, shouldRestoreOriginalFocus: false)
+                    focusReady = true
+                    // Spoken send was authorized for the captured field only.
+                    spokenSendAllowed = false
+                }
             }
 
             if spokenSendAllowed {
