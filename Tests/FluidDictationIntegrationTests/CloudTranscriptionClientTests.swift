@@ -30,7 +30,8 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertNotNil(body.range(of: Data("name=\"timestamp_granularities[]\"\r\n\r\nword".utf8)))
         XCTAssertNotNil(body.range(of: Data("name=\"response_format\"\r\n\r\nverbose_json".utf8)))
         XCTAssertNotNil(body.range(of: Data("name=\"language\"\r\n\r\nde".utf8)))
-        XCTAssertNotNil(body.range(of: Data("RIFF".utf8)))
+        XCTAssertNotNil(body.range(of: Data("fLaC".utf8)))
+        XCTAssertNotNil(body.range(of: Data("filename=\"recording.flac\"\r\nContent-Type: audio/flac".utf8)))
     }
 
     func testPlainTextDoesNotRequestUnsupportedTiming() async throws {
@@ -92,9 +93,9 @@ final class CloudTranscriptionClientTests: XCTestCase {
                 XCTAssertTrue(hint["prompt"]?.contains("Other languages") == true)
             }
             let audio = try XCTUnwrap(body["input_audio"] as? [String: String])
-            XCTAssertEqual(audio["format"], "wav")
-            let wav = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(audio["data"])))
-            XCTAssertEqual(String(data: wav.prefix(4), encoding: .utf8), "RIFF")
+            XCTAssertEqual(audio["format"], "flac")
+            let flac = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(audio["data"])))
+            XCTAssertEqual(String(data: flac.prefix(4), encoding: .utf8), "fLaC")
             XCTAssertEqual(body["response_format"] as? String, model.supportsWordTimings ? "verbose_json" : "json")
             XCTAssertEqual(body["timestamp_granularities"] as? [String], model.supportsWordTimings ? ["word"] : nil)
         }

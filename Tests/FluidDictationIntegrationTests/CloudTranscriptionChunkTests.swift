@@ -47,6 +47,33 @@ final class CloudTranscriptionChunkTests: XCTestCase {
         XCTAssertEqual(decoded[100], samples[100], accuracy: 0.0001)
     }
 
+    func testFLACRoundTripsSixteenBitSamplesAndIsSmallerThanWAV() async throws {
+        let rate = 16_000
+        let samples = (0 ..< 5 * rate).map { index in Float(sin(Double(index) * 2 * .pi * 220 / Double(rate)) * 0.3) }
+        let encoded = try CloudFLACEncoder.encode(samples: samples)
+        XCTAssertEqual(encoded.format, "flac")
+        XCTAssertEqual(encoded.mimeType, "audio/flac")
+        XCTAssertEqual(encoded.data.prefix(4), Data("fLaC".utf8))
+        XCTAssertLessThan(encoded.data.count, try CloudWAVEncoder.encode(samples: samples).count)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).flac")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try encoded.data.write(to: url)
+        let decoded = try await CloudAudioFileDecoder.readSamples(at: url)
+        // AVAssetReader returns the final FLAC block whole, so silence pads the tail (here 2,944 frames).
+        // The stream header records the true length, and the padding is less than one 4,608-frame block.
+        XCTAssertGreaterThanOrEqual(decoded.count, samples.count)
+        XCTAssertLessThan(decoded.count - samples.count, 4_608)
+        XCTAssertTrue(decoded[samples.count...].allSatisfy { abs($0) < 1.0 / 16_384 })
+        for index in stride(from: 0, to: samples.count, by: 997) {
+            XCTAssertEqual(decoded[index], samples[index], accuracy: 1.0 / 16_384, "16-bit lossless round trip")
+        }
+    }
+
+    func testBestEncodingFallsBackToWAVForInvalidSamples() {
+        XCTAssertThrowsError(try CloudEncodedAudio.best(samples: [.nan]))
+        XCTAssertEqual(try CloudEncodedAudio.best(samples: [0.1, 0.2]).format, "flac")
+    }
+
     func testDurableResumeSeparatesConfigurationAndNeverRepeatsCompletedChunks() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
