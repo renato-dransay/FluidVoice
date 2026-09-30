@@ -43,6 +43,8 @@ jobs:
           sh Tests/run_onboarding_tests.sh
           sh Tests/run_release_highlights_tests.sh
           sh Tests/run_cloud_transcription_tests.sh
+          sh Tests/run_dictation_stop_overlay_policy_tests.sh
+          sh Tests/run_dictation_delivery_fallback_policy_tests.sh
       - name: Xcode tests
         run: |
           xcodebuild test -project Fluid.xcodeproj -scheme Fluid \
