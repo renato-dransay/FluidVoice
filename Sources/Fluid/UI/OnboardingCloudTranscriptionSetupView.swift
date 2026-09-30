@@ -56,7 +56,7 @@ struct OnboardingCloudTranscriptionSetupView: View {
                 self.activationTask = nil
             }
             do {
-                let models = try await OpenRouterTranscriptionClient().validateAudioDictation(apiKey: apiKey)
+                let models = try await OpenRouterTranscriptionClient.shared.validateAudioDictation(apiKey: apiKey)
                 let availableModelIDs = Set(models.map(\.id))
                 try Task.checkCancellation()
                 guard self.settings.cloudDictationModelID == modelID,

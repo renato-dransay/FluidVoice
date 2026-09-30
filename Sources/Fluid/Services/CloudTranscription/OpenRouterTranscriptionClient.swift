@@ -7,6 +7,14 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     private let recordsUsage: Bool
     private static let baseURL = URL(string: "https://openrouter.ai/api/v1/")
 
+    /// One HTTPS connection pool for the whole app run, so a dictation does not pay a new
+    /// TCP and TLS handshake. Tests pass their own client.
+    static let shared = OpenRouterTranscriptionClient()
+
+    private let lastSuccessLock = NSLock()
+    nonisolated(unsafe) private var lastSuccessfulRequestUptime: TimeInterval?
+    private static let warmConnectionWindow: TimeInterval = 60
+
     init(session: URLSession? = nil, recordsUsage: Bool = true) {
         self.recordsUsage = recordsUsage
         if let session {
@@ -19,6 +27,26 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
             configuration.httpCookieStorage = nil
             self.session = URLSession(configuration: configuration)
         }
+    }
+
+    /// Opens the connection while the user is still speaking. Any failure is ignored: the real
+    /// request reports errors, and this call must never delay or block a recording.
+    func prewarmIfIdle(apiKey: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) async {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let isWarm = self.lastSuccessLock.withLock {
+            self.lastSuccessfulRequestUptime.map { now - $0 < Self.warmConnectionWindow } ?? false
+        }
+        guard !isWarm else { return }
+        do {
+            _ = try await self.send(self.request(path: "key", apiKey: apiKey))
+            self.markSuccess(at: now)
+        } catch {
+            DebugLogger.shared.debug("OpenRouter prewarm failed: \(CloudTranscriptionFailureSummary.kind(of: error))", source: "OpenRouterTranscriptionClient")
+        }
+    }
+
+    private func markSuccess(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        self.lastSuccessLock.withLock { self.lastSuccessfulRequestUptime = uptime }
     }
 
     /// Every transcription model OpenRouter currently lists. The catalog is public, so this sends
@@ -349,7 +377,9 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
             try Task.checkCancellation()
             guard let response = response as? HTTPURLResponse else { throw CloudTranscriptionError.malformedResponse }
             switch response.statusCode {
-            case 200 ..< 300: return (data, response)
+            case 200 ..< 300:
+                self.markSuccess()
+                return (data, response)
             case 401, 403: throw CloudTranscriptionError.authentication
             case 402: throw CloudTranscriptionError.creditsExhausted
             case 404: throw CloudTranscriptionError.modelUnavailable

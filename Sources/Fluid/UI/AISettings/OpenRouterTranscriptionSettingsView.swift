@@ -244,7 +244,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             // Validation reports what OpenRouter lists now, so refresh the cached catalog first.
             await self.refreshCatalog(force: true)
             do {
-                let client = OpenRouterTranscriptionClient()
+                let client = OpenRouterTranscriptionClient.shared
                 let dictationModels = try await client.validateAudioDictation(apiKey: apiKey)
                 self.availableDictationModelIDs = Set(dictationModels.map(\.id))
                 self.hasValidatedDictationCatalog = true
@@ -261,7 +261,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     private func refreshCatalog(force: Bool) async {
         guard !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
         do {
-            try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient(), force: force)
+            try await CloudTranscriptionCatalogStore.shared.refresh(using: .shared, force: force)
             self.models = CloudTranscriptionModel.catalog
             self.audioModels = CloudAudioDictationModel.catalog
         } catch is CancellationError {

@@ -33,6 +33,12 @@ final class SettingsStore: ObservableObject {
         return value
     }
 }
+nonisolated final class DebugLogger: @unchecked Sendable {
+    static let shared = DebugLogger()
+    func debug(_ message: @autoclosure () -> String, source: String = "App") {}
+    func info(_ message: String, source: String = "App") {}
+    func warning(_ message: String, source: String = "App") {}
+}
 final class KeychainService {
     static let shared = KeychainService()
     func fetchKey(for id: String) throws -> String? { nil }

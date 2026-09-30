@@ -686,6 +686,10 @@ final class ASRService: ObservableObject {
                         apiKey: self.frozenCloudAPIKey ?? "",
                         persistChunks: activity != .dictation
                     )
+                    if activity == .dictation {
+                        let key = self.frozenCloudAPIKey ?? ""
+                        Task.detached(priority: .utility) { await OpenRouterTranscriptionClient.shared.prewarmIfIdle(apiKey: key) }
+                    }
                 } else {
                     self.frozenTranscriptionProvider = self.transcriptionProvider
                 }

@@ -600,6 +600,36 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertFalse(line.contains("test-key"))
     }
 
+    func testPrewarmSendsOneKeyRequestThenStaysQuietWhileTheConnectionIsFresh() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"data":{}}"#.utf8))
+        }
+        let client = self.client()
+        await client.prewarmIfIdle(apiKey: "test-key", now: 100)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 130)
+        XCTAssertEqual(recorder.requests.count, 1, "A request within 60 seconds keeps the connection warm")
+        XCTAssertEqual(recorder.requests.first?.url?.absoluteString, "https://openrouter.ai/api/v1/key")
+        XCTAssertEqual(recorder.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        await client.prewarmIfIdle(apiKey: "test-key", now: 161)
+        XCTAssertEqual(recorder.requests.count, 2)
+    }
+
+    func testPrewarmIgnoresFailuresAndEmptyKeys() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (500, [:], Data())
+        }
+        let client = self.client()
+        await client.prewarmIfIdle(apiKey: "  ", now: 100)
+        XCTAssertEqual(recorder.requests.count, 0)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 100)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 101)
+        XCTAssertEqual(recorder.requests.count, 2, "A failed prewarm does not count as a warm connection")
+    }
+
     private func client() -> OpenRouterTranscriptionClient {
         OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false)
     }

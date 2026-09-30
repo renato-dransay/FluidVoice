@@ -4,18 +4,20 @@ import Foundation
 /// else: error descriptions and provider bodies can carry transcript text or credentials, so
 /// only the case name, the transport code or the error's type is ever written.
 nonisolated enum CloudTranscriptionFailureSummary {
-    static func line(for error: Error, modelID: String?) -> String {
-        let kind: String
+    static func kind(of error: Error) -> String {
         switch error {
         case let cloudError as CloudTranscriptionError:
-            kind = String(describing: cloudError)
+            return String(describing: cloudError)
         case is CancellationError:
-            kind = "cancelled"
+            return "cancelled"
         case let urlError as URLError:
-            kind = "URLError.\(urlError.code.rawValue)"
+            return "URLError.\(urlError.code.rawValue)"
         default:
-            kind = String(describing: type(of: error))
+            return String(describing: type(of: error))
         }
-        return "Cloud transcription failed: \(kind); model=\(modelID ?? "unknown"). No transcript or request payload logged."
+    }
+
+    static func line(for error: Error, modelID: String?) -> String {
+        "Cloud transcription failed: \(self.kind(of: error)); model=\(modelID ?? "unknown"). No transcript or request payload logged."
     }
 }
