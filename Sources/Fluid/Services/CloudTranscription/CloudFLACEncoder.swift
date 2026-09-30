@@ -16,16 +16,22 @@ nonisolated struct CloudEncodedAudio: Sendable {
         } catch CloudTranscriptionError.invalidAudio {
             throw CloudTranscriptionError.invalidAudio
         } catch {
-            let started = ProcessInfo.processInfo.systemUptime
-            let wav = try CloudWAVEncoder.encode(samples: samples)
-            return CloudEncodedAudio(
-                data: wav,
-                format: "wav",
-                mimeType: "audio/wav",
-                fileName: "recording.wav",
-                encodeDuration: ProcessInfo.processInfo.systemUptime - started
-            )
+            return try self.wav(samples: samples)
         }
+    }
+
+    /// WAV for endpoints whose documented input formats do not include FLAC, such as the
+    /// chat endpoint's `input_audio`, which lists WAV and MP3.
+    static func wav(samples: [Float]) throws -> CloudEncodedAudio {
+        let started = ProcessInfo.processInfo.systemUptime
+        let wav = try CloudWAVEncoder.encode(samples: samples)
+        return CloudEncodedAudio(
+            data: wav,
+            format: "wav",
+            mimeType: "audio/wav",
+            fileName: "recording.wav",
+            encodeDuration: ProcessInfo.processInfo.systemUptime - started
+        )
     }
 }
 
