@@ -13,6 +13,13 @@ private final class MeetingPCMFailureCounter: @unchecked Sendable {
     func value() -> Int { self.lock.lock(); defer { lock.unlock() }; return self.count }
 }
 
+private final class MeetingPCMFailureDetails: @unchecked Sendable {
+    private let lock = NSLock()
+    private var details: [String] = []
+    func append(_ detail: String) { self.lock.lock(); self.details.append(detail); self.lock.unlock() }
+    func values() -> [String] { self.lock.lock(); defer { lock.unlock() }; return self.details }
+}
+
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
@@ -354,6 +361,190 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("FluidVoice-P1a-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false, attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
         return url
+    }
+
+    // MARK: - Non-native capture formats (Bluetooth HFP microphones through ScreenCaptureKit)
+
+    func testPCMFormatContractErrorDescriptionRoundTrips() throws {
+        let error = MeetingPCMFormatContractError.unsupported("native Float32 LPCM required")
+        XCTAssertEqual(error.errorDescription, "native Float32 LPCM required")
+        XCTAssertEqual(error.localizedDescription, "native Float32 LPCM required")
+
+        let int16 = try self.makeInt16SampleBuffer(frameCount: 320, pts: 0.5)
+        let description = try XCTUnwrap(CMSampleBufferGetFormatDescription(int16))
+        XCTAssertThrowsError(try MeetingPCMFormatContract(formatDescription: description)) { thrown in
+            XCTAssertEqual(thrown.localizedDescription, "native Float32 LPCM required")
+        }
+    }
+
+    func testNormalizerConvertsInt16MonoToContractFloat32PreservingFramesAndPTS() throws {
+        let normalizer = MeetingPCMFormatNormalizer(logSource: "Test")
+        let source = try self.makeInt16SampleBuffer(frameCount: 320, pts: 1.5, sampleValue: 16_384)
+        guard case let .converted(converted) = normalizer.normalize(source) else {
+            return XCTFail("expected an Int16 buffer to be converted")
+        }
+        XCTAssertTrue(CMSampleBufferDataIsReady(converted))
+        XCTAssertEqual(CMSampleBufferGetNumSamples(converted), 320)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(converted).seconds, 1.5, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetDuration(converted).seconds, 320.0 / 16_000, accuracy: 0.000_001)
+
+        let description = try XCTUnwrap(CMSampleBufferGetFormatDescription(converted))
+        let contract = try MeetingPCMFormatContract(formatDescription: description)
+        XCTAssertEqual(contract.sampleRate, 16_000)
+        XCTAssertEqual(contract.channelCount, 1)
+        XCTAssertEqual(contract.layout, .mono)
+
+        let copied = try XCTUnwrap(MeetingLiveSampleCopy.copy(converted))
+        XCTAssertEqual(copied.buffer.frameLength, 320)
+        let samples = try Array(UnsafeBufferPointer(
+            start: XCTUnwrap(copied.buffer.floatChannelData?[0]),
+            count: Int(copied.buffer.frameLength)
+        ))
+        XCTAssertTrue(samples.allSatisfy { abs($0 - 0.5) < 0.001 }, "expected Int16 16384 to map to Float32 0.5")
+
+        // The cached converter serves the next buffer of the same format.
+        guard case let .converted(second) = normalizer.normalize(try self.makeInt16SampleBuffer(frameCount: 160, pts: 1.52)) else {
+            return XCTFail("expected the second Int16 buffer to be converted")
+        }
+        XCTAssertEqual(CMSampleBufferGetNumSamples(second), 160)
+    }
+
+    func testNormalizerPassesContractValidBufferThroughUntouched() throws {
+        let normalizer = MeetingPCMFormatNormalizer(logSource: "Test")
+        let source = try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 0)
+        guard case .passthrough = normalizer.normalize(source) else {
+            return XCTFail("expected a native Float32 buffer to pass through")
+        }
+        XCTAssertTrue(normalizer.normalized(source) === source)
+    }
+
+    func testWriterEmitsOneFailureEventForRepeatedIdenticalNoChunkFailures() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let track = MeetingAudioTrack(
+            id: UUID(),
+            kind: .microphone,
+            sourceIdentifier: "test",
+            sourceDisplayName: "Test",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting,
+            chunks: []
+        )
+        let failures = MeetingPCMFailureCounter()
+        let details = MeetingPCMFailureDetails()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60) { event in
+            if case let .interrupted(.writerFailure, _, detail) = event {
+                failures.increment()
+                details.append(detail ?? "")
+            }
+        }
+        for index in 0..<5 {
+            try writer.enqueue(self.makeInt16SampleBuffer(frameCount: 320, pts: Double(index) * 0.02))
+        }
+        let result = await writer.stop()
+        XCTAssertEqual(result.chunks, [])
+        // `stop()` reports a chunk-less track as unavailable; the failure detail survives it.
+        XCTAssertEqual(result.health.status, .unavailable)
+        XCTAssertEqual(result.health.detail, "native Float32 LPCM required")
+        XCTAssertEqual(failures.value(), 1)
+        XCTAssertEqual(details.values(), ["native Float32 LPCM required"])
+    }
+
+    func testWriterAcceptsNormalizedInt16Microphone() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let track = MeetingAudioTrack(
+            id: UUID(),
+            kind: .microphone,
+            sourceIdentifier: "test",
+            sourceDisplayName: "Test",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting,
+            chunks: []
+        )
+        let failures = MeetingPCMFailureCounter()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60) { event in
+            if case .interrupted(.writerFailure, _, _) = event { failures.increment() }
+        }
+        let normalizer = MeetingPCMFormatNormalizer(logSource: "Test")
+        for index in 0..<5 {
+            try writer.enqueue(normalizer.normalized(self.makeInt16SampleBuffer(frameCount: 320, pts: Double(index) * 0.02)))
+        }
+        let result = await writer.stop()
+        let chunk = try XCTUnwrap(result.chunks.first)
+        XCTAssertEqual(result.chunks.count, 1)
+        XCTAssertEqual(chunk.finalizationState, .finalized)
+        XCTAssertEqual(chunk.captureAnalysisAsset?.frameCount, 1600)
+        XCTAssertEqual(failures.value(), 0)
+    }
+
+    private func makeInt16SampleBuffer(frameCount: Int, pts: Double, sampleValue: Int16 = 1_000) throws -> CMSampleBuffer {
+        var asbd = AudioStreamBasicDescription(
+            mSampleRate: 16_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 2,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 2,
+            mChannelsPerFrame: 1,
+            mBitsPerChannel: 16,
+            mReserved: 0
+        )
+        var description: CMAudioFormatDescription?
+        XCTAssertEqual(CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            asbd: &asbd,
+            layoutSize: 0,
+            layout: nil,
+            magicCookieSize: 0,
+            magicCookie: nil,
+            extensions: nil,
+            formatDescriptionOut: &description
+        ), noErr)
+        let values = Array(repeating: sampleValue, count: frameCount)
+        let bytes = values.withUnsafeBytes { Data($0) }
+        var block: CMBlockBuffer?
+        XCTAssertEqual(CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: bytes.count,
+            blockAllocator: kCFAllocatorDefault,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: bytes.count,
+            flags: kCMBlockBufferAssureMemoryNowFlag,
+            blockBufferOut: &block
+        ), noErr)
+        let blockBuffer = try XCTUnwrap(block)
+        XCTAssertEqual(
+            // Fixed test fixture: missing required audio storage or evidence is a setup failure.
+            // swiftlint:disable:next force_unwrapping
+            bytes.withUnsafeBytes { CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: blockBuffer, offsetIntoDestination: 0, dataLength: bytes.count) },
+            noErr
+        )
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 16_000),
+            presentationTimeStamp: CMTime(seconds: pts, preferredTimescale: 16_000),
+            decodeTimeStamp: .invalid
+        )
+        var sample: CMSampleBuffer?
+        XCTAssertEqual(
+            try CMSampleBufferCreateReady(
+                allocator: kCFAllocatorDefault,
+                dataBuffer: blockBuffer,
+                formatDescription: XCTUnwrap(description),
+                sampleCount: frameCount,
+                sampleTimingEntryCount: 1,
+                sampleTimingArray: &timing,
+                sampleSizeEntryCount: 0,
+                sampleSizeArray: nil,
+                sampleBufferOut: &sample
+            ),
+            noErr
+        )
+        return try XCTUnwrap(sample)
     }
 
     private func makeRawSampleBuffer(channelCount: Int, layoutTag: UInt32?, frameCount: Int, pts: Double) throws -> CMSampleBuffer {
