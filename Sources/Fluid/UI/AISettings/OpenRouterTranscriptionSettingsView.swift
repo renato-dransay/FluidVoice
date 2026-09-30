@@ -11,6 +11,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     @State private var isValidating = false
     @State private var retryTask: Task<Void, Never>?
     @State private var models = CloudTranscriptionModel.catalog
+    @State private var audioModels = CloudAudioDictationModel.catalog
     @State private var availableModelIDs: Set<String> = []
     @State private var hasValidatedCatalog = false
     @State private var availableDictationModelIDs: Set<String> = []
@@ -108,7 +109,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         .accessibilityIdentifier("openrouter-dictation-mode")
         if self.isCombinedMode {
             Picker("Dictation voice model", selection: self.$settings.cloudDictationModelID) {
-                ForEach(CloudAudioDictationModel.catalog, id: \.id) { model in
+                ForEach(self.audioModels, id: \.id) { model in
                     Text(model.name).tag(model.id)
                         .disabled(self.hasValidatedDictationCatalog && !self.availableDictationModelIDs.contains(model.id))
                 }
@@ -292,6 +293,7 @@ struct OpenRouterTranscriptionSettingsView: View {
         do {
             try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient(), force: force)
             self.models = CloudTranscriptionModel.catalog
+            self.audioModels = CloudAudioDictationModel.catalog
         } catch is CancellationError {
             return
         } catch {

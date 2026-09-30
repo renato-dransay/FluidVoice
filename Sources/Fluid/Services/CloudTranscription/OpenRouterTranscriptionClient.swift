@@ -86,32 +86,54 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     func validateAudioDictation(apiKey: String) async throws -> [CloudAudioDictationModel] {
         _ = try await self.send(self.request(path: "key", apiKey: apiKey))
         let (data, _) = try await self.send(self.request(path: "models", apiKey: apiKey))
-        struct Catalog: Decodable { let data: [Entry] }
-        struct Entry: Decodable {
-            struct Architecture: Decodable {
-                // Missing metadata is distinct from a declared empty capability list.
-                // swiftlint:disable:next discouraged_optional_collection
-                let inputModalities: [String]?
-                // swiftlint:disable:next discouraged_optional_collection
-                let outputModalities: [String]?
-            }
-            let id: String
-            let architecture: Architecture?
-            // swiftlint:disable:next discouraged_optional_collection
-            let supportedParameters: [String]?
-        }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let catalog = try? decoder.decode(Catalog.self, from: data) else { throw CloudTranscriptionError.malformedResponse }
-        let supported = Set(catalog.data.filter { entry in
-            entry.architecture?.inputModalities?.contains("audio") == true
-                && entry.architecture?.outputModalities?.contains("text") == true
-                && entry.supportedParameters?.contains("response_format") == true
-                && entry.supportedParameters?.contains("structured_outputs") == true
-        }.map(\.id))
+        let supported = Set(try Self.audioDictationEntries(in: data).map(\.id))
         let models = CloudAudioDictationModel.catalog.filter { supported.contains($0.id) }
         guard !models.isEmpty else { throw CloudTranscriptionError.catalogUnavailable }
         return models
+    }
+
+    /// Every chat model OpenRouter currently lists that can take WAV input and return the strict
+    /// JSON combined dictation needs. Public, so no credentials are sent.
+    func audioDictationCatalog() async throws -> [CloudTranscriptionCatalogEntry] {
+        let (data, _) = try await self.send(self.publicRequest(path: "models"))
+        let entries = try Self.audioDictationEntries(in: data)
+        guard !entries.isEmpty else { throw CloudTranscriptionError.catalogUnavailable }
+        return entries
+    }
+
+    private struct ModelEntry: Decodable {
+        struct Architecture: Decodable {
+            // Missing metadata is distinct from a declared empty capability list.
+            // swiftlint:disable:next discouraged_optional_collection
+            let inputModalities: [String]?
+            // swiftlint:disable:next discouraged_optional_collection
+            let outputModalities: [String]?
+        }
+        let id: String
+        let name: String?
+        let architecture: Architecture?
+        // swiftlint:disable:next discouraged_optional_collection
+        let supportedParameters: [String]?
+
+        /// Batch variants answer asynchronously, the routers pick an arbitrary model, and the
+        /// tilde aliases are moving targets; none can serve a dictation request predictably.
+        var acceptsAudioDictation: Bool {
+            self.architecture?.inputModalities?.contains("audio") == true
+                && self.architecture?.outputModalities?.contains("text") == true
+                && self.supportedParameters?.contains("response_format") == true
+                && self.supportedParameters?.contains("structured_outputs") == true
+                && !self.id.hasSuffix(":batch")
+                && !self.id.hasPrefix("openrouter/")
+                && !self.id.hasPrefix("~")
+        }
+    }
+
+    private static func audioDictationEntries(in data: Data) throws -> [CloudTranscriptionCatalogEntry] {
+        struct Catalog: Decodable { let data: [ModelEntry] }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let catalog = try? decoder.decode(Catalog.self, from: data) else { throw CloudTranscriptionError.malformedResponse }
+        return catalog.data.filter(\.acceptsAudioDictation).map { CloudTranscriptionCatalogEntry(id: $0.id, name: $0.name ?? $0.id) }
     }
 
     func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult {

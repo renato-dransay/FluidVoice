@@ -12,12 +12,16 @@ nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
     let name: String
 
     static let defaultID = "google/gemini-2.5-flash"
-    // These Gemini models accept WAV input; discovery also checks their current schema capabilities.
-    static let catalog: [CloudAudioDictationModel] = [
+    /// These Gemini models accept WAV input and structured output. They are always offered, so
+    /// combined dictation works before the first catalog fetch and while offline.
+    static let builtIn: [CloudAudioDictationModel] = [
         .init(id: defaultID, name: "Gemini 2.5 Flash"),
         .init(id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite"),
         .init(id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro"),
     ]
+    /// Built-in models followed by every other chat model OpenRouter last listed with audio input,
+    /// text output and structured outputs.
+    static var catalog: [CloudAudioDictationModel] { CloudTranscriptionCatalogStore.shared.audioDictationModels }
 }
 
 nonisolated struct CloudAudioDictationInstructions: Codable, Equatable, Sendable {
