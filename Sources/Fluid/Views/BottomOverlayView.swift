@@ -2798,7 +2798,9 @@ struct BottomOverlayView: View {
 
     private func previewResizeBucket(for previewText: String) -> Int {
         guard self.shouldReservePreviewArea else { return 0 }
-        if self.shouldShowAIProcessingFailure || self.shouldShowTextDeliveryFailure { return 1 }
+        // A failure card is taller than a one-line preview, so it needs its own bucket
+        // to force a resize when it replaces that preview.
+        if self.shouldShowAIProcessingFailure || self.shouldShowTextDeliveryFailure { return -1 }
         let trimmed = previewText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return self.shouldShowProcessingStatus ? 1 : 0 }
 
@@ -3615,8 +3617,9 @@ struct BottomOverlayView: View {
             )
 
             if self.isPillSize, self.isPillExpanded {
+                // Not fixed-size: the label shrinks so the expanded pill stays inside
+                // PillShadowMetrics.canvasWidth, where hit testing still reaches it.
                 self.promptSelectorView
-                    .fixedSize()
                     .transition(self.reduceMotion ? .opacity : .pillChip)
                 if self.showsCloudLanguageSelector {
                     CloudDictationLanguageSelector(metrics: self.chipMetrics)
