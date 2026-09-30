@@ -84,9 +84,6 @@ struct CloudTranscriptionPreferences {
         set { self.defaults.set(newValue.rawValue, forKey: "CloudDictationMode") }
     }
 
-    /// Transcription only promises a single request, so no cleanup request may follow it.
-    var skipsDictationCleanup: Bool { self.source == .openRouter && self.dictationMode == .transcriptionOnly }
-
     var dictationModelID: String {
         get {
             let stored = self.defaults.string(forKey: "CloudDictationModel") ?? ""
@@ -134,8 +131,6 @@ extension SettingsStore {
     var usesCloudTranscription: Bool { self.speechExecutionSource == .openRouter }
 
     var usesCombinedCloudDictation: Bool { self.usesCloudTranscription && self.cloudDictationMode == .transcribeAndStyle }
-
-    var skipsCloudDictationCleanup: Bool { CloudTranscriptionPreferences(defaults: .standard).skipsDictationCleanup }
 
     var cloudDictationMode: CloudDictationMode {
         get { CloudTranscriptionPreferences(defaults: .standard).dictationMode }

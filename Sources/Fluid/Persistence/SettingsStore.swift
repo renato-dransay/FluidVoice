@@ -734,8 +734,6 @@ final class SettingsStore: ObservableObject {
     }
 
     func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptSelection {
-        // Every cleanup decision resolves through here, so this one guard keeps the mode's promise.
-        if self.skipsCloudDictationCleanup { return .off }
         if let manual = DictationAppSession.shared.choice(for: slot, appID: appBundleID) {
             return self.usesCombinedCloudDictation && manual == .privateAI ? .default : manual
         }

@@ -156,22 +156,6 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertEqual(preferences.dictationModelID, "google/gemini-2.5-pro")
     }
 
-    func testTranscriptionOnlySkipsCleanupOnlyWhenOpenRouterIsActive() throws {
-        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        var preferences = CloudTranscriptionPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.dictationMode, .transcriptionOnly)
-        XCTAssertFalse(preferences.skipsDictationCleanup, "Local dictation keeps its own cleanup rules")
-        preferences.source = .openRouter
-        XCTAssertTrue(preferences.skipsDictationCleanup, "Transcription only means one request and no cleanup")
-        preferences.dictationMode = .transcriptionThenCleanup
-        XCTAssertEqual(CloudTranscriptionPreferences(defaults: defaults).dictationMode, .transcriptionThenCleanup)
-        XCTAssertFalse(preferences.skipsDictationCleanup)
-        preferences.dictationMode = .transcribeAndStyle
-        XCTAssertFalse(preferences.skipsDictationCleanup)
-    }
-
     func testUnknownStoredModeKeepsLegacyTranscription() throws {
         let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
