@@ -594,6 +594,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         qos: .userInteractive
     )
     private let callbackQueueKey = DispatchSpecificKey<UInt8>()
+    /// ScreenCaptureKit hands Bluetooth HFP microphones over as Int16 LPCM, which the chunk writer's
+    /// Float32 contract rejects. Native buffers pass through untouched.
+    private let microphoneFormatNormalizer = MeetingPCMFormatNormalizer(logSource: "MeetingCaptureEngine")
     #if DEBUG
     private let pairedDiagnosticCollector: MeetingSCKPairedDiagnosticCollector
     // Keep the descriptive diagnostic contract name consistent with its persisted field.
@@ -1042,7 +1045,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         MeetingDirectAEC3Availability.isAvailable()
     }
 
-    private func emitDirectRawMicrophone(_ sampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
+    private func emitDirectRawMicrophone(_ sourceSampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
+        let sampleBuffer = self.microphoneFormatNormalizer.normalized(sourceSampleBuffer)
         self.microphoneWriter.enqueue(sampleBuffer, producerEpoch: producerEpoch)
         if self.microphoneTranscriptGate.observeAndAdmit(sampleBuffer) {
             self.liveAudioHandler?(.microphone, sampleBuffer)

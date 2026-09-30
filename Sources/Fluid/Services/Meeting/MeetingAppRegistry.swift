@@ -22,21 +22,26 @@ nonisolated enum MeetingAppRegistry {
     ]
 
     /// Bundle identifiers for browsers eligible for Tier 2 URL reading. Google Meet's "app" is a
-    /// Chrome/Edge PWA, not a separate bundle — it is matched via `pwaBundlePrefixes` instead.
+    /// Chrome/Edge/Vivaldi PWA, not a separate bundle — it is matched via `pwaHostByPrefix` instead.
     static let browserBundleIdentifiers: Set<String> = [
         "com.google.Chrome",
         "com.apple.Safari",
         "company.thebrowser.Browser",
         "com.microsoft.edgemac",
         "com.brave.Browser",
+        "com.vivaldi.Vivaldi",
     ]
 
-    /// PWA windows report a per-app bundle ID with one of these prefixes. Firefox has no PWA
-    /// mechanism comparable to this and is excluded from the registry entirely (its AX tree must
-    /// be force-enabled by the user, so it fails closed anyway).
-    static let pwaBundlePrefixes: [String] = [
-        "com.google.Chrome.app.",
-        "com.microsoft.edgemac.app.",
+    /// Installed web apps (PWAs) run in an app shim whose bundle ID starts with one of these
+    /// prefixes; the value is the host browser that renders the page and its audio. Chromium
+    /// records the same mapping in each shim's Info.plist as `CrBundleIdentifier`. The trailing
+    /// dot keeps unrelated bundles such as `com.vivaldi.Vivaldi.application` from matching.
+    /// Firefox has no comparable PWA mechanism and is excluded from the registry entirely (its
+    /// AX tree must be force-enabled by the user, so it fails closed anyway).
+    static let pwaHostByPrefix: [String: String] = [
+        "com.google.Chrome.app.": "com.google.Chrome",
+        "com.microsoft.edgemac.app.": "com.microsoft.edgemac",
+        "com.vivaldi.Vivaldi.app.": "com.vivaldi.Vivaldi",
     ]
 
     static func tier(forBundleIdentifier bundleIdentifier: String) -> MeetingDetectionTier? {
@@ -46,10 +51,15 @@ nonisolated enum MeetingAppRegistry {
         if self.browserBundleIdentifiers.contains(bundleIdentifier) {
             return .browserTier2
         }
-        if self.pwaBundlePrefixes.contains(where: { bundleIdentifier.hasPrefix($0) }) {
+        if self.hostBrowserBundleIdentifier(forPWABundleIdentifier: bundleIdentifier) != nil {
             return .browserTier2
         }
         return nil
+    }
+
+    /// The browser that hosts an installed web app, or nil when the bundle is not a known PWA shim.
+    static func hostBrowserBundleIdentifier(forPWABundleIdentifier bundleIdentifier: String) -> String? {
+        self.pwaHostByPrefix.first { bundleIdentifier.hasPrefix($0.key) && bundleIdentifier.count > $0.key.count }?.value
     }
 
     static func isNativeMeetingApp(bundleIdentifier: String) -> Bool {
@@ -132,6 +142,22 @@ nonisolated enum MeetingInCallURLMatcher {
         let segment = path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
         guard !segment.isEmpty, !segment.contains("/") else { return false }
         return !reserved.contains(segment)
+    }
+}
+
+/// Accessibility-free browser evidence: Google Meet titles its tab and web-app window
+/// "Meet – abc-defg-hij", and browsers may append their own name ("… - Vivaldi"). Only Google Meet
+/// is matched. Zoom and Teams web titles are generic, so those stay URL-only and fail closed.
+nonisolated enum MeetingInCallTitleMatcher {
+    private static let separators: Set<Substring> = ["–", "-", "—"]
+
+    /// Returns the canonical in-call URL for a Meet room title, so title and tab-URL evidence
+    /// for the same room share one episode key. Titles are never logged.
+    static func inCallURL(fromWindowTitle title: String) -> BrowserTabURL? {
+        let parts = title.split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 3, parts[0] == "Meet", self.separators.contains(parts[1]) else { return nil }
+        let url = BrowserTabURL(host: "meet.google.com", path: "/\(parts[2])")
+        return MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) ? url : nil
     }
 }
 

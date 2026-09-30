@@ -224,13 +224,22 @@ final class AppServices: ObservableObject {
             throw MeetingAutoDetector.StartError.cannotStart
         }
         let coordinator = self.meetingSessionCoordinator
-        let configuration = try await coordinator.defaultConfiguration(
+        let calendar = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: target.conferenceFragment)
+        try Task.checkCancellation()
+        var configuration = try await coordinator.defaultConfiguration(
             mode: .onlineCall,
-            title: MeetingTranscriptionSetupDraft.defaultTitle(mode: .onlineCall, applicationDisplayName: nil),
+            title: MeetingRecordingTitle.resolve(
+                mode: .onlineCall,
+                calendarTitle: calendar?.title,
+                exposedTitle: target.exposedTitle,
+                serviceName: target.serviceName,
+                applicationDisplayName: nil
+            ),
             preferredBundleIdentifier: target.bundleIdentifier,
             preferredWindowID: target.windowID,
             requirePreferredApplication: true
         )
+        configuration.calendar = calendar
         try Task.checkCancellation()
         guard detector.canStart(episodeID: episodeID) else {
             throw MeetingAutoDetector.StartError.cannotStart

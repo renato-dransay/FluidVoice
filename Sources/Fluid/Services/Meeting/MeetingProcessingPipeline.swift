@@ -1965,12 +1965,44 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attempt.completedAt = Date()
         progress(.completed)
         return MeetingProcessingResult(
-            speakers: accumulator.speakers,
+            speakers: Self.seedingCalendarIdentityCandidates(
+                into: accumulator.speakers,
+                attendees: session.calendarContext?.attendees ?? []
+            ),
             segments: accumulator.segments,
             attempt: attempt,
             skippedChunkIDs: skippedChunkIDs,
             coverageGaps: coverageGaps
         )
+    }
+
+    /// Remote speakers keep their "Speaker N" labels; calendar attendees are only offered as
+    /// choices in the speaker picker, never auto-assigned. Speakers that already carry candidates
+    /// (checkpoint restore, re-processing) are left alone.
+    nonisolated static func seedingCalendarIdentityCandidates(
+        into speakers: [MeetingSessionSpeaker],
+        attendees: [MeetingCalendarAttendee]
+    ) -> [MeetingSessionSpeaker] {
+        guard !attendees.isEmpty else { return speakers }
+        return speakers.map { speaker in
+            guard speaker.trackKind == .applicationAudio,
+                  !speaker.isLocalUser,
+                  speaker.identityCandidates.isEmpty
+            else {
+                return speaker
+            }
+            var seeded = speaker
+            seeded.identityCandidates = attendees.map { attendee in
+                MeetingIdentityCandidate(
+                    id: Self.stableUUID("calendar-candidate:\(speaker.id.uuidString):\(attendee.name)"),
+                    displayName: attendee.name,
+                    source: "calendar",
+                    rejected: false,
+                    confirmedAt: nil
+                )
+            }
+            return seeded
+        }
     }
 
     private static let checkpointEncoder: JSONEncoder = {

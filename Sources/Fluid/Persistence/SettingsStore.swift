@@ -2100,6 +2100,15 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Calendar-derived meeting titles and attendee suggestions (default: OFF — needs EventKit access).
+    var meetingCalendarNamesEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingCalendarNamesEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingCalendarNamesEnabled)
+        }
+    }
+
     var preferredOutputDeviceUID: String? {
         get { self.defaults.string(forKey: Keys.preferredOutputDeviceUID) }
         set { self.defaults.set(newValue, forKey: Keys.preferredOutputDeviceUID) }
@@ -3558,6 +3567,9 @@ final class SettingsStore: ObservableObject {
             selectedNemotronLanguage: self.selectedNemotronLanguage,
             selectedAppleSpeechLocaleIdentifier: self.selectedAppleSpeechLocaleIdentifier,
             meetingTranscriptionBackendID: self.meetingTranscriptionBackendID.rawValue,
+            meetingAutoDetectEnabled: self.meetingAutoDetectEnabled,
+            meetingAutoDetectBrowserEnabled: self.meetingAutoDetectBrowserEnabled,
+            meetingCalendarNamesEnabled: self.meetingCalendarNamesEnabled,
             hotkeyShortcut: self.hotkeyShortcut,
             primaryDictationShortcuts: self.primaryDictationShortcuts,
             promptModeHotkeyShortcut: self.promptModeHotkeyShortcut,
@@ -3702,6 +3714,15 @@ final class SettingsStore: ObservableObject {
         self.meetingTranscriptionBackendID = payload.meetingTranscriptionBackendID.map {
             MeetingBackendID(rawValue: $0)
         } ?? .productionDefault
+        if let meetingAutoDetectEnabled = payload.meetingAutoDetectEnabled {
+            self.meetingAutoDetectEnabled = meetingAutoDetectEnabled
+        }
+        if let meetingAutoDetectBrowserEnabled = payload.meetingAutoDetectBrowserEnabled {
+            self.meetingAutoDetectBrowserEnabled = meetingAutoDetectBrowserEnabled
+        }
+        if let meetingCalendarNamesEnabled = payload.meetingCalendarNamesEnabled {
+            self.meetingCalendarNamesEnabled = meetingCalendarNamesEnabled
+        }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
         self.promptModeShortcutEnabled = payload.promptModeShortcutEnabled
@@ -5800,6 +5821,7 @@ private extension SettingsStore {
         static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
+        static let meetingCalendarNamesEnabled = "MeetingCalendarNamesEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"

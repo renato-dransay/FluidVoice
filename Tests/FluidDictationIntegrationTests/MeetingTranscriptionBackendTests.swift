@@ -448,6 +448,236 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(settingsStore.meetingTranscriptionBackendID, .productionDefault)
     }
 
+    func testMeetingDetectionTogglesRoundTripThroughBackupAndLegacyBackupsKeepCurrentValues() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["MeetingAutoDetectEnabled", "MeetingAutoDetectBrowserEnabled"]
+        let oldValues = keys.map { defaults.object(forKey: $0) }
+        defer {
+            for (key, oldValue) in zip(keys, oldValues) {
+                if let oldValue { defaults.set(oldValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        let settingsStore = SettingsStore.shared
+        settingsStore.meetingAutoDetectEnabled = false
+        settingsStore.meetingAutoDetectBrowserEnabled = true
+
+        let document = try await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.meetingAutoDetectEnabled, false)
+        XCTAssertEqual(document.settings.meetingAutoDetectBrowserEnabled, true)
+
+        let encoded = try BackupService.shared.encode(document)
+        let decoded = try BackupService.shared.decode(encoded)
+        settingsStore.meetingAutoDetectEnabled = true
+        settingsStore.meetingAutoDetectBrowserEnabled = false
+        settingsStore.restore(from: decoded.settings)
+        XCTAssertFalse(settingsStore.meetingAutoDetectEnabled)
+        XCTAssertTrue(settingsStore.meetingAutoDetectBrowserEnabled)
+
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var payload = try XCTUnwrap(root["settings"] as? [String: Any])
+        for key in ["meetingAutoDetectEnabled", "meetingAutoDetectBrowserEnabled"] {
+            payload.removeValue(forKey: key)
+        }
+        root["settings"] = payload
+        let legacy = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacy.settings.meetingAutoDetectEnabled)
+        settingsStore.meetingAutoDetectEnabled = true
+        settingsStore.meetingAutoDetectBrowserEnabled = false
+        settingsStore.restore(from: legacy.settings)
+        XCTAssertTrue(settingsStore.meetingAutoDetectEnabled, "older backups leave the current value alone")
+        XCTAssertFalse(settingsStore.meetingAutoDetectBrowserEnabled)
+    }
+
+    // MARK: - Calendar context
+
+    private func makeCalendarCandidate(
+        id: String,
+        title: String,
+        startOffset: TimeInterval,
+        endOffset: TimeInterval,
+        isAllDay: Bool = false,
+        searchableText: String = "",
+        attendees: [MeetingCalendarAttendee] = []
+    ) -> MeetingCalendarEventCandidate {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        return MeetingCalendarEventCandidate(
+            eventIdentifier: id,
+            title: title,
+            start: now.addingTimeInterval(startOffset),
+            end: now.addingTimeInterval(endOffset),
+            isAllDay: isAllDay,
+            searchableText: searchableText,
+            attendees: attendees
+        )
+    }
+
+    func testCalendarConferenceLinkMatchBeatsOverlappingTimeMatch() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let overlapping = self.makeCalendarCandidate(id: "overlap", title: "Overlapping event", startOffset: -600, endOffset: 1800)
+        let linked = self.makeCalendarCandidate(
+            id: "linked",
+            title: "Weekly sync",
+            startOffset: 300,
+            endOffset: 2100,
+            searchableText: "join: https://meet.google.com/abc-defg-hij\nagenda"
+        )
+
+        let match = MeetingCalendarRanking.bestMatch(
+            among: [overlapping, linked],
+            at: now,
+            conferenceFragment: "meet.google.com/abc-defg-hij"
+        )
+        XCTAssertEqual(match?.eventIdentifier, "linked")
+        XCTAssertEqual(match?.title, "Weekly sync")
+        XCTAssertEqual(match?.matchedByConferenceLink, true)
+
+        let timeOnly = MeetingCalendarRanking.bestMatch(among: [overlapping, linked], at: now, conferenceFragment: nil)
+        XCTAssertEqual(timeOnly?.eventIdentifier, "overlap")
+        XCTAssertEqual(timeOnly?.matchedByConferenceLink, false)
+    }
+
+    func testCalendarAmbiguousOverlapWithoutLinkMatchYieldsNil() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = self.makeCalendarCandidate(id: "a", title: "A", startOffset: -300, endOffset: 1500)
+        let second = self.makeCalendarCandidate(id: "b", title: "B", startOffset: -60, endOffset: 900)
+
+        XCTAssertNil(MeetingCalendarRanking.bestMatch(among: [first, second], at: now, conferenceFragment: nil))
+        XCTAssertNil(MeetingCalendarRanking.bestMatch(among: [first, second], at: now, conferenceFragment: "zoom.us/j/123"))
+        XCTAssertNil(MeetingCalendarRanking.bestMatch(among: [], at: now, conferenceFragment: nil))
+    }
+
+    func testCalendarAllDayEventsAreIgnored() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let allDay = self.makeCalendarCandidate(
+            id: "all-day",
+            title: "Company offsite",
+            startOffset: -36000,
+            endOffset: 36000,
+            isAllDay: true,
+            searchableText: "https://zoom.us/j/123456789"
+        )
+        let timed = self.makeCalendarCandidate(id: "timed", title: "Standup", startOffset: -120, endOffset: 780)
+
+        XCTAssertEqual(
+            MeetingCalendarRanking.bestMatch(among: [allDay, timed], at: now, conferenceFragment: nil)?.eventIdentifier,
+            "timed"
+        )
+        XCTAssertNil(MeetingCalendarRanking.bestMatch(among: [allDay], at: now, conferenceFragment: "zoom.us/j/123456789"))
+    }
+
+    func testCalendarAttendeesExcludeCurrentUserAndRooms() {
+        let attendees = MeetingCalendarRanking.attendees(
+            from: [
+                .init(name: "Me", urlString: "mailto:me@example.com", isCurrentUser: true, kind: .person),
+                .init(name: "Jane Doe", urlString: "mailto:jane@example.com", isCurrentUser: false, kind: .person),
+                .init(name: "Room 4B", urlString: "mailto:room4b@resource.example.com", isCurrentUser: false, kind: .room),
+                .init(name: "Projector", urlString: "mailto:projector@resource.example.com", isCurrentUser: false, kind: .resource),
+                .init(name: nil, urlString: "mailto:bob.smith@example.com", isCurrentUser: false, kind: .unknown),
+                .init(name: " ", urlString: nil, isCurrentUser: false, kind: .person),
+            ],
+            organizerURLString: "mailto:Jane@example.com"
+        )
+
+        XCTAssertEqual(attendees.map(\.name), ["Jane Doe", "bob.smith"])
+        XCTAssertEqual(attendees.map(\.email), ["jane@example.com", "bob.smith@example.com"])
+        XCTAssertEqual(attendees.map(\.isOrganizer), [true, false])
+    }
+
+    func testCalendarNamesToggleRoundTripsThroughBackupAndLegacyBackupsKeepCurrentValue() async throws {
+        let defaults = UserDefaults.standard
+        let key = "MeetingCalendarNamesEnabled"
+        let oldValue = defaults.object(forKey: key)
+        defer {
+            if let oldValue { defaults.set(oldValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        let settingsStore = SettingsStore.shared
+        settingsStore.meetingCalendarNamesEnabled = true
+
+        let document = try await BackupService.shared.makeBackupDocument()
+        XCTAssertEqual(document.settings.meetingCalendarNamesEnabled, true)
+
+        let encoded = try BackupService.shared.encode(document)
+        let decoded = try BackupService.shared.decode(encoded)
+        settingsStore.meetingCalendarNamesEnabled = false
+        settingsStore.restore(from: decoded.settings)
+        XCTAssertTrue(settingsStore.meetingCalendarNamesEnabled)
+
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var payload = try XCTUnwrap(root["settings"] as? [String: Any])
+        payload.removeValue(forKey: "meetingCalendarNamesEnabled")
+        root["settings"] = payload
+        let legacy = try BackupService.shared.decode(JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacy.settings.meetingCalendarNamesEnabled)
+        settingsStore.meetingCalendarNamesEnabled = false
+        settingsStore.restore(from: legacy.settings)
+        XCTAssertFalse(settingsStore.meetingCalendarNamesEnabled, "older backups leave the current value alone")
+    }
+
+    func testSessionCalendarContextRoundTripsAndLegacySessionsDecodeWithoutIt() throws {
+        let match = MeetingCalendarMatch(
+            eventIdentifier: "event-1",
+            title: "Design review",
+            attendees: [MeetingCalendarAttendee(name: "Jane Doe", email: "jane@example.com", isOrganizer: true)],
+            matchedByConferenceLink: true
+        )
+        var session = self.makeSession()
+        session.calendarContext = match
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(MeetingSession.self, from: encoder.encode(session))
+        XCTAssertEqual(decoded.calendarContext, match)
+
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(session)) as? [String: Any])
+        root.removeValue(forKey: "calendarContext")
+        let legacy = try decoder.decode(MeetingSession.self, from: JSONSerialization.data(withJSONObject: root))
+        XCTAssertNil(legacy.calendarContext)
+        XCTAssertEqual(legacy.id, session.id)
+
+        let configuration = MeetingCaptureConfiguration(
+            mode: .onlineCall,
+            title: "Meeting",
+            microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic-1", displayName: "Mic"),
+            calendar: match
+        )
+        XCTAssertEqual(configuration.calendar, match)
+        XCTAssertNil(MeetingCaptureConfiguration(
+            mode: .onlineCall,
+            title: "Meeting",
+            microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic-1", displayName: "Mic")
+        ).calendar)
+    }
+
+    func testCalendarAttendeesSeedRemoteSpeakerCandidatesOnly() {
+        let remote = MeetingSessionSpeaker(
+            id: UUID(),
+            displayName: "Speaker 1",
+            diarizationClusterID: nil,
+            trackKind: .applicationAudio,
+            isLocalUser: false,
+            identityCandidates: []
+        )
+        let local = MeetingSessionSpeaker(
+            id: UUID(),
+            displayName: "You",
+            diarizationClusterID: nil,
+            trackKind: .microphone,
+            isLocalUser: true,
+            identityCandidates: []
+        )
+        let attendees = [
+            MeetingCalendarAttendee(name: "Jane Doe", email: "jane@example.com", isOrganizer: true),
+            MeetingCalendarAttendee(name: "Bob", email: nil, isOrganizer: false),
+        ]
+
+        let seeded = MeetingProcessingPipeline.seedingCalendarIdentityCandidates(into: [remote, local], attendees: attendees)
+        XCTAssertEqual(seeded[0].displayName, "Speaker 1", "labels stay automatic; names are offered, never assigned")
+        XCTAssertEqual(seeded[0].identityCandidates.map(\.displayName), ["Jane Doe", "Bob"])
+        XCTAssertEqual(seeded[0].identityCandidates.map(\.source), ["calendar", "calendar"])
+        XCTAssertTrue(seeded[1].identityCandidates.isEmpty)
+        XCTAssertEqual(MeetingProcessingPipeline.seedingCalendarIdentityCandidates(into: [remote], attendees: []), [remote])
+    }
+
     func testSelectionIsFrozenDuringExecutionAndRefreshedForNextAttempt() async throws {
         let firstID = Self.fixtureBackendID
         let secondID = MeetingBackendID(rawValue: "fixture-second")

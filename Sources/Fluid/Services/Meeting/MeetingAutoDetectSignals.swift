@@ -95,7 +95,7 @@ nonisolated enum MeetingAudioProcessResolver {
         for process in snapshot.processes where process.isInputRunning || process.isOutputRunning {
             guard let path = canonicalPath(process.executablePath), process.processID > 0 else { return nil }
             let candidates = snapshot.owners.filter { owner in
-                guard MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: owner.bundleIdentifier),
+                guard MeetingAppRegistry.tier(forBundleIdentifier: owner.bundleIdentifier) != nil,
                       let ownerPath = canonicalPath(owner.bundlePath), ownerPath.hasSuffix(".app")
                 else { return false }
                 guard path.hasPrefix(ownerPath + "/Contents/") else { return false }
@@ -159,6 +159,13 @@ nonisolated struct BrowserTabURL: Sendable, Equatable {
 protocol BrowserTabReading: AnyObject {
     /// nil = unreadable or the circuit breaker tripped — callers must fail closed (no prompt).
     func frontmostTabURL(bundleIdentifier: String, processID: Int32) async -> BrowserTabURL?
+    /// Best-effort meeting name shown inside the in-call page (Google Meet's lobby and details
+    /// headings carry the calendar event name). nil when absent; never gates a prompt.
+    func frontmostMeetingName(bundleIdentifier: String, processID: Int32) async -> String?
+}
+
+extension BrowserTabReading {
+    func frontmostMeetingName(bundleIdentifier: String, processID: Int32) async -> String? { nil }
 }
 
 /// Our own recording/dictation/preview state, read without materializing the meeting coordinator.
@@ -647,8 +654,11 @@ final class CoreAudioMicActivitySignal: MicActivitySignalProviding {
 final class CoreAudioProcessActivityProvider: AudioProcessActivityProviding {
     func snapshot() async -> AudioProcessActivitySnapshot {
         let owners = NSWorkspace.shared.runningApplications.compactMap { app -> MeetingProcessOwner? in
+            // Browsers count too: a Bluetooth headset is one device for input and output, so it
+            // never produces a "mic started" device edge. The browser's audio helper reporting
+            // input is the only reliable microphone signal for that case.
             guard let bundle = app.bundleIdentifier,
-                  MeetingAppRegistry.isNativeMeetingApp(bundleIdentifier: bundle),
+                  MeetingAppRegistry.tier(forBundleIdentifier: bundle) != nil,
                   !app.isTerminated, app.processIdentifier > 0,
                   let path = app.bundleURL?.path else { return nil }
             return MeetingProcessOwner(processID: app.processIdentifier, bundleIdentifier: bundle, bundlePath: path)
@@ -897,12 +907,15 @@ final class CGWindowSnapshotProvider: WindowSnapshotProviding {
 @MainActor
 final class AXBrowserTabReader: BrowserTabReading {
     private static let messagingTimeoutSeconds: Float = 0.3
+    // JUDGMENT: Vivaldi draws its browser UI as a web page, so the tab's web area sits inside the
+    // UI page's DOM groups, several levels deeper than in Chrome. 14/450 leaves headroom for that
+    // nesting; the messaging timeout and circuit breaker still bound a slow or frozen browser.
     /// Safari nests its web area about six levels below the window (split group, tab group,
     /// groups, scroll area); Chrome and Edge sit shallower. Chrome-side subtrees are skipped by role.
-    private static let maxDepth = 9
+    private static let maxDepth = 14
     private static let maxChildrenPerLevel = 24
     /// Upper bound on elements visited per read; keeps a sprawling window from stalling the poll loop.
-    private static let maxVisitedElements = 300
+    private static let maxVisitedElements = 450
     private nonisolated static let skippedRoles: Set<String> = ["AXToolbar", "AXMenuBar", "AXMenu", "AXPopUpButton", "AXButton", "AXTextField", "AXStaticText", "AXImage"]
     private static let circuitBreakerThreshold = 2
 
@@ -948,6 +961,82 @@ final class AXBrowserTabReader: BrowserTabReading {
         case timedOut
     }
 
+    /// Google Meet only: the first heading under the in-call web area that is not the room code
+    /// or a generic label. Same queue, timeout and circuit breaker as the URL read.
+    func frontmostMeetingName(bundleIdentifier: String, processID: Int32) async -> String? {
+        guard !self.trippedBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            self.queue.async {
+                continuation.resume(returning: Self.readMeetingHeading(processID: processID))
+            }
+        }
+    }
+
+    private nonisolated static let genericMeetHeadings: Set<String> = [
+        "", "google meet", "meet", "ready to join?", "meeting details", "people", "chat", "activities",
+        "you", "your meeting is ready", "meeting ready", "getting ready…", "getting ready...",
+    ]
+
+    private nonisolated static func readMeetingHeading(processID: Int32) -> String? {
+        let appElement = AXUIElementCreateApplication(processID)
+        _ = AXUIElementSetMessagingTimeout(appElement, Self.messagingTimeoutSeconds)
+        var windowValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
+              let window = windowValue
+        else { return nil }
+        // swiftlint:disable:next force_cast
+        let windowElement = window as! AXUIElement
+        var budget = Self.maxVisitedElements
+        return self.findMeetHeading(root: windowElement, depth: 0, insideMeet: false, budget: &budget)
+    }
+
+    private nonisolated static func findMeetHeading(root: AXUIElement, depth: Int, insideMeet: Bool, budget: inout Int) -> String? {
+        guard depth < self.maxDepth, budget > 0 else { return nil }
+        var childrenValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenValue) == .success,
+              let children = childrenValue as? [AXUIElement]
+        else { return nil }
+        var containers: [(AXUIElement, Bool)] = []
+        for child in children.prefix(Self.maxChildrenPerLevel) {
+            budget -= 1
+            guard budget > 0 else { return nil }
+            let role = self.stringAttribute(child, attribute: kAXRoleAttribute as String) ?? ""
+            if role == "AXWebArea" {
+                let url = self.stringAttribute(child, attribute: "AXURL").flatMap(self.parse)
+                let isMeet = url.map { MeetingInCallURLMatcher.isInCallURL(host: $0.host, path: $0.path) && $0.host == "meet.google.com" } ?? false
+                containers.insert((child, isMeet || (url == nil && insideMeet)), at: 0)
+                continue
+            }
+            if insideMeet, role == "AXHeading",
+               let text = self.stringAttribute(child, attribute: kAXValueAttribute as String)
+               ?? self.stringAttribute(child, attribute: kAXTitleAttribute as String)
+               ?? self.stringAttribute(child, attribute: kAXDescriptionAttribute as String),
+               let name = self.acceptedMeetHeading(text)
+            {
+                return name
+            }
+            if !Self.skippedRoles.contains(role) || role == "AXStaticText" { containers.append((child, insideMeet)) }
+        }
+        for (child, inside) in containers {
+            if let found = self.findMeetHeading(root: child, depth: depth + 1, insideMeet: inside, budget: &budget) {
+                return found
+            }
+            if budget <= 0 { return nil }
+        }
+        return nil
+    }
+
+    /// Rejects room codes and Meet's own labels; keeps anything that looks like an event name.
+    nonisolated static func acceptedMeetHeading(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, trimmed.count <= 120 else { return nil }
+        guard !self.genericMeetHeadings.contains(trimmed.lowercased()) else { return nil }
+        guard MeetingInCallTitleMatcher.inCallURL(fromWindowTitle: "Meet – \(trimmed)") == nil,
+              MeetingInCallURLMatcher.isInCallURL(host: "meet.google.com", path: "/\(trimmed)") == false
+        else { return nil }
+        return trimmed
+    }
+
     /// Off-main: all work here is plain AX API calls bounded by the messaging timeout below.
     private nonisolated static func readFrontmostTabURL(processID: Int32) -> ReadOutcome {
         let appElement = AXUIElementCreateApplication(processID)
@@ -967,35 +1056,55 @@ final class AXBrowserTabReader: BrowserTabReading {
 
         var timedOut = false
         var budget = Self.maxVisitedElements
-        if let found = self.findWebAreaURL(root: windowElement, depth: 0, budget: &budget, timedOut: &timedOut) {
+        var fallback: BrowserTabURL?
+        if let found = self.findWebAreaURL(root: windowElement, depth: 0, budget: &budget, timedOut: &timedOut, fallback: &fallback) {
             return .found(found)
+        }
+        if let fallback {
+            return .found(fallback)
         }
         return timedOut ? .timedOut : .notFound("document=\(document == nil ? "nil" : "set") webarea=miss")
     }
 
-    /// Depth-first over container roles only; each level checks its own children for a web area first.
-    private nonisolated static func findWebAreaURL(root: AXUIElement, depth: Int, budget: inout Int, timedOut: inout Bool) -> BrowserTabURL? {
+    /// Depth-first over container roles only; each level checks its own children for a web area
+    /// first. Returns the first in-call page. A web area without a web URL (Vivaldi's own
+    /// `chrome-extension://` UI page, `about:blank`) is searched as a container, ahead of its
+    /// siblings, because the tab's web area is nested inside it. The first ordinary web page is
+    /// kept in `fallback` so the caller can still report "found, not in call".
+    private nonisolated static func findWebAreaURL(
+        root: AXUIElement,
+        depth: Int,
+        budget: inout Int,
+        timedOut: inout Bool,
+        fallback: inout BrowserTabURL?
+    ) -> BrowserTabURL? {
         guard depth < self.maxDepth, budget > 0 else { return nil }
         var childrenValue: CFTypeRef?
         let status = AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenValue)
         if status == .cannotComplete { timedOut = true; return nil }
         guard status == .success, let children = childrenValue as? [AXUIElement] else { return nil }
 
+        var hostPages: [AXUIElement] = []
         var containers: [AXUIElement] = []
         for child in children.prefix(Self.maxChildrenPerLevel) {
             budget -= 1
             guard budget > 0 else { return nil }
             let role = self.stringAttribute(child, attribute: kAXRoleAttribute as String) ?? ""
             if role == "AXWebArea" {
-                if let urlString = self.stringAttribute(child, attribute: "AXURL"), let url = self.parse(urlString) {
+                guard let url = self.stringAttribute(child, attribute: "AXURL").flatMap(self.parse) else {
+                    hostPages.append(child)
+                    continue
+                }
+                if MeetingInCallURLMatcher.isInCallURL(host: url.host, path: url.path) {
                     return url
                 }
+                if fallback == nil { fallback = url }
                 continue
             }
             if !Self.skippedRoles.contains(role) { containers.append(child) }
         }
-        for child in containers {
-            if let found = self.findWebAreaURL(root: child, depth: depth + 1, budget: &budget, timedOut: &timedOut) {
+        for child in hostPages + containers {
+            if let found = self.findWebAreaURL(root: child, depth: depth + 1, budget: &budget, timedOut: &timedOut, fallback: &fallback) {
                 return found
             }
             if timedOut || budget <= 0 { return nil }
@@ -1012,8 +1121,13 @@ final class AXBrowserTabReader: BrowserTabReading {
         return nil
     }
 
-    private nonisolated static func parse(_ urlString: String) -> BrowserTabURL? {
-        guard let components = URLComponents(string: urlString), let host = components.host else { return nil }
+    /// Only http(s) pages count as tabs. Browser-internal pages (`vivaldi://`, `chrome://`,
+    /// `chrome-extension://` UI pages, `about:blank`) return nil so the search looks past them.
+    nonisolated static func parse(_ urlString: String) -> BrowserTabURL? {
+        guard let components = URLComponents(string: urlString),
+              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = components.host, !host.isEmpty
+        else { return nil }
         return BrowserTabURL(host: host, path: components.path)
     }
 }

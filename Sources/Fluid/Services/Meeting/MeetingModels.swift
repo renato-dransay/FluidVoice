@@ -270,6 +270,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var application: MeetingApplicationIdentity?
     var microphone: MeetingMicrophoneIdentity
     var chunkDuration: TimeInterval
+    /// Calendar event this recording was matched to, when the calendar toggle is on and access was granted.
+    var calendar: MeetingCalendarMatch? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -278,7 +280,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         platform: MeetingPlatformProfile? = nil,
         application: MeetingApplicationIdentity? = nil,
         microphone: MeetingMicrophoneIdentity,
-        chunkDuration: TimeInterval = Self.defaultChunkDuration
+        chunkDuration: TimeInterval = Self.defaultChunkDuration,
+        calendar: MeetingCalendarMatch? = nil
     ) {
         self.mode = mode
         self.title = title
@@ -287,6 +290,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.application = application
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
+        self.calendar = calendar
     }
 
     func validate() throws {
@@ -898,6 +902,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Set when the user dismisses a recoverable session so it is not re-offered on next launch.
     /// Optional so pre-M2 persisted manifests still decode.
     var recoveryResolvedAt: Date? = nil
+    /// Calendar event matched at start; attendee names feed the speaker picker as suggestions only.
+    /// Optional so manifests written before calendar context still decode.
+    var calendarContext: MeetingCalendarMatch? = nil
 
     init(
         id: MeetingSessionID = UUID(),

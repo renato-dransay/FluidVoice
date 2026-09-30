@@ -199,6 +199,29 @@ struct MeetingAssignSpeakersSheet: View {
                 }
             }
 
+            let candidates = speaker.identityCandidates.filter { !$0.rejected }
+            if !candidates.isEmpty {
+                // Calendar attendees are offered as quick picks only; choosing one fills the
+                // draft exactly like typing the name, so Save renames through the same path.
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+                    Text("From calendar")
+                        .font(self.theme.typography.captionSmall)
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                    FlowLayout(spacing: self.theme.metrics.spacing.xs) {
+                        ForEach(candidates) { candidate in
+                            Button(candidate.displayName) {
+                                self.drafts[speaker.id] = candidate.displayName
+                                self.focusedField = speaker.id
+                            }
+                            .meetingGlassAction(prominent: self.drafts[speaker.id] == candidate.displayName)
+                            .controlSize(.small)
+                            .disabled(self.isSaving)
+                            .accessibilityLabel("Use \(candidate.displayName) for \(speaker.displayName)")
+                        }
+                    }
+                }
+            }
+
             TextField(
                 speaker.displayName,
                 text: Binding(

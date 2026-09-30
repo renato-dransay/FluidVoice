@@ -1179,6 +1179,62 @@ struct SettingsView: View {
                 }
                 .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
 
+                // Meeting Detection Card. Same keys as the FluidMeet settings sheet.
+                ThemedCard(style: .standard) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Label("Meeting Detection", systemImage: "person.2.wave.2")
+                                .font(.fluidSystem(.headline))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Button("FluidMeet Settings") {
+                                AppNavigationRouter.shared.request(.meetingTranscription)
+                            }
+                            .fluidOutlinedButton()
+                            .controlSize(.small)
+                        }
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            self.optionToggleRow(
+                                title: "Detect Meetings Automatically",
+                                description: "Offer to record Zoom, Teams, Webex, and Google Meet calls. Recording always starts with you.",
+                                isOn: Binding(
+                                    get: { self.settings.meetingAutoDetectEnabled },
+                                    set: { enabled in
+                                        self.settings.meetingAutoDetectEnabled = enabled
+                                        // Mirrors the FluidMeet sheet: browser detection is a sub-option.
+                                        if enabled == false {
+                                            self.settings.meetingAutoDetectBrowserEnabled = false
+                                        }
+                                    }
+                                )
+                            )
+                            .settingsSearchTarget(.meetingDetection)
+
+                            Divider().opacity(0.2)
+
+                            self.optionToggleRow(
+                                title: "Include Browser Meetings",
+                                description: "Check the frontmost tab and window titles in Chrome, Safari, Arc, Edge, Brave, and Vivaldi, including installed web apps. Addresses and titles are never stored or sent.",
+                                isOn: Binding(
+                                    get: { self.settings.meetingAutoDetectBrowserEnabled },
+                                    set: { self.settings.meetingAutoDetectBrowserEnabled = $0 }
+                                )
+                            )
+                            .disabled(!self.settings.meetingAutoDetectEnabled)
+                            .opacity(self.settings.meetingAutoDetectEnabled ? 1 : 0.5)
+                            .settingsSearchTarget(.meetingBrowserDetection)
+
+                            Divider().opacity(0.2)
+
+                            self.meetingCalendarNamesRows
+                                .settingsSearchTarget(.meetingCalendarNames)
+                        }
+                    }
+                    .padding(16)
+                }
+                .shownInSettingsSection(.notifications, selectedSection: self.selectedSection)
+
                 // Audio Devices Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -2206,6 +2262,47 @@ struct SettingsView: View {
             )
             if self.isRecording(target), let message = self.shortcutRecordingMessage {
                 Text(message).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.warning)
+            }
+        }
+    }
+}
+
+// MARK: - Meeting calendar names
+
+private extension SettingsView {
+    /// Calendar access is requested from this toggle only, never when a meeting is detected.
+    var meetingCalendarNamesRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            self.optionToggleRow(
+                title: "Use calendar for meeting names",
+                description: "Name recordings after the matching calendar event and offer attendee names in the speaker picker. Nothing is written to your calendar.",
+                isOn: Binding(
+                    get: { self.settings.meetingCalendarNamesEnabled },
+                    set: { enabled in
+                        self.settings.meetingCalendarNamesEnabled = enabled
+                        guard enabled else { return }
+                        Task { @MainActor in
+                            let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                            if !granted {
+                                self.settings.meetingCalendarNamesEnabled = false
+                            }
+                        }
+                    }
+                )
+            )
+            Text("Reads Mac Calendar. Add your Google account under System Settings > Internet Accounts with Calendars enabled to include Google Calendar.")
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.settingsSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            let calendarAuthorization = EventKitMeetingCalendarProvider.authorizationState
+            if calendarAuthorization == .denied || calendarAuthorization == .restricted {
+                Button("Open Calendar Privacy Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .fluidOutlinedButton()
+                .controlSize(.small)
             }
         }
     }
