@@ -69,11 +69,23 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
     /// Replaces the listed transcription models, so a model OpenRouter withdrew stops being offered.
     /// An empty list is ignored: it means a bad response, never an empty catalog.
     func replaceListedModels(_ entries: [CloudTranscriptionCatalogEntry], now: Date = Date()) {
-        guard let (normalized, data) = Self.normalize(entries) else { return }
+        guard self.storeListedModels(entries) else { return }
+        self.markRefreshed(now)
+    }
+
+    @discardableResult
+    private func storeListedModels(_ entries: [CloudTranscriptionCatalogEntry]) -> Bool {
+        guard let (normalized, data) = Self.normalize(entries) else { return false }
         self.lock.withLock {
             self.listed = normalized
-            self.refreshedAt = now
             self.defaults.set(data, forKey: Self.entriesKey)
+        }
+        return true
+    }
+
+    private func markRefreshed(_ now: Date) {
+        self.lock.withLock {
+            self.refreshedAt = now
             self.defaults.set(now.timeIntervalSince1970, forKey: Self.refreshedAtKey)
         }
     }
@@ -114,9 +126,11 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
     @discardableResult
     func refresh(using client: OpenRouterTranscriptionClient, force: Bool = false, now: Date = Date()) async throws -> Bool {
         guard force || self.isRefreshDue(now: now) else { return false }
-        // Each list is saved as soon as it arrives, so a failure in the second fetch keeps the first.
-        self.replaceListedModels(try await client.transcriptionCatalog(), now: now)
+        // Each list is saved as soon as it arrives, so a failure in the second fetch keeps the first,
+        // but the refresh counts as done only once both arrived; otherwise the next visit retries.
+        self.storeListedModels(try await client.transcriptionCatalog())
         self.replaceListedAudioDictationModels(try await client.audioDictationCatalog())
+        self.markRefreshed(now)
         return true
     }
 }

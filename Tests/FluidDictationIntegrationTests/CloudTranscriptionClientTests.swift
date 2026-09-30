@@ -557,6 +557,25 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(CloudAudioDictationModel.current(listed).map(\.id), ["google/gemini-4-flash"])
     }
 
+    func testFailedAudioCatalogFetchKeepsTheRefreshDue() async throws {
+        let (store, _, cleanup) = try self.catalogStore()
+        defer { cleanup() }
+        CloudURLProtocol.install { request in
+            request.url?.query == "output_modalities=transcription"
+                ? (200, [:], Data(#"{"data":[{"id":"deepgram/nova-3","name":"Deepgram: Nova-3"}]}"#.utf8))
+                : (503, [:], Data())
+        }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        do {
+            _ = try await store.refresh(using: self.client(), now: now)
+            XCTFail("A failed audio catalog fetch must be reported")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .server(503))
+        }
+        XCTAssertEqual(store.models.last?.id, "deepgram/nova-3", "The transcription list that did arrive is kept")
+        XCTAssertTrue(store.isRefreshDue(now: now.addingTimeInterval(60)), "A partial refresh must not postpone the next attempt")
+    }
+
     func testFailureSummaryNamesKindAndModelWithoutPayload() {
         XCTAssertEqual(
             CloudTranscriptionFailureSummary.line(for: CloudTranscriptionError.server(400), modelID: "deepgram/nova-3"),
