@@ -34,11 +34,13 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var titleWasEdited = false
     var autoDetectEnabled: Bool
     var browserDetectionEnabled: Bool
+    var calendarNamesEnabled: Bool
 
     init(settings: SettingsStore = .shared) {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
+        self.calendarNamesEnabled = settings.meetingCalendarNamesEnabled
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
@@ -677,11 +679,30 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isStarting = false }
             do {
+                var configuration = configuration
+                // Manual start knows no conference link; a single overlapping event still names the recording.
+                if let match = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: nil) {
+                    configuration.calendar = match
+                    if self.draftTitleIsDefault, !match.title.isEmpty {
+                        configuration.title = match.title
+                    }
+                }
                 _ = try await self.coordinator.startRecording(configuration: configuration)
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// True while the title still reads as the generated default for the current mode and app.
+    private var draftTitleIsDefault: Bool {
+        let title = self.setupDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let applicationName = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })?.identity.displayName
+        let defaults = [
+            MeetingTranscriptionSetupDraft.defaultTitle(mode: self.setupDraft.mode, applicationDisplayName: applicationName),
+            MeetingTranscriptionSetupDraft.defaultTitle(mode: self.setupDraft.mode, applicationDisplayName: nil),
+        ]
+        return !self.setupDraft.titleWasEdited || defaults.contains(title)
     }
 
     private var captureConfiguration: MeetingCaptureConfiguration? {
@@ -1095,6 +1116,7 @@ struct MeetingTranscriptionView: View {
     private func openMeetingSettings() {
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
+        self.setupDraft.calendarNamesEnabled = SettingsStore.shared.meetingCalendarNamesEnabled
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = true
@@ -1146,6 +1168,7 @@ struct MeetingTranscriptionView: View {
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
         settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
+        settings.meetingCalendarNamesEnabled = self.setupDraft.calendarNamesEnabled
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
         if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {
             Task { await self.coordinator.sweepExpiredAudio() }

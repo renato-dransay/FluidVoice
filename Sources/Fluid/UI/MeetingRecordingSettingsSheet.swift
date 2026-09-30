@@ -367,7 +367,7 @@ struct MeetingRecordingSettingsSheet: View {
                     Divider()
                     MeetingAdaptiveSetupRow(
                         title: "Detect meetings automatically",
-                        detail: "Offer to record Zoom, Teams, and Webex meetings. Recording always starts with you.",
+                        detail: "Offer to record Zoom, Teams, Webex, and Google Meet calls. Recording always starts with you.",
                         trailingSwitch: true
                     ) {
                         Toggle("Detect meetings automatically", isOn: self.$draft.autoDetectEnabled)
@@ -381,7 +381,7 @@ struct MeetingRecordingSettingsSheet: View {
                         Divider()
                         MeetingAdaptiveSetupRow(
                             title: "Include browser meetings",
-                            detail: "Check the frontmost tab for supported meeting sites. Tab addresses are never stored or sent.",
+                            detail: "Check the frontmost tab and window titles in Chrome, Safari, Arc, Edge, Brave, and Vivaldi for supported meeting sites. Addresses and titles are never stored or sent.",
                             trailingSwitch: true
                         ) {
                             Toggle("Include browser meetings", isOn: self.$draft.browserDetectionEnabled)
@@ -390,6 +390,36 @@ struct MeetingRecordingSettingsSheet: View {
                                 .meetingHoverFeedback()
                                 .accessibilityLabel("Also check browser tabs")
                         }
+                    }
+
+                    Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Use calendar for meeting names",
+                        detail: "Name recordings after the matching calendar event and offer attendee names in the speaker picker. "
+                            + "Reads Mac Calendar; add your Google account under System Settings > Internet Accounts with Calendars enabled to include Google Calendar.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle(
+                            "Use calendar for meeting names",
+                            isOn: Binding(
+                                get: { self.draft.calendarNamesEnabled },
+                                set: { enabled in
+                                    self.draft.calendarNamesEnabled = enabled
+                                    guard enabled else { return }
+                                    // Same rule as Settings: the prompt appears only from this toggle.
+                                    Task { @MainActor in
+                                        let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                                        if !granted {
+                                            self.draft.calendarNamesEnabled = false
+                                        }
+                                    }
+                                }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .meetingHoverFeedback()
+                        .accessibilityLabel("Use calendar for meeting names")
                     }
                 }
             }

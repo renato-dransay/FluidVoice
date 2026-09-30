@@ -416,6 +416,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
+        session.calendarContext = configuration.calendar
         session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session

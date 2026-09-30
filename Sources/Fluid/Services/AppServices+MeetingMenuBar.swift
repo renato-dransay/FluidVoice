@@ -8,6 +8,7 @@ extension AppServices {
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
         let applications = try await target == nil ? [] : MeetingCaptureSourceCatalog.availableApplications()
+        let calendar = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: target?.conferenceFragment)
         try Task.checkCancellation()
         // Never capture a replacement app when detection changed during source discovery.
         if let target, target != self.meetingAutomaticTarget {
@@ -18,7 +19,8 @@ extension AppServices {
             target: target,
             microphones: microphones,
             applications: applications,
-            preferredInputUID: preferredInputUID
+            preferredInputUID: preferredInputUID,
+            calendar: calendar
         )
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
     }
@@ -28,7 +30,8 @@ extension AppServices {
         target: MeetingAutoDetector.ResolvedTarget?,
         microphones: MeetingMicrophoneCatalogSnapshot,
         applications: [MeetingApplicationIdentity],
-        preferredInputUID: String?
+        preferredInputUID: String?,
+        calendar: MeetingCalendarMatch? = nil
     ) throws -> MeetingCaptureConfiguration {
         let savedMicrophone = defaults.savedMicrophone(in: microphones.identities)
         let selection = MeetingMicrophonePreselection.select(
@@ -54,12 +57,20 @@ extension AppServices {
             application = match
         }
         let mode: MeetingCaptureMode = application == nil ? .inRoom : .onlineCall
-        return MeetingCaptureConfiguration(
+        var configuration = MeetingCaptureConfiguration(
             mode: mode,
-            title: MeetingTranscriptionSetupDraft.defaultTitle(mode: mode, applicationDisplayName: application?.displayName),
+            title: MeetingRecordingTitle.resolve(
+                mode: mode,
+                calendarTitle: calendar?.title,
+                exposedTitle: target?.exposedTitle,
+                serviceName: target?.serviceName,
+                applicationDisplayName: application?.displayName
+            ),
             platform: application.map { MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName) },
             application: application,
             microphone: microphone
         )
+        configuration.calendar = calendar
+        return configuration
     }
 }

@@ -141,6 +141,215 @@ nonisolated enum MeetingPCMFormatResolver {
     }
 }
 
-nonisolated enum MeetingPCMFormatContractError: Error, Equatable, Sendable {
+nonisolated enum MeetingPCMFormatContractError: LocalizedError, Equatable, Sendable {
     case unsupported(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupported(reason): return reason
+        }
+    }
+}
+
+/// Outcome of normalizing one capture buffer against `MeetingPCMFormatContract`.
+nonisolated enum MeetingPCMFormatNormalizationOutcome {
+    /// The buffer already satisfies the contract; forward the original untouched.
+    case passthrough
+    /// A converted native Float32 copy carrying the original presentation timestamp and frame count.
+    case converted(CMSampleBuffer)
+    /// No conversion is possible for this source format; the caller forwards the original as before.
+    case unsupported(String)
+}
+
+/// Converts capture buffers that fail `MeetingPCMFormatContract` (for example Int16 Bluetooth HFP
+/// microphones delivered through ScreenCaptureKit) into native Float32 LPCM at the same sample rate
+/// and channel count. Buffers that already satisfy the contract pass through without copying.
+/// One converter is cached per source format description.
+nonisolated final class MeetingPCMFormatNormalizer: @unchecked Sendable {
+    private enum Disposition {
+        case passthrough
+        case convert(AVAudioConverter, AVAudioFormat)
+        case unsupported(String)
+    }
+
+    private let lock = NSLock()
+    private let logSource: String
+    private var cachedDescription: CMFormatDescription?
+    private var cachedDisposition: Disposition = .passthrough
+    private var conversionFailureLogged = false
+
+    init(logSource: String) {
+        self.logSource = logSource
+    }
+
+    /// Returns the buffer to forward: the converted copy when conversion applies, else the original.
+    func normalized(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer {
+        if case let .converted(converted) = self.normalize(sampleBuffer) { return converted }
+        return sampleBuffer
+    }
+
+    func normalize(_ sampleBuffer: CMSampleBuffer) -> MeetingPCMFormatNormalizationOutcome {
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+            return .unsupported("missing LPCM stream description")
+        }
+        return self.lock.withLock {
+            let disposition: Disposition
+            if let cachedDescription = self.cachedDescription, CMFormatDescriptionEqual(cachedDescription, otherFormatDescription: description) {
+                disposition = self.cachedDisposition
+            } else {
+                disposition = self.classify(description)
+                self.cachedDescription = description
+                self.cachedDisposition = disposition
+                self.conversionFailureLogged = false
+            }
+            switch disposition {
+            case .passthrough:
+                return .passthrough
+            case let .unsupported(reason):
+                return .unsupported(reason)
+            case let .convert(converter, outputFormat):
+                do {
+                    return try .converted(Self.convert(sampleBuffer, converter: converter, outputFormat: outputFormat))
+                } catch {
+                    if !self.conversionFailureLogged {
+                        self.conversionFailureLogged = true
+                        DebugLogger.shared.warning(
+                            "Microphone capture buffer conversion failed; forwarding the source format unchanged: \(error.localizedDescription)",
+                            source: self.logSource
+                        )
+                    }
+                    return .unsupported(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func classify(_ description: CMFormatDescription) -> Disposition {
+        let summary = Self.describe(description)
+        do {
+            _ = try MeetingPCMFormatContract(formatDescription: description)
+            DebugLogger.shared.info("Microphone capture format accepted natively: \(summary)", source: self.logSource)
+            return .passthrough
+        } catch {
+            let reason = error.localizedDescription
+            guard let sourceFormat = try? MeetingPCMFormatResolver.resolve(description),
+                  let outputFormat = Self.makeOutputFormat(for: sourceFormat),
+                  (try? MeetingPCMFormatContract(audioFormat: outputFormat)) != nil,
+                  let converter = AVAudioConverter(from: sourceFormat, to: outputFormat)
+            else {
+                DebugLogger.shared.warning(
+                    "Microphone capture format cannot be converted to native Float32 (\(reason)); forwarding unchanged: \(summary)",
+                    source: self.logSource
+                )
+                return .unsupported(reason)
+            }
+            DebugLogger.shared.info(
+                "Microphone capture format converted to native Float32 (\(reason)): \(summary)",
+                source: self.logSource
+            )
+            return .convert(converter, outputFormat)
+        }
+    }
+
+    private static func makeOutputFormat(for sourceFormat: AVAudioFormat) -> AVAudioFormat? {
+        if sourceFormat.channelCount > 2, let layout = sourceFormat.channelLayout {
+            return AVAudioFormat(standardFormatWithSampleRate: sourceFormat.sampleRate, channelLayout: layout)
+        }
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sourceFormat.sampleRate,
+            channels: sourceFormat.channelCount,
+            interleaved: true
+        )
+    }
+
+    private static func convert(
+        _ sampleBuffer: CMSampleBuffer,
+        converter: AVAudioConverter,
+        outputFormat: AVAudioFormat
+    ) throws -> CMSampleBuffer {
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frameCount > 0,
+              let input = AVAudioPCMBuffer(pcmFormat: converter.inputFormat, frameCapacity: AVAudioFrameCount(frameCount)),
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(frameCount))
+        else { throw MeetingPCMFormatContractError.unsupported("cannot allocate conversion buffers") }
+        input.frameLength = AVAudioFrameCount(frameCount)
+
+        let copyStatus = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer,
+            at: 0,
+            frameCount: Int32(frameCount),
+            into: input.mutableAudioBufferList
+        )
+        guard copyStatus == noErr else {
+            throw MeetingPCMFormatContractError.unsupported("cannot read source PCM (\(copyStatus))")
+        }
+
+        try converter.convert(to: output, from: input)
+        guard Int(output.frameLength) == frameCount else {
+            throw MeetingPCMFormatContractError.unsupported("converter changed the frame count")
+        }
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(outputFormat.sampleRate.rounded())),
+            presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+            decodeTimeStamp: .invalid
+        )
+        var created: CMSampleBuffer?
+        let createStatus = CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: nil,
+            dataReady: false,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: outputFormat.formatDescription,
+            sampleCount: frameCount,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &created
+        )
+        guard createStatus == noErr, let created else {
+            throw MeetingPCMFormatContractError.unsupported("cannot create converted sample buffer (\(createStatus))")
+        }
+        let dataStatus = CMSampleBufferSetDataBufferFromAudioBufferList(
+            created,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0,
+            bufferList: output.audioBufferList
+        )
+        guard dataStatus == noErr else {
+            throw MeetingPCMFormatContractError.unsupported("cannot attach converted PCM (\(dataStatus))")
+        }
+        return created
+    }
+
+    /// Summarizes the stream description without any device or window identity.
+    static func describe(_ description: CMFormatDescription) -> String {
+        guard let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else {
+            return "no stream description"
+        }
+        let formatID = asbd.mFormatID.fourCharCodeString
+        let flags = asbd.mFormatFlags
+        var flagNames: [String] = []
+        if flags & kAudioFormatFlagIsFloat != 0 { flagNames.append("float") }
+        if flags & kAudioFormatFlagIsSignedInteger != 0 { flagNames.append("signedInt") }
+        if flags & kAudioFormatFlagIsBigEndian != 0 { flagNames.append("bigEndian") }
+        if flags & kAudioFormatFlagIsPacked != 0 { flagNames.append("packed") }
+        if flags & kAudioFormatFlagIsNonInterleaved != 0 { flagNames.append("nonInterleaved") }
+        if flags & kAudioFormatFlagIsAlignedHigh != 0 { flagNames.append("alignedHigh") }
+        return "formatID=\(formatID) flags=0x\(String(flags, radix: 16))[\(flagNames.joined(separator: ","))] "
+            + "bits=\(asbd.mBitsPerChannel) rate=\(asbd.mSampleRate) channels=\(asbd.mChannelsPerFrame) "
+            + "framesPerPacket=\(asbd.mFramesPerPacket) bytesPerFrame=\(asbd.mBytesPerFrame) bytesPerPacket=\(asbd.mBytesPerPacket)"
+    }
+}
+
+private extension UInt32 {
+    var fourCharCodeString: String {
+        let bytes = [UInt8(self >> 24 & 0xFF), UInt8(self >> 16 & 0xFF), UInt8(self >> 8 & 0xFF), UInt8(self & 0xFF)]
+        guard bytes.allSatisfy({ $0 >= 0x20 && $0 < 0x7F }) else { return String(self) }
+        return String(bytes.map { Character(UnicodeScalar($0)) })
+    }
 }

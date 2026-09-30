@@ -48,6 +48,9 @@ enum SettingsSearchTarget: Hashable {
     case aiEnhancementFailures
     case microphoneChanges
     case pasteCheck
+    case meetingDetection
+    case meetingBrowserDetection
+    case meetingCalendarNames
 
     case audio
     case inputDevicePriority
@@ -107,7 +110,8 @@ enum SettingsSearchTarget: Hashable {
              .pasteLastTranscriptionShortcut:
             return .shortcuts
 
-        case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck:
+        case .notifications, .aiEnhancementFailures, .microphoneChanges, .pasteCheck,
+             .meetingDetection, .meetingBrowserDetection, .meetingCalendarNames:
             return .notifications
 
         case .audio, .inputDevicePriority, .outputDevice:
@@ -349,6 +353,21 @@ enum SettingsSearchIndex {
         .init(target: .spokenFormatting, title: "Spoken Formatting", terms: ["punctuation start word symbols new line paragraph"]),
         .init(target: .fillerWords, title: "Remove Filler Words", terms: ["um uh er filler sounds cleanup"]),
         .init(target: .notifications, title: "Notifications", terms: ["alerts warnings"]),
+        .init(
+            target: .meetingDetection,
+            title: "Detect Meetings Automatically",
+            terms: ["meeting call record prompt auto detect zoom teams webex google meet fluidmeet"]
+        ),
+        .init(
+            target: .meetingBrowserDetection,
+            title: "Include Browser Meetings",
+            terms: ["browser tab web app meeting google meet zoom teams chrome vivaldi safari arc edge brave"]
+        ),
+        .init(
+            target: .meetingCalendarNames,
+            title: "Use Calendar for Meeting Names",
+            terms: ["calendar event title attendees google eventkit"]
+        ),
         .init(
             target: .aiEnhancementFailures,
             title: "AI Enhancement Failures",

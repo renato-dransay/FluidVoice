@@ -90,6 +90,9 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
     /// At most one bounded overflow command may bypass `pendingSlots`, solely to publish a
     /// conservative in-memory safety era before a terminal stop.
     private var emergencySafetyCommandPending = false
+    /// Detail of the last `writerFailure` emitted while no chunk was active. A source whose every
+    /// buffer fails `beginChunk` would otherwise emit one event per buffer.
+    private var lastNoChunkFailureDetail: String?
     private var lastHealthEmission = Date.distantPast
     private var lastLevelMeasurement = Date.distantPast
     private var silenceAccumulatedSeconds: Double = 0
@@ -496,6 +499,7 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 try self.writeCheckpoint(for: &activeChunk)
             }
             self.activeChunk = activeChunk
+            self.lastNoChunkFailureDetail = nil
             self.track.health.status = .healthy
             self.track.health.lastPresentationTime = Self.mediaTime(presentationTime)
             let now = Date()
@@ -531,13 +535,17 @@ final nonisolated class MeetingAudioChunkWriter: @unchecked Sendable {
                 ))
             }
             if !retiredChunk {
+                let detail = error.localizedDescription
                 self.track.health.status = .degraded
-                self.track.health.detail = error.localizedDescription
-                self.eventHandler(.interrupted(
-                    kind: .writerFailure,
-                    trackID: self.track.id,
-                    detail: error.localizedDescription
-                ))
+                self.track.health.detail = detail
+                if self.lastNoChunkFailureDetail != detail {
+                    self.lastNoChunkFailureDetail = detail
+                    self.eventHandler(.interrupted(
+                        kind: .writerFailure,
+                        trackID: self.track.id,
+                        detail: detail
+                    ))
+                }
             }
         }
     }
