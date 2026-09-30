@@ -86,7 +86,7 @@ struct OnboardingCloudTranscriptionSetupView: View {
                 }
                 self.settings.speechExecutionSource = .openRouter
                 self.viewModel.asr.resetTranscriptionProvider()
-                if mode == .transcriptionOnly {
+                if mode != .transcribeAndStyle {
                     try await self.viewModel.asr.ensureAsrReady(source: .onboarding)
                     try Task.checkCancellation()
                 }

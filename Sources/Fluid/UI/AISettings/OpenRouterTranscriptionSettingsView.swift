@@ -104,9 +104,12 @@ struct OpenRouterTranscriptionSettingsView: View {
         Label("Dictation", systemImage: "mic").font(.callout)
         Picker("Dictation mode", selection: self.$settings.cloudDictationMode) {
             Text("Transcription only").tag(CloudDictationMode.transcriptionOnly)
+            Text("Transcription + text cleanup").tag(CloudDictationMode.transcriptionThenCleanup)
             Text("Transcribe + style").tag(CloudDictationMode.transcribeAndStyle)
         }
         .accessibilityIdentifier("openrouter-dictation-mode")
+        Text(self.dictationModeCaption)
+            .font(.caption).foregroundStyle(.secondary)
         if self.isCombinedMode {
             Picker("Dictation voice model", selection: self.$settings.cloudDictationModelID) {
                 ForEach(self.audioModels, id: \.id) { model in
@@ -128,6 +131,17 @@ struct OpenRouterTranscriptionSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         self.languageControls
+    }
+
+    private var dictationModeCaption: String {
+        switch self.settings.cloudDictationMode {
+        case .transcriptionOnly:
+            "One request: the transcript is inserted as returned. Cleanup Styles are ignored for dictation in this mode."
+        case .transcriptionThenCleanup:
+            "Two requests: the transcript, then the selected Cleanup Style through your text AI provider. Off skips the second request."
+        case .transcribeAndStyle:
+            "One request to an audio model that returns the transcript and the styled text together."
+        }
     }
 
     /// Imported files and the local API always use the transcription model, whatever the dictation mode.

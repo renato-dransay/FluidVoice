@@ -1,7 +1,11 @@
 import Foundation
 
 nonisolated enum CloudDictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// One transcription request and nothing else: Cleanup Styles are ignored for dictation.
     case transcriptionOnly
+    /// A transcription request, then the Cleanup Style through the configured text AI provider.
+    case transcriptionThenCleanup
+    /// Audio and the Cleanup Style in one chat request to an audio model.
     case transcribeAndStyle
 
     var id: String { self.rawValue }

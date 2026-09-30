@@ -1804,6 +1804,11 @@ private struct BottomOverlayPromptMenuView: View {
             || DictationProviderRoute.isDictationDefaultAvailable(settings: self.settings, appBundleID: DictationAppSession.shared.appID)
     }
 
+    private var dictationCleanupHeader: String {
+        if self.settings.skipsCloudDictationCleanup { return "TRANSCRIPTION ONLY · NO CLEANUP" }
+        return self.settings.usesCombinedCloudDictation ? "CLEANUP STYLES · SAME REQUEST" : "EXTERNAL CLEANUP"
+    }
+
     @ViewBuilder
     private func offRow() -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
@@ -1986,9 +1991,7 @@ private struct BottomOverlayPromptMenuView: View {
             }
 
             if !self.isCompact {
-                Text(self.promptMode.normalized == .dictate
-                    ? (self.settings.usesCombinedCloudDictation ? "CLEANUP STYLES · SAME REQUEST" : "EXTERNAL CLEANUP")
-                    : "PROMPTS")
+                Text(self.promptMode.normalized == .dictate ? self.dictationCleanupHeader : "PROMPTS")
                     .font(.fluidSystem(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.horizontal, 8)
