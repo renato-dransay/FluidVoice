@@ -433,6 +433,30 @@ final class CloudTranscriptionClientTests: XCTestCase {
         }
     }
 
+    func testFailureSummaryNamesKindAndModelWithoutPayload() {
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CloudTranscriptionError.server(400), modelID: "deepgram/nova-3"),
+            "Cloud transcription failed: server(400); model=deepgram/nova-3. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CloudTranscriptionError.modelUnavailable, modelID: nil),
+            "Cloud transcription failed: modelUnavailable; model=unknown. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: CancellationError(), modelID: "openai/whisper-large-v3"),
+            "Cloud transcription failed: cancelled; model=openai/whisper-large-v3. No transcript or request payload logged."
+        )
+        XCTAssertEqual(
+            CloudTranscriptionFailureSummary.line(for: URLError(.notConnectedToInternet), modelID: "openai/whisper-large-v3"),
+            "Cloud transcription failed: URLError.-1009; model=openai/whisper-large-v3. No transcript or request payload logged."
+        )
+        struct Leaky: LocalizedError { var errorDescription: String? { "PRIVATE transcript and test-key" } }
+        let line = CloudTranscriptionFailureSummary.line(for: Leaky(), modelID: "openai/whisper-large-v3")
+        XCTAssertTrue(line.contains("Leaky"), "Unknown errors are named by type")
+        XCTAssertFalse(line.contains("PRIVATE"), "An error description can carry transcript text and must never be logged")
+        XCTAssertFalse(line.contains("test-key"))
+    }
+
     private func client() -> OpenRouterTranscriptionClient {
         OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false)
     }
