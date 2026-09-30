@@ -154,7 +154,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
-            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or used as a Gemini instruction in Transcribe + style.")
+            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or given to the dictation model as an instruction.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

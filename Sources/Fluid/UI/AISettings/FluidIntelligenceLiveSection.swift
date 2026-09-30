@@ -51,7 +51,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                     Label("Voice: OpenRouter", systemImage: "waveform")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
-                        .help("Transcribe + style uses the OpenRouter voice model. Switch to transcription only to choose a separate dictation cleanup provider.")
+                        .help("OpenRouter dictation uses the OpenRouter dictation model for styles. Activate a local model to choose a separate dictation cleanup provider.")
                 } else {
                     ProviderDefaultButton(isCurrent: self.isPrimary, isEnabled: self.isVerified && !self.controller.isBusy, action: self.makePrimary)
                 }
