@@ -1,12 +1,5 @@
 import Foundation
 
-nonisolated enum CloudDictationMode: String, Codable, CaseIterable, Identifiable, Sendable {
-    case transcriptionOnly
-    case transcribeAndStyle
-
-    var id: String { self.rawValue }
-}
-
 nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
@@ -14,6 +7,13 @@ nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
     // EVIDENCE: Google deprecated gemini-2.5-flash, flash-lite and pro (earliest shutdown 16 October 2026,
     // https://github.com/llm-exe/llm-exe/issues/476), so the offline fallback uses current releases.
     private static let fallbackDefaultID = "google/gemini-3.8-flash"
+    /// Dictation always sends the whole recording in one request, so the limit is set by what one
+    /// request can carry. EVIDENCE: OpenRouter's audio input cap is 25 MB, about 13 minutes of
+    /// 16 kHz mono WAV (https://openrouter.ai/blog/tutorials/transcription-on-openrouter/).
+    /// JUDGMENT: 8 minutes of 16-bit WAV is 15.4 MB, 20.5 MB once base64-encoded in the JSON body,
+    /// which stays under that cap and leaves the response inside the 8192-token output budget.
+    static let maximumSamples = 8 * 60 * CloudAudioChunker.sampleRate
+
     /// The newest Gemini Flash OpenRouter lists, which `current` always sorts first.
     static var defaultID: String { self.catalog.first?.id ?? self.fallbackDefaultID }
     /// Always offered, so dictation works before the first catalog fetch and while offline.
@@ -264,7 +264,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .liveTranscriptionUnavailable: "Cloud transcription runs after recording stops. Select a local model for live captions."
         case .wordTimingCheckSpeechUnavailable: "Could not generate the spoken test clip for the word-timing check. Confirm a system voice is installed, then try again."
         case .wordTimingCheckInconclusive: "The model returned no text for the spoken test clip, so its word timings could not be checked. Try again or choose another model."
-        case .dictationTooLong: "Transcribe + Style supports recordings up to 120 seconds. Record a shorter dictation or choose Transcription Only for longer recordings."
+        case .dictationTooLong: "OpenRouter dictation supports recordings up to 8 minutes. Record a shorter dictation, or import longer audio as a file."
         case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
     }

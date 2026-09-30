@@ -171,17 +171,30 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         let engine = CloudTranscriptionEngine(client: self.client(), cacheDirectory: nil)
         do {
             _ = try await engine.transcribe(
-                samples: [Float](repeating: 0.1, count: 120 * 16_000 + 1),
+                samples: [Float](repeating: 0.1, count: 8 * 60 * 16_000 + 1),
                 configuration: self.configuration(),
                 apiKey: "test-key",
                 wordTimings: false
             )
-            XCTFail("Combined dictation exceeding 120 seconds must fail locally")
+            XCTFail("Dictation exceeding 8 minutes must fail locally")
         } catch {
             XCTAssertEqual(error as? CloudTranscriptionError, .dictationTooLong)
-            XCTAssertTrue(error.localizedDescription.contains("120 seconds"))
+            XCTAssertTrue(error.localizedDescription.contains("8 minutes"))
         }
         XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
+    func testThreeMinuteDictationIsOneRequest() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], try Self.response(transcript: "long", text: "long"))
+        }
+        let engine = CloudTranscriptionEngine(client: self.client(), cacheDirectory: nil)
+        _ = try await engine.transcribe(
+            samples: [Float](repeating: 0.1, count: 180 * 16_000), configuration: self.configuration(), apiKey: "test-key", wordTimings: false
+        )
+        XCTAssertEqual(recorder.requests.map { $0.url?.path }, ["/api/v1/chat/completions"])
     }
 
     @MainActor

@@ -213,7 +213,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     }
 
     private func transcribeAndStyle(samples: [Float], configuration: CloudTranscriptionConfiguration, instructions: CloudAudioDictationInstructions, apiKey: String) async throws -> CloudTranscriptionResult {
-        guard samples.count <= CloudAudioChunker.maximumSamples else { throw CloudTranscriptionError.dictationTooLong }
+        guard samples.count <= CloudAudioDictationModel.maximumSamples else { throw CloudTranscriptionError.dictationTooLong }
         guard !samples.isEmpty else { throw CloudTranscriptionError.invalidAudio }
         let wav = try CloudWAVEncoder.encode(samples: samples)
         var request = try self.request(path: "chat/completions", apiKey: apiKey)
