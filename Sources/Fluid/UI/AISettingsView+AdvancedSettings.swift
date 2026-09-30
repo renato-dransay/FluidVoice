@@ -1955,7 +1955,7 @@ extension AIEnhancementSettingsView {
                             } else if self.promptTest.isActive {
                                 Text(
                                     self.isCombinedCloudPromptEditor
-                                        ? "Press the hotkey to start/stop recording (maximum 120 seconds). Audio and your draft style are sent together. The same model returns both texts below. Nothing is typed into other apps."
+                                        ? "Press the hotkey to start/stop recording (maximum 8 minutes). Audio and your draft style are sent together. The same model returns both texts below. Nothing is typed into other apps."
                                         : "Press the hotkey to start/stop recording. The transcription will be post-processed using your draft prompt and shown below (nothing will be typed into other apps)."
                                 )
                                 .font(.fluidSystem(.caption2))
@@ -2101,7 +2101,6 @@ extension AIEnhancementSettingsView {
             self.promptTest.updateDraftConfiguration(providerID: self.promptEditorProviderIDDraft, model: model)
         }
         .onChange(of: self.settings.speechExecutionSource) { _, _ in self.promptTest.deactivate() }
-        .onChange(of: self.settings.cloudDictationMode) { _, _ in self.promptTest.deactivate() }
         .onChange(of: self.settings.cloudDictationModelID) { _, _ in self.promptTest.deactivate() }
         .onChange(of: self.settings.openRouterTranscriptionAPIKey) { _, _ in self.autoDisablePromptTestIfNeeded() }
         .onChange(of: self.activeShortcutRecordingTarget) { oldValue, newValue in

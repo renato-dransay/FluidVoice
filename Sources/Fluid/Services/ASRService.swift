@@ -3860,7 +3860,14 @@ final class ASRService: ObservableObject {
                 }
                 self.isLoadingModel = false
                 self.modelPreparationPhase = nil
-                DebugLogger.shared.error("Cloud transcription failed; no transcript or request payload logged.", source: "ASRService")
+                DebugLogger.shared.error(
+                    CloudTranscriptionFailureSummary.line(
+                        for: error,
+                        // Combined dictation freezes the chat model; otherwise the transcription model failed.
+                        modelID: self.frozenCloudDictationModelID ?? self.frozenCloudConfiguration?.modelID
+                    ),
+                    source: "ASRService"
+                )
                 return ""
             }
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
