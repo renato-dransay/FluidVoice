@@ -91,6 +91,16 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     @ViewBuilder
     private var modelControls: some View {
+        self.dictationControls
+        Divider()
+        self.importedFileControls
+    }
+
+    /// Dictation uses one model per mode: the voice model on the chat endpoint in Transcribe + style,
+    /// or the transcription model on the transcription endpoint in Transcription only.
+    @ViewBuilder
+    private var dictationControls: some View {
+        Label("Dictation", systemImage: "mic").font(.callout)
         Picker("Dictation mode", selection: self.$settings.cloudDictationMode) {
             Text("Transcription only").tag(CloudDictationMode.transcriptionOnly)
             Text("Transcribe + style").tag(CloudDictationMode.transcribeAndStyle)
@@ -104,18 +114,45 @@ struct OpenRouterTranscriptionSettingsView: View {
                 }
             }
             .accessibilityIdentifier("openrouter-audio-dictation-model")
-            Text("Choose the instructions in Cleanup Styles, including app and shortcut rules. Off returns unstyled dictation. Recordings are limited to 120 seconds; failures never trigger another AI request automatically.")
+            Text("Dictation sends the audio and your selected Cleanup Style to this model in one request. Choose the instructions in Cleanup Styles, including app and shortcut rules. Off returns unstyled dictation.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Recordings are limited to 120 seconds; failures never trigger another AI request automatically.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Picker("Dictation model", selection: self.$settings.cloudTranscriptionModelID) {
+                self.transcriptionModelOptions
+            }
+            .accessibilityIdentifier("openrouter-transcription-model")
+            Text("Dictation sends the audio to this model on the transcription endpoint. Imported files and the local API use it too.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        Picker(self.isCombinedMode ? "File transcription model" : "Dictation and file model", selection: self.$settings.cloudTranscriptionModelID) {
-            ForEach(self.models, id: \.id) { model in
-                Text(model.name).tag(model.id)
-                    .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
-            }
-        }
         self.languageControls
-        Text("The model list follows OpenRouter's transcription catalog. File transcription skips Cleanup Styles. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
+    }
+
+    /// Imported files and the local API always use the transcription model, whatever the dictation mode.
+    @ViewBuilder
+    private var importedFileControls: some View {
+        Label("Imported files", systemImage: "doc.badge.arrow.up").font(.callout)
+        if self.isCombinedMode {
+            Picker("Imported file model", selection: self.$settings.cloudTranscriptionModelID) {
+                self.transcriptionModelOptions
+            }
+            .accessibilityIdentifier("openrouter-transcription-model")
+            Text("Dictation in Transcribe + style never uses this model. Imported audio and video and the local API use it on the transcription endpoint, without Cleanup Styles.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Imported audio and video and the local API use the dictation model above, without Cleanup Styles.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Text("The model list follows OpenRouter's transcription catalog. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
             .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var transcriptionModelOptions: some View {
+        ForEach(self.models, id: \.id) { model in
+            Text(model.name).tag(model.id)
+                .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
+        }
     }
 
     private var languageControls: some View {
