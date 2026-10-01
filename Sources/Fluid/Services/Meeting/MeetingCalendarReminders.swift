@@ -222,20 +222,33 @@ final class MeetingCalendarReminderScheduler {
 }
 
 extension AppServices {
-    /// Opens the call link, then records the app that runs the call: the meeting's native app when
-    /// it is installed and takes the link over, otherwise the browser that opened it.
+    /// How long a Zoom or Teams link may take to hand off from the browser to the installed app.
+    private static let nativeHandoffTimeout: TimeInterval = 30
+
+    /// Opens the call link, then records the app that actually runs the call. For Zoom and Teams
+    /// links that is the installed native app only once it comes forward after the link opened;
+    /// a declined or blocked handoff, or joining on the web, records the browser instead.
     func openCalendarMeetingAndRecord(_ reminder: MeetingCalendarReminder) async throws {
         let browserBundleIdentifier = NSWorkspace.shared.urlForApplication(toOpen: reminder.conferenceURL)
             .flatMap { Bundle(url: $0)?.bundleIdentifier }
         let nativeBundleIdentifier = MeetingCalendarReminderPolicy.nativeAppBundleIdentifier(for: reminder.conferenceURL)
             .flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil ? $0 : nil }
-        guard let targetBundleIdentifier = nativeBundleIdentifier ?? browserBundleIdentifier else {
-            throw MeetingCaptureError.applicationUnavailable("browser")
-        }
         NSWorkspace.shared.open(reminder.conferenceURL)
 
-        // A native app may still be launching from the browser handoff; give it time to appear.
-        let deadline = Date().addingTimeInterval(nativeBundleIdentifier == nil ? 5 : 20)
+        var targetBundleIdentifier = browserBundleIdentifier
+        if let nativeBundleIdentifier, try await Self.awaitHandoff(to: nativeBundleIdentifier) {
+            targetBundleIdentifier = nativeBundleIdentifier
+        }
+        guard let targetBundleIdentifier else {
+            throw MeetingCaptureError.applicationUnavailable(nativeBundleIdentifier ?? "browser")
+        }
+        DebugLogger.shared.info(
+            "reminder-target bundle=\(targetBundleIdentifier) native=\(targetBundleIdentifier == nativeBundleIdentifier)",
+            source: "MeetingCalendarReminders"
+        )
+
+        // Capture sources can lag briefly behind an app that just launched or came forward.
+        let deadline = Date().addingTimeInterval(5)
         var configuration: MeetingCaptureConfiguration
         while true {
             do {
@@ -254,12 +267,29 @@ extension AppServices {
                 )
                 break
             } catch MeetingCaptureError.applicationUnavailable where Date() < deadline {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                try await Task.sleep(nanoseconds: 500_000_000)
             }
         }
         configuration.calendar = reminder.calendarMatch
         try Task.checkCancellation()
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
         DebugLogger.shared.info("reminder-recording-started bundle=\(targetBundleIdentifier)", source: "MeetingCalendarReminders")
+    }
+
+    /// True once the native app becomes frontmost after another app was, i.e. after the browser
+    /// opened the link and handed the call over. Being installed or already running proves nothing.
+    private static func awaitHandoff(to bundleIdentifier: String) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(self.nativeHandoffTimeout)
+        var sawAnotherAppFrontmost = false
+        while Date() < deadline {
+            let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            if frontmost != bundleIdentifier {
+                sawAnotherAppFrontmost = true
+            } else if sawAnotherAppFrontmost {
+                return true
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return false
     }
 }
