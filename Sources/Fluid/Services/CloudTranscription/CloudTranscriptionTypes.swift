@@ -178,6 +178,8 @@ nonisolated struct CloudTranscriptionModel: Identifiable, Equatable, Sendable {
     static let builtIn: [CloudTranscriptionModel] = [
         .init(id: defaultDictationID, name: "Whisper Large v3 Turbo", wordTimingSupport: .supported, languageHintProviderTags: ["groq", "together"]),
         .init(id: defaultMeetingID, name: "Whisper Large v3", wordTimingSupport: .supported, languageHintProviderTags: ["groq", "together"]),
+        // OpenRouter serves whisper-1 through OpenAI only, whose API documents word timestamps for it.
+        .init(id: "openai/whisper-1", name: "Whisper 1", wordTimingSupport: .supported, languageHintProviderTags: ["openai"]),
         .init(id: "openai/gpt-4o-transcribe", name: "GPT-4o Transcribe", wordTimingSupport: .unsupported, languageHintProviderTags: ["openai"]),
         .init(id: "openai/gpt-4o-mini-transcribe", name: "GPT-4o Mini Transcribe", wordTimingSupport: .unsupported, languageHintProviderTags: ["openai"]),
     ]
