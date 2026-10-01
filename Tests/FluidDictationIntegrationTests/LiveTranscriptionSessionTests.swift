@@ -242,6 +242,41 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         }
     }
 
+    func testStopWhileTheFirstConnectionOpensStillFinishes() async throws {
+        let inner = FakeLiveTransport()
+        inner.respond = { message in
+            message == .text("finish") ? [.success(.text("final:short:200")), .success(.text("finished"))] : []
+        }
+        let transport = SlowOpeningTransport(inner, delay: .milliseconds(150))
+        let session = self.session { transport }
+        async let started: Void = session.start()
+        try await Task.sleep(for: .milliseconds(20))
+        await session.append([Float](repeating: 0.1, count: 3_200))
+        let text = try await session.finish()
+        try await started
+        XCTAssertEqual(text, "short")
+        XCTAssertEqual(inner.sent.last, .text("finish"))
+    }
+
+    func testStopWhileTheFirstConnectionIsRefusedReportsTheRefusal() async throws {
+        let inner = FakeLiveTransport()
+        inner.openError = LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: 401)
+        let transport = SlowOpeningTransport(inner, delay: .milliseconds(150))
+        let session = self.session(timeout: .seconds(5)) { transport }
+        async let started: Void = session.start()
+        try await Task.sleep(for: .milliseconds(20))
+        let clock = ContinuousClock()
+        let begin = clock.now
+        do {
+            _ = try await session.finish()
+            XCTFail("Expected authentication")
+        } catch {
+            XCTAssertEqual(error as? LiveTranscriptionError, .authentication)
+        }
+        XCTAssertLessThan(clock.now - begin, .seconds(2), "The refusal ends the wait, not the finish deadline")
+        _ = try? await started
+    }
+
     func testUpgradeRejectionMapsToAuthenticationWithoutReconnecting() async {
         let transport = FakeLiveTransport()
         transport.openError = LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: 401)
@@ -315,4 +350,18 @@ final class LockedQueue<Element: AnyObject>: @unchecked Sendable {
     let snapshot: [Element]
     init(_ items: [Element]) { self.items = items; self.snapshot = items }
     func next() -> Element { self.lock.withLock { self.items.removeFirst() } }
+}
+
+/// Delays `open` so a test can reach `finish()` while the connection is still opening.
+final class SlowOpeningTransport: LiveTranscriptionTransport, @unchecked Sendable {
+    private let inner: FakeLiveTransport
+    private let delay: Duration
+    init(_ inner: FakeLiveTransport, delay: Duration) { self.inner = inner; self.delay = delay }
+    func open(_ request: URLRequest) async throws {
+        try await Task.sleep(for: self.delay)
+        try await self.inner.open(request)
+    }
+    func send(_ message: LiveTransportMessage) async throws { try await self.inner.send(message) }
+    func receive() async throws -> LiveTransportMessage { try await self.inner.receive() }
+    func close() { self.inner.close() }
 }

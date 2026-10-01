@@ -55,7 +55,14 @@ actor LiveTranscriptionSession {
     var streamedMilliseconds: Int { self.audio.count / LivePCM16.bytesPerMillisecond }
 
     func start() async throws {
-        try await self.connect(replayingFrom: 0)
+        do {
+            try await self.connect(replayingFrom: 0)
+        } catch {
+            // The stop key can reach `finish()` while the first connection is still opening; it then
+            // waits for this outcome instead of the finish deadline.
+            self.fail(error as? LiveTranscriptionError ?? .connectionFailed)
+            throw error
+        }
     }
 
     func append(_ samples: [Float]) async {
@@ -145,6 +152,8 @@ actor LiveTranscriptionSession {
         if !self.adapter.waitsForReady {
             self.isReady = true
             await self.flush(final: self.isFinishing)
+            // `finish()` ran while this connection was opening and left the finish messages to it.
+            if self.isFinishing { await self.sendFinishMessages() }
         }
     }
 
