@@ -214,7 +214,12 @@ struct DashboardView: View {
     private func setupItem(for requirement: DashboardSetupStatus.Requirement) -> SetupItem {
         switch requirement {
         case .voiceModel:
-            .init(title: "Voice model", icon: "waveform", detail: "Pick your engine", action: { self.selectedSidebarItem = .voiceEngine })
+            .init(
+                title: "Voice model",
+                icon: "waveform",
+                detail: self.settings.missingLiveKeyMessage ?? "Pick your engine",
+                action: { self.selectedSidebarItem = .voiceEngine }
+            )
         case .microphone:
             .init(title: "Microphone", icon: "mic", detail: "Set up voice input", action: {
                 if self.asr.micStatus == .notDetermined { self.asr.requestMicAccess() } else { self.asr.openSystemSettingsForMic() }
@@ -227,7 +232,9 @@ struct DashboardView: View {
     @ViewBuilder
     private func finishSetup(layout: DashboardLayout) -> some View {
         let missing = DashboardSetupStatus(
-            voiceModelReady: self.settings.usesCloudTranscription
+            voiceModelReady: self.settings.storedLiveProvider != nil
+                ? self.settings.usesLiveCloudDictation
+                : self.settings.usesCloudTranscription
                 ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
                 : self.asr.modelsExistOnDisk || self.asr.isAsrReady,
             microphoneReady: self.asr.micStatus == .authorized,

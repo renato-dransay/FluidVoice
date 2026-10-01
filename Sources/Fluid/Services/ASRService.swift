@@ -1356,6 +1356,12 @@ final class ASRService: ObservableObject {
     /// True when dictation audio leaves the Mac. Privacy wording such as "ON-DEVICE" must use this.
     var sendsDictationAudioOffDevice: Bool { self.isUsingCloudTranscription || self.isUsingLiveCloudDictation }
 
+    /// The live configuration of the dictation in progress, or of the next one when nothing is recording.
+    var activeLiveConfiguration: LiveTranscriptionConfiguration? {
+        if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider { return live.configuration }
+        return self.activeActivityLease == nil ? SettingsStore.shared.liveDictationConfiguration : nil
+    }
+
     var activeLiveProviderName: String? {
         (self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider)?.name
             ?? SettingsStore.shared.activeLiveProvider.map { LiveTranscriptionCatalog.info(for: $0).name }

@@ -1017,6 +1017,10 @@ struct ContentView: View {
     }
 
     private func currentTranscriptionModelInfo(forDictation: Bool) -> (provider: String, model: String) {
+        // Dictation, command and rewrite all stream to the live provider frozen for the recording.
+        if let live = self.asr.activeLiveConfiguration {
+            return (provider: "live-\(live.provider.rawValue)", model: live.modelID)
+        }
         if self.settings.usesCloudTranscription {
             // Dictation runs on the dictation model; command and rewrite use the transcription endpoint.
             let model = forDictation ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID
@@ -2986,7 +2990,7 @@ struct ContentView: View {
             isPromptTestActive: promptTest.isActive,
             usesAIOnStop: shouldUseAIOnStop,
             spokenSendEnabled: self.settings.spokenSendEnabled,
-            usesCloudTranscription: self.asr.isUsingCloudTranscription
+            usesCloudTranscription: self.asr.sendsDictationAudioOffDevice
         ))
         DebugLogger.shared.info(
             "Routing decision snapshot | activeMode=\(modeAtStop.rawValue) | rewrite=\(wasRewriteMode) | command=\(wasCommandMode) | overlay=\(NotchContentState.shared.mode.rawValue)",
@@ -4621,6 +4625,9 @@ struct ContentView: View {
         let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         Task {
             guard !self.asr.isUsingCombinedCloudDictation else { return }
+            // JUDGMENT: a live dictation never needs the local model; without this a recording shorter than
+            // the task's first hop would load it after the lease ends.
+            guard !self.asr.isUsingLiveCloudDictation else { return }
             guard MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             do {
                 DebugLogger.shared.debug("ContentView: pre-load model task started", source: "ContentView")
@@ -5368,6 +5375,10 @@ extension ContentView {
     }
 
     private func getModelStatusText() -> String {
+        if let provider = self.settings.storedLiveProvider {
+            let name = LiveTranscriptionCatalog.info(for: provider).name
+            return self.settings.usesLiveCloudDictation ? "\(name) is ready. Audio streams while you record." : "\(name) key required"
+        }
         if self.settings.usesCloudTranscription {
             return self.settings.openRouterTranscriptionAPIKey.isEmpty
                 ? "Add an OpenRouter key in Voice Engine settings."
@@ -5387,6 +5398,7 @@ extension ContentView {
     }
 
     private var onboardingVoiceModelReady: Bool {
+        if self.settings.usesLiveCloudDictation { return true }
         if self.settings.usesCloudTranscription {
             return !self.settings.openRouterTranscriptionAPIKey.isEmpty
         }

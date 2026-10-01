@@ -1965,7 +1965,7 @@ private struct BottomOverlayPromptMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             if self.promptMode.normalized == .dictate {
                 if !self.isCompact {
-                    Text(self.settings.usesCloudTranscription ? "OPENROUTER" : "ON-DEVICE")
+                    Text(self.settings.dictationEngineBadge)
                         .font(.fluidSystem(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.4))
                         .padding(.horizontal, 8)
@@ -2725,9 +2725,7 @@ struct BottomOverlayView: View {
     }
 
     private var showsCloudLanguageSelector: Bool {
-        self.contentState.mode == .dictation
-            && self.settings.usesCloudTranscription
-            && self.settings.cloudTranscriptionPrimaryLanguageCode != nil
+        self.contentState.mode == .dictation && self.settings.showsDictationLanguageChip
     }
 
     private var previewMaxHeight: CGFloat {

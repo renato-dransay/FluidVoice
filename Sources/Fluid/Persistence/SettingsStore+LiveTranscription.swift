@@ -75,6 +75,45 @@ extension SettingsStore {
 
     var usesLiveCloudDictation: Bool { self.activeLiveProvider != nil }
 
+    /// The provider Live cloud was activated with, even when its key has since been removed. Readiness
+    /// surfaces use it to say which key is missing; dictation itself uses `activeLiveProvider`.
+    var storedLiveProvider: LiveTranscriptionProviderID? {
+        guard CloudTranscriptionPreferences(defaults: .standard).source == .liveCloud else { return nil }
+        return LiveTranscriptionPreferences(defaults: .standard).activeProvider
+    }
+
+    /// Leaves Live cloud without touching keys or the added providers. Callers set the new source.
+    func clearActiveLiveProvider() {
+        var preferences = LiveTranscriptionPreferences(defaults: .standard)
+        preferences.activeProvider = nil
+        self.objectWillChange.send()
+    }
+
+    /// "Soniox key required" while Live cloud is selected with a provider whose key was removed; otherwise nil.
+    var missingLiveKeyMessage: String? {
+        guard let provider = self.storedLiveProvider, !self.usesLiveCloudDictation else { return nil }
+        return "\(LiveTranscriptionCatalog.info(for: provider).name) key required"
+    }
+
+    /// Nil when the language is usable with the active engine; otherwise the provider name that lacks it.
+    func liveProviderLackingLanguage(_ code: String) -> String? {
+        guard let provider = self.activeLiveProvider else { return nil }
+        let info = LiveTranscriptionCatalog.info(for: provider)
+        return info.supports(languageCode: code) ? nil : info.name
+    }
+
+    /// The overlay's language chip: shown for OpenRouter and Live cloud once a Primary language is set.
+    var showsDictationLanguageChip: Bool {
+        (self.usesCloudTranscription || self.usesLiveCloudDictation) && self.cloudTranscriptionPrimaryLanguageCode != nil
+    }
+
+    /// The overlay style menu's engine header. Never "ON-DEVICE" while audio leaves the Mac.
+    var dictationEngineBadge: String {
+        if self.usesCloudTranscription { return "OPENROUTER" }
+        if let provider = self.activeLiveProvider { return "\(LiveTranscriptionCatalog.info(for: provider).name.uppercased()) · LIVE" }
+        return "ON-DEVICE"
+    }
+
     /// True when dictation audio leaves the Mac. Privacy wording such as "ON-DEVICE" must use this.
     var sendsDictationAudioOffDevice: Bool { self.usesCloudTranscription || self.usesLiveCloudDictation }
 

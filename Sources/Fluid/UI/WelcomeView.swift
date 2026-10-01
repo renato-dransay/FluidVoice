@@ -263,7 +263,13 @@ struct OnboardingFlowView: View {
         self.isOnboardingModelReady(self.recommendedOnboardingModel)
     }
 
+    private var cloudTranscriptionLinkTitle: String {
+        if self.settings.usesLiveCloudDictation { return "Live cloud selected — configure in Voice Engine" }
+        return self.settings.usesCloudTranscription ? "OpenRouter selected — configure" : "Use OpenRouter cloud transcription"
+    }
+
     private var isVoiceModelReady: Bool {
+        if self.settings.usesLiveCloudDictation { return true }
         if self.settings.usesCloudTranscription {
             return !self.settings.openRouterTranscriptionAPIKey.isEmpty
         }
@@ -1133,11 +1139,13 @@ struct OnboardingFlowView: View {
                                     .padding(.top, 14)
                             }
 
-                            Button(self.settings.usesCloudTranscription ? "OpenRouter selected — configure" : "Use OpenRouter cloud transcription") {
+                            Button(self.cloudTranscriptionLinkTitle) {
                                 self.showsCloudTranscriptionSetup = true
                             }
                             .buttonStyle(.link)
-                            .disabled(self.isModelPreparationInProgress)
+                            // JUDGMENT: onboarding has no Live cloud setup, so with Live cloud active the link only
+                            // names the engine; opening the OpenRouter sheet from it would be misleading.
+                            .disabled(self.isModelPreparationInProgress || self.settings.usesLiveCloudDictation)
                             .padding(.top, 12)
 
                             Text("You can switch models later in Voice Engine settings.")
@@ -1424,7 +1432,7 @@ struct OnboardingFlowView: View {
     }
 
     private func isOnboardingModelSelected(_ model: SettingsStore.SpeechModel) -> Bool {
-        !self.settings.usesCloudTranscription && self.settings.selectedSpeechModel == model
+        !self.settings.sendsDictationAudioOffDevice && self.settings.selectedSpeechModel == model
     }
 
     private func isOnboardingModelReady(_ model: SettingsStore.SpeechModel) -> Bool {
@@ -1432,7 +1440,7 @@ struct OnboardingFlowView: View {
     }
 
     private func isOnboardingRouteReady(_ route: VoiceEngineLanguageRoute) -> Bool {
-        !self.settings.usesCloudTranscription && self.isRouteSelectedInSettings(route) && self.asr.isAsrReady
+        !self.settings.sendsDictationAudioOffDevice && self.isRouteSelectedInSettings(route) && self.asr.isAsrReady
     }
 
     private func isOnboardingModelDownloaded(_ model: SettingsStore.SpeechModel) -> Bool {
@@ -1465,8 +1473,9 @@ struct OnboardingFlowView: View {
 
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
-        if self.settings.usesCloudTranscription {
+        if self.settings.usesCloudTranscription || self.settings.storedLiveProvider != nil {
             self.settings.speechExecutionSource = .local
+            self.settings.clearActiveLiveProvider()
             self.asr.resetTranscriptionProvider()
         }
         self.selectOnboardingRoute(route)
@@ -2284,7 +2293,7 @@ private extension OnboardingFlowView {
     }
 
     func isRouteSelectedInSettings(_ route: VoiceEngineLanguageRoute) -> Bool {
-        guard !self.settings.usesCloudTranscription else { return false }
+        guard !self.settings.sendsDictationAudioOffDevice else { return false }
         guard route.model == self.settings.selectedSpeechModel else {
             return false
         }

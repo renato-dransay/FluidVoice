@@ -534,6 +534,16 @@ struct CloudDictationLanguageSelector: View {
         }
     }
 
+    /// A language the active live provider does not list stays visible but cannot be picked.
+    private func languageOption(_ prefix: String, code: String) -> some View {
+        let lackingProvider = self.settings.liveProviderLackingLanguage(code)
+        let title = "\(prefix): \(self.languageName(code))" + (lackingProvider.map { " (not supported by \($0))" } ?? "")
+        return Button(action: { self.select(code) }) {
+            self.optionLabel(title, selected: self.selectedCode == code)
+        }
+        .disabled(lackingProvider != nil)
+    }
+
     @ViewBuilder
     private func optionLabel(_ title: String, selected: Bool) -> some View {
         if selected {
@@ -544,15 +554,11 @@ struct CloudDictationLanguageSelector: View {
     }
 
     var body: some View {
-        if self.settings.usesCloudTranscription, let primary = self.settings.cloudTranscriptionPrimaryLanguageCode {
+        if self.settings.showsDictationLanguageChip, let primary = self.settings.cloudTranscriptionPrimaryLanguageCode {
             Menu {
-                Button(action: { self.select(primary) }) {
-                    self.optionLabel("Primary: \(self.languageName(primary))", selected: self.selectedCode == primary)
-                }
+                self.languageOption("Primary", code: primary)
                 if let secondary = self.settings.cloudTranscriptionSecondaryLanguageCode {
-                    Button(action: { self.select(secondary) }) {
-                        self.optionLabel("Secondary: \(self.languageName(secondary))", selected: self.selectedCode == secondary)
-                    }
+                    self.languageOption("Secondary", code: secondary)
                 }
                 Button(action: { self.select(nil) }) {
                     self.optionLabel("Detect automatically", selected: self.selectedCode == nil)
@@ -1097,10 +1103,7 @@ struct NotchExpandedView: View {
             .offset(x: 4, y: 0)
             .animation(.easeOut(duration: 0.14), value: self.contentState.spokenSendIndicatorState)
 
-            if self.contentState.mode == .dictation,
-               self.settings.usesCloudTranscription,
-               self.settings.cloudTranscriptionPrimaryLanguageCode != nil
-            {
+            if self.contentState.mode == .dictation, self.settings.showsDictationLanguageChip {
                 CloudDictationLanguageSelector()
             }
 

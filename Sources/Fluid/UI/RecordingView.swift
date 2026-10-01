@@ -19,9 +19,15 @@ struct RecordingView: View {
     let startRecording: () -> Void
 
     private var isReadyToRecord: Bool {
-        self.settings.usesCloudTranscription
+        if self.settings.storedLiveProvider != nil { return self.settings.usesLiveCloudDictation }
+        return self.settings.usesCloudTranscription
             ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
             : self.asr.isAsrReady
+    }
+
+    private var notReadyText: String {
+        if let message = self.settings.missingLiveKeyMessage { return message }
+        return self.settings.usesCloudTranscription ? "OpenRouter key required" : "Model not ready"
     }
 
     var body: some View {
@@ -55,7 +61,7 @@ struct RecordingView: View {
                                     .fill(self.asr.isRunning ? .red : self.isReadyToRecord ? Color.fluidGreen : .secondary)
                                     .frame(width: 8, height: 8)
 
-                                Text(self.asr.isRunning ? "Recording..." : self.isReadyToRecord ? "Ready to record" : self.settings.usesCloudTranscription ? "OpenRouter key required" : "Model not ready")
+                                Text(self.asr.isRunning ? "Recording..." : self.isReadyToRecord ? "Ready to record" : self.notReadyText)
                                     .font(.fluidSystem(.subheadline))
                                     .foregroundStyle(self.asr.isRunning ? .red : self.isReadyToRecord ? Color.fluidGreen : .secondary)
                             }

@@ -128,6 +128,13 @@ final class LiveCloudSettingsTests: XCTestCase {
         return SpeechExecutionSource.effective(stored: stored, usableLiveProvider: provider)
     }
 
+    func testLanguageSupportFollowsEachProvidersList() {
+        let deepgram = LiveTranscriptionCatalog.info(for: .deepgram)
+        XCTAssertTrue(deepgram.supports(languageCode: "pt"))
+        XCTAssertFalse(deepgram.supports(languageCode: "pl"))
+        XCTAssertTrue(LiveTranscriptionCatalog.info(for: .soniox).supports(languageCode: "pl"))
+    }
+
     private func defaults() throws -> (UserDefaults, () -> Void) {
         let suite = "LiveCloudSettingsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
