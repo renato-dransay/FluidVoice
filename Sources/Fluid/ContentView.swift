@@ -2987,7 +2987,7 @@ struct ContentView: View {
             isNormalRoute: route == .normal,
             isRewrite: wasRewriteMode,
             isCommand: wasCommandMode,
-            isPromptTestActive: promptTest.isActive,
+            isPromptTestActive: promptTest.isActive || self.asr.isRunningLiveProviderTest,
             usesAIOnStop: shouldUseAIOnStop,
             spokenSendEnabled: self.settings.spokenSendEnabled,
             usesCloudTranscription: self.asr.sendsDictationAudioOffDevice
@@ -3040,6 +3040,18 @@ struct ContentView: View {
             "Stop transcription result | chars=\(transcribedText.count) | empty=\(transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)",
             source: "ContentView"
         )
+
+        if let liveProviderTest = self.asr.consumeLiveProviderTestRun() {
+            let latency = Int(((ProcessInfo.processInfo.systemUptime - asrStopStartedAt) * 1000).rounded())
+            await self.routeLiveProviderTestResult(
+                transcribedText,
+                run: liveProviderTest,
+                latencyMilliseconds: latency,
+                lifecycleID: expectedOverlayLifecycleID,
+                overlayHideRequested: stopOverlay.didRequestHide
+            )
+            return
+        }
 
         if await self.routePromptTestResult(
             transcribedText,
@@ -3542,6 +3554,37 @@ struct ContentView: View {
             guard promptTest.acceptsResult(for: sessionID) else { return }
             DebugLogger.shared.error("Prompt test AI call failed: \(error.localizedDescription)", source: "ContentView")
             promptTest.lastError = error.localizedDescription
+        }
+    }
+
+    // JUDGMENT: the plan routed only normal dictation into the test. The lease applies the armed provider to every
+    // recording shortcut, so a command or rewrite recorded while armed would run on the tested provider; routing every
+    // test recording here keeps "nothing is typed" true for all of them.
+    /// A provider test's result goes to the Manage sheet only: nothing is typed, saved to history, or styled,
+    /// and a failed test leaves no recording for Retry. A test disarmed while recording is dropped.
+    private func routeLiveProviderTestResult(
+        _ text: String,
+        run: LiveProviderTestRun,
+        latencyMilliseconds: Int,
+        lifecycleID: UInt64,
+        overlayHideRequested: Bool
+    ) async {
+        let test = LiveProviderTestCoordinator.shared
+        if test.armedProvider == run.provider {
+            let failed = self.asr.lastStopOutcome == .failed
+            test.record(
+                transcript: text,
+                latencyMilliseconds: failed ? nil : latencyMilliseconds,
+                error: failed ? (run.failureMessage ?? "The provider returned no text.") : nil
+            )
+        }
+        DebugLogger.shared.info(
+            "Live provider test finished: provider=\(run.provider.rawValue) outcome=\(self.asr.lastStopOutcome) chars=\(text.count)",
+            source: "ContentView"
+        )
+        NotchOverlayManager.shared.updateTranscriptionText("")
+        if !overlayHideRequested, self.overlayLifecycleID == lifecycleID {
+            await self.menuBarManager.finishProcessingAndHideOverlay()
         }
     }
 

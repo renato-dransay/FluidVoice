@@ -5,6 +5,8 @@ struct LiveCloudSettingsView: View {
     @Environment(\.theme) private var theme
     @ObservedObject var settings: SettingsStore
     @ObservedObject var viewModel: VoiceEngineSettingsViewModel
+    /// Rows show "Tested" as soon as a test passes in the Manage sheet.
+    @ObservedObject private var test = LiveProviderTestCoordinator.shared
     @State private var isAddingProvider = false
     @State private var providerToManageAfterAdding: LiveTranscriptionProviderID?
     @State private var managedProvider: LiveTranscriptionProviderID?
@@ -142,8 +144,7 @@ struct LiveCloudSettingsView: View {
         let model = info.models.first { $0.id == modelID }?.name ?? modelID
         if self.viewModel.liveProviderBeingChecked == provider { return "\(model) · Checking…" }
         if self.viewModel.liveRejectedKeys.contains(provider) { return "\(model) · Key rejected" }
-        // JUDGMENT: "Tested" needs the provider test from Task 2.12; until it exists every row is untested.
-        return "\(model) · Not tested"
+        return "\(model) · \(self.test.hasPassed(provider) ? "Tested" : "Not tested")"
     }
 
     /// The Manage sheet opens once the Add sheet is gone; macOS drops a sheet presented while another dismisses.

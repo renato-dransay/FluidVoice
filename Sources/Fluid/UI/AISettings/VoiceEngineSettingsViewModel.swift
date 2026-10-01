@@ -232,15 +232,16 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
         self.liveActivationStatus[provider] = nil
         self.liveRejectedKeys.remove(provider)
+        LiveProviderTestCoordinator.shared.forgetPassedTest(for: provider)
         if isRemoval {
+            // A test without a key could only fail, so it stops with the key.
+            if LiveProviderTestCoordinator.shared.armedProvider == provider { LiveProviderTestCoordinator.shared.disarm() }
             guard wasActive else { return "API key removed." }
             self.deactivateLiveProvider()
             return "API key removed. \(LiveTranscriptionCatalog.info(for: provider).name) is no longer active; dictation uses your selected local model."
         }
         if wasActive { self.asr.resetTranscriptionProvider() }
-        // JUDGMENT: UX §D says "Start a test or activate"; the test arrives with Task 2.12, so the
-        // line names only what this tab offers today.
-        return "Key saved. Activate to check it."
+        return "Key saved. Start a test or activate to check it."
     }
 
     /// Checks the key with one REST request and switches the engine only when it passes.
@@ -281,6 +282,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         var preferences = LiveTranscriptionPreferences(defaults: .standard)
         preferences.addedProviders.removeAll { $0 == provider }
         preferences.removeModelChoice(for: provider)
+        LiveProviderTestCoordinator.shared.forgetPassedTest(for: provider)
         self.liveActivationStatus[provider] = nil
         self.liveRejectedKeys.remove(provider)
         if wasActive { self.deactivateLiveProvider() }

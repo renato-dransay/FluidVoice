@@ -628,6 +628,9 @@ final class ASRService: ObservableObject {
     /// The local model's readiness when a live lease overwrote `isAsrReady`, restored if the lease
     /// turns out to be a dictionary training capture.
     private var asrReadyBeforeLiveLease: Bool?
+    /// The provider test the latest dictation lease ran. It outlives the lease for the stop path,
+    /// and the next dictation lease replaces it.
+    private var liveProviderTestRun: LiveProviderTestRun?
     private var cloudSpeechProvider: CloudTranscriptionProvider?
     private var frozenCloudConfiguration: CloudTranscriptionConfiguration?
     private var frozenCloudAPIKey: String?
@@ -690,8 +693,12 @@ final class ASRService: ObservableObject {
             // Freeze the provider before an await or a preference change can redirect this audio.
             if [.dictation, .fileTranscription, .localAPI].contains(activity) {
                 self.frozenSpeechExecutionSource = SettingsStore.shared.speechExecutionSource
-                // Task 2.12 adds the provider test's override configuration ahead of the active provider.
-                if activity == .dictation, let configuration = SettingsStore.shared.liveDictationConfiguration {
+                let testConfiguration = activity == .dictation ? LiveProviderTestCoordinator.shared.overrideConfiguration : nil
+                if activity == .dictation {
+                    // An armed provider test replaces whichever engine is active, for dictation only.
+                    self.liveProviderTestRun = testConfiguration.map { LiveProviderTestRun(provider: $0.provider) }
+                }
+                if activity == .dictation, let configuration = testConfiguration ?? SettingsStore.shared.liveDictationConfiguration {
                     let key = SettingsStore.shared.liveTranscriptionAPIKey(for: configuration.provider)
                     // With no frozen provider yet, this is the cached local provider (Live cloud is not OpenRouter).
                     let localProvider = self.transcriptionProvider
@@ -779,6 +786,7 @@ final class ASRService: ObservableObject {
     /// taken for one goes back to the cached local provider and its readiness before any audio flows.
     private func freezeLocalProviderForDictionaryTrainingCapture(_ isDictionaryTraining: Bool) {
         guard isDictionaryTraining, self.frozenTranscriptionProvider is LiveCloudTranscriptionProvider else { return }
+        self.liveProviderTestRun = nil
         self.frozenTranscriptionProvider = nil
         self.frozenSpeechExecutionSource = .local
         self.frozenTranscriptionProvider = self.transcriptionProvider
@@ -1374,6 +1382,17 @@ final class ASRService: ObservableObject {
 
     var activeCloudDictationModelID: String {
         self.frozenCloudDictationModelID ?? SettingsStore.shared.cloudDictationModelID
+    }
+
+    /// The provider test the stopped dictation ran, if any. Its result belongs in the Manage sheet, never in another app.
+    func consumeLiveProviderTestRun() -> LiveProviderTestRun? {
+        defer { self.liveProviderTestRun = nil }
+        return self.liveProviderTestRun
+    }
+
+    /// True while the dictation in progress is a provider test, so the overlay stays up for the result.
+    var isRunningLiveProviderTest: Bool {
+        self.activeActivityLease?.activity == .dictation && self.liveProviderTestRun != nil
     }
 
     func consumeLastCompletedCloudDictationOutput() -> CloudAudioDictationOutput? {
@@ -7907,7 +7926,12 @@ private extension ASRService {
     func retainFailedLiveDictationIfNeeded(samples: [Float], error: Error) -> Bool {
         guard let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider else { return false }
         let liveError = (error as? LiveTranscriptionError) ?? .connectionFailed
-        if !Task.isCancelled, !(error is CancellationError) {
+        if self.liveProviderTestRun != nil {
+            // A test keeps no recording and shows no alert; the Manage sheet names the reason.
+            if !Task.isCancelled, !(error is CancellationError) {
+                self.liveProviderTestRun?.failureMessage = liveError.message(providerName: live.name)
+            }
+        } else if !Task.isCancelled, !(error is CancellationError) {
             self.failedRemoteDictation = .live(samples: samples, configuration: live.configuration)
             self.hasFailedCloudDictation = false
             self.failedLiveProvider = live.configuration.provider

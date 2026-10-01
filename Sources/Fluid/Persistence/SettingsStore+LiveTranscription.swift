@@ -128,7 +128,11 @@ extension SettingsStore {
     }
 
     var liveDictationConfiguration: LiveTranscriptionConfiguration? {
-        guard let provider = self.activeLiveProvider else { return nil }
+        self.activeLiveProvider.map { self.liveDictationConfiguration(for: $0) }
+    }
+
+    /// The configuration a dictation with this provider uses: its model and the shared dictation languages.
+    func liveDictationConfiguration(for provider: LiveTranscriptionProviderID) -> LiveTranscriptionConfiguration {
         let cloud = CloudTranscriptionPreferences(defaults: .standard)
         return LiveTranscriptionConfiguration(
             provider: provider,

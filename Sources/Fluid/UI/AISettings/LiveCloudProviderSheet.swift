@@ -1,7 +1,7 @@
 import Combine
 import SwiftUI
 
-/// The Manage sheet for one live provider: key, model, usage, activation and removal.
+/// The Manage sheet for one live provider: key, model, test, usage, activation and removal.
 struct LiveCloudProviderSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
@@ -9,6 +9,7 @@ struct LiveCloudProviderSheet: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var viewModel: VoiceEngineSettingsViewModel
     @ObservedObject private var usage = LiveTranscriptionUsageStore.shared
+    @ObservedObject private var test = LiveProviderTestCoordinator.shared
     @State private var keyDraft = ""
     @State private var status = ""
     @State private var isConfirmingRemoval = false
@@ -17,6 +18,7 @@ struct LiveCloudProviderSheet: View {
     private var hasKey: Bool { !self.settings.liveTranscriptionAPIKey(for: self.provider).isEmpty }
     private var isActive: Bool { self.settings.activeLiveProvider == self.provider }
     private var isChecking: Bool { self.viewModel.liveProviderBeingChecked != nil }
+    private var isTestArmed: Bool { self.test.armedProvider == self.provider }
 
     var body: some View {
         FluidManagementSheet(
@@ -27,7 +29,7 @@ struct LiveCloudProviderSheet: View {
         ) {
             self.keyGroup
             self.modelGroup
-            // JUDGMENT: the Test block arrives with Task 2.12 and its LiveProviderTestCoordinator.
+            self.testGroup
             self.usageGroup
             Divider()
             self.footer
@@ -41,6 +43,8 @@ struct LiveCloudProviderSheet: View {
         } message: {
             Text("This removes its saved API key and model choice. If it is active, dictation switches to your selected local model.")
         }
+        // Closing the sheet disarms the test, so the next dictation uses the active engine again.
+        .onDisappear { if self.isTestArmed { self.test.disarm() } }
     }
 
     private var keyGroup: some View {
@@ -108,6 +112,43 @@ struct LiveCloudProviderSheet: View {
                 Label(warning, systemImage: "exclamationmark.triangle")
                     .font(self.theme.typography.caption).foregroundStyle(.orange)
             }
+        }
+    }
+
+    /// Like the Cleanup Styles prompt test: the user's own dictation shortcut records, and the result shows here.
+    private var testGroup: some View {
+        FluidManagementGroup(title: "Test") {
+            if self.isTestArmed {
+                Label("Press your dictation shortcut, speak for a few seconds, then stop.", systemImage: "mic.circle")
+                Button("Stop testing") { self.test.disarm() }
+                    .fluidGlassAction()
+                    .accessibilityIdentifier("live-cloud-stop-test-\(self.provider.rawValue)")
+            } else {
+                Button("Test with your dictation shortcut") { self.test.arm(self.provider) }
+                    .fluidGlassAction()
+                    .disabled(!self.hasKey || self.viewModel.areSpeechModelActionsBlocked || self.isChecking)
+                    .help(!self.hasKey ? "Save an API key first." : "The next dictation uses \(self.info.name) and shows its text here.")
+                    .accessibilityIdentifier("live-cloud-test-\(self.provider.rawValue)")
+            }
+            if self.isTestArmed, !self.test.lastTranscript.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Transcript").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    Text(self.test.lastTranscript)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+                }
+                if let latency = self.test.lastLatencyMilliseconds, self.test.lastError.isEmpty {
+                    Label(String(format: "Final text %.2f s after you stopped", Double(latency) / 1000), systemImage: "checkmark.circle")
+                        .foregroundStyle(.green)
+                }
+            }
+            if self.isTestArmed, !self.test.lastError.isEmpty {
+                Text(self.test.lastError).foregroundStyle(.red).textSelection(.enabled)
+            }
+            Text("Nothing is typed or saved. A test uses a few seconds of \(self.info.name) usage. Testing doesn't change your voice engine.")
+                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 

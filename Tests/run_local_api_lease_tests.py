@@ -57,6 +57,14 @@ struct LiveTranscriptionConfiguration: Equatable {
     var usesLiveCloudDictation: Bool { liveDictationConfiguration != nil }
     func liveTranscriptionAPIKey(for provider: String) -> String { "live-fixture-credential" }
 }
+struct LiveProviderTestRun {
+    let provider: String
+    var failureMessage: String?
+}
+@MainActor final class LiveProviderTestCoordinator {
+    static let shared = LiveProviderTestCoordinator()
+    var overrideConfiguration: LiveTranscriptionConfiguration?
+}
 nonisolated final class OpenRouterTranscriptionClient: Sendable {
     static let shared = OpenRouterTranscriptionClient()
     func prewarmIfIdle(apiKey: String) async {}
@@ -150,6 +158,7 @@ final class CloudTranscriptionProvider: Provider {
     var isAsrReady = false
     var asrReadyBeforeLiveLease: Bool?
     var isStoppingFinalTranscription = false
+    var liveProviderTestRun: LiveProviderTestRun?
     var endedLiveStreams = 0
     func endLiveCloudStream() { endedLiveStreams += 1 }
     var transcriptionProvider: Provider { frozenTranscriptionProvider ?? localProvider }
@@ -351,6 +360,43 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(service.frozenTranscriptionProvider === active, "A language change keeps the same live provider")
             settings.cloudDictationLanguageCode = nil
             service.releaseExclusiveActivity(recording)
+            passes += 1
+        }
+        do {
+            // Provider test: an armed test replaces the active engine for dictation only, and the stop path reads it after release.
+            let settings = SettingsStore.shared
+            let test = LiveProviderTestCoordinator.shared
+            settings.speechExecutionSource = .openRouter
+            test.overrideConfiguration = LiveTranscriptionConfiguration(provider: "deepgram", modelID: "nova-3")
+            defer {
+                settings.speechExecutionSource = .local
+                test.overrideConfiguration = nil
+            }
+            let service = ASRService()
+            let dictation = try service.acquireExclusiveActivity(.dictation)
+            guard let live = service.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider else {
+                fatalError("An armed provider test must freeze the tested live provider")
+            }
+            check(live.configuration.provider == "deepgram" && live.apiKey == "live-fixture-credential", "The test uses the armed provider and its key")
+            check(service.frozenSpeechExecutionSource == .liveCloud && service.frozenCloudConfiguration == nil, "A test lease is not an OpenRouter lease")
+            check(service.liveProviderTestRun?.provider == "deepgram", "The lease records the provider test")
+            service.releaseExclusiveActivity(dictation)
+            check(service.liveProviderTestRun?.provider == "deepgram", "The test run outlives the lease for the stop path")
+            passes += 1
+
+            let file = try service.acquireExclusiveActivity(.fileTranscription)
+            check(service.frozenTranscriptionProvider is CloudTranscriptionProvider, "Files keep the active engine while a test is armed")
+            service.releaseExclusiveActivity(file)
+            let training = try service.acquireExclusiveActivity(.dictation)
+            service.freezeLocalProviderForDictionaryTrainingCapture(true)
+            check(service.liveProviderTestRun == nil, "A dictionary training capture is not a provider test")
+            service.releaseExclusiveActivity(training)
+            passes += 1
+
+            test.overrideConfiguration = nil
+            let normal = try service.acquireExclusiveActivity(.dictation)
+            check(service.liveProviderTestRun == nil && service.frozenTranscriptionProvider is CloudTranscriptionProvider, "Disarmed, dictation uses the active engine")
+            service.releaseExclusiveActivity(normal)
             passes += 1
         }
         print("PASS \(passes) API scenarios using production API methods, activity ownership and transcription executor")
