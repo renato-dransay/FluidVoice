@@ -67,7 +67,7 @@ struct MeetingCloudSettingsSection: View {
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
-                Text("Live captions remain local and English-only. Changes apply when the next transcription starts.")
+                Text("Changes apply when the next transcription starts.")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }

@@ -63,6 +63,20 @@ final class LiveTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(assembler.finalText, "kept again")
     }
 
+    func testStableTextIsTheLeadingRunOfFinalSegments() {
+        var assembler = LiveTranscriptAssembler()
+        assembler.apply(.segment(.init(id: "1", text: "first", isFinal: true, audioEndMilliseconds: 500)))
+        assembler.apply(.segment(.init(id: "2", text: "second", isFinal: false, audioEndMilliseconds: nil)))
+        assembler.apply(.segment(.init(id: "3", text: "third", isFinal: true, audioEndMilliseconds: 1_500)))
+        assembler.apply(.pending("tail"))
+        XCTAssertEqual(assembler.stableText, "first")
+        XCTAssertEqual(assembler.displayText, "first second third tail")
+        assembler.apply(.segment(.init(id: "2", text: "second", isFinal: true, audioEndMilliseconds: 1_000)))
+        assembler.apply(.pending(""))
+        XCTAssertEqual(assembler.stableText, "first second third")
+        XCTAssertEqual(assembler.stableText, assembler.displayText)
+    }
+
     func testUntimedFinalsCannotBeResumedSoTheirConnectionIsReplayedWhole() {
         var assembler = LiveTranscriptAssembler()
         assembler.apply(.segment(.init(id: "1", text: "untimed", isFinal: true, audioEndMilliseconds: nil)))

@@ -3,12 +3,16 @@ import CoreMedia
 import Foundation
 
 /// Owns the two live-transcription engines for one meeting recording and publishes a snapshot for
-/// the UI. Entirely additive to the recording path: `offer(kind:sampleBuffer:)` is the only entry
-/// point invoked from the capture tee, and it never blocks or throws into the capture callback.
+/// the UI. The engines run the on-device model or stream to a Live cloud provider, per the
+/// recording's `MeetingLiveCaptionSource`. Entirely additive to the recording path:
+/// `offer(kind:sampleBuffer:)` is the only entry point invoked from the capture tee, and it never
+/// blocks or throws into the capture callback.
 ///
 /// Not `@MainActor` on purpose — `offer` must be callable synchronously from the SCStream callback
 /// thread. `onUpdate` is responsible for hopping to the main actor if the caller needs that.
 final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable {
+    typealias CloudEngineFactory = @Sendable (MeetingAudioTrackKind, LiveTranscriptionConfiguration, String) -> any MeetingLiveCaptionEngine
+
     /// Two `StreamingEouAsrManager` instances measured at ~470MB RSS each. Below this, skip live
     /// entirely rather than risk contending with the recording or the later batch model.
     static let minimumPhysicalMemoryBytes: UInt64 = 8 * 1024 * 1024 * 1024
@@ -39,14 +43,21 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
     private let originBox = MeetingLiveOriginBox()
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
+    private let makeCloudEngine: CloudEngineFactory
 
-    #if arch(arm64)
-    private var microphoneEngine: MeetingLiveTrackEngine?
-    private var applicationEngine: MeetingLiveTrackEngine?
-    #endif
+    private var microphoneEngine: (any MeetingLiveCaptionEngine)?
+    private var applicationEngine: (any MeetingLiveCaptionEngine)?
+    /// Each track's own state; the snapshot shows their combination. Guarded by `stateLock`.
+    private var trackAvailability: [MeetingAudioTrackKind: MeetingLiveAvailability] = [:]
 
-    init(onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+    init(
+        onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void,
+        makeCloudEngine: @escaping CloudEngineFactory = { kind, configuration, apiKey in
+            MeetingCloudCaptionEngine(kind: kind, configuration: configuration, apiKey: apiKey)
+        }
+    ) {
         self.onUpdate = onUpdate
+        self.makeCloudEngine = makeCloudEngine
     }
 
     /// Clears any in-progress microphone partial at a capture-side splice, so it can't straddle eras.
@@ -61,9 +72,27 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         )
     }
 
-    func start(mode: MeetingCaptureMode, languageCode: String = "en") {
+    func start(mode: MeetingCaptureMode, languageCode: String = "en", source: MeetingLiveCaptionSource = .onDevice) {
+        switch source {
+        case .unavailable(let reason):
+            self.publish { $0.settingAvailability(.unavailable(reason: reason)) }
+        case let .cloud(configuration, apiKey):
+            let name = LiveTranscriptionCatalog.info(for: configuration.provider).name
+            self.diag("[live] streaming captions to \(configuration.provider.rawValue) mode=\(mode)")
+            self.launchEngines(mode: mode) { kind in self.makeCloudEngine(kind, configuration, apiKey) }
+            self.publish { $0.settingAvailability(.unavailable(reason: "Connecting live captions to \(name)…")) }
+        case .onDevice:
+            self.startOnDevice(mode: mode, languageCode: languageCode)
+        }
+    }
+
+    private func startOnDevice(mode: MeetingCaptureMode, languageCode: String) {
         guard languageCode == "en" || languageCode == MeetingCloudLanguage.automatic else {
-            self.publish { $0.settingAvailability(.unavailable(reason: "Local live captions support English only. Your completed transcript uses the selected cloud language.")) }
+            self.publish {
+                $0.settingAvailability(.unavailable(
+                    reason: "Local live captions support English only. Your completed transcript uses the selected cloud language. To caption other languages, choose a live provider under Live captions in meeting settings."
+                ))
+            }
             return
         }
         #if arch(arm64)
@@ -78,31 +107,35 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.diag(
             "[live] starting engines mode=\(mode) physicalMemory=\(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)GB"
         )
-        let microphone = MeetingLiveTrackEngine(kind: .microphone)
-        self.stateLock.withLock { self.microphoneEngine = microphone }
-        self.launch(microphone)
-
-        if mode == .onlineCall {
-            let application = MeetingLiveTrackEngine(kind: .applicationAudio)
-            self.stateLock.withLock { self.applicationEngine = application }
-            self.launch(application)
-        }
+        self.launchEngines(mode: mode) { kind in MeetingLiveTrackEngine(kind: kind) }
         self.publish { $0.settingAvailability(.unavailable(reason: "Live captions are loading…")) }
         #else
         self.publish { $0.settingAvailability(.unavailable(reason: "Live captions require Apple Silicon.")) }
         #endif
     }
 
+    /// The microphone always has an engine; application audio only in an online call.
+    private func launchEngines(mode: MeetingCaptureMode, make: (MeetingAudioTrackKind) -> any MeetingLiveCaptionEngine) {
+        let microphone = make(.microphone)
+        self.stateLock.withLock { self.microphoneEngine = microphone }
+        self.launch(microphone)
+
+        if mode == .onlineCall {
+            let application = make(.applicationAudio)
+            self.stateLock.withLock { self.applicationEngine = application }
+            self.launch(application)
+        }
+    }
+
     /// The capture-tee entry point. Copies the sample immediately, then hands it to the matching
     /// track's bounded queue — never retains the `CMSampleBuffer` beyond this call.
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
-        #if arch(arm64)
         guard let sample = MeetingLiveSampleCopy.copy(sampleBuffer) else {
             self.diag("[live/tee] sample copy FAILED kind=\(kind)")
             return
         }
         self.originBox.establish(sample.pts)
-        let engine: MeetingLiveTrackEngine? = self.stateLock.withLock { () -> MeetingLiveTrackEngine? in
+        let engine = self.stateLock.withLock { () -> (any MeetingLiveCaptionEngine)? in
             let count = (self.offerCounts[kind] ?? 0) + 1
             self.offerCounts[kind] = count
             if count == 1 {
@@ -117,14 +150,12 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
             return engine
         }
         engine?.offer(sample)
-        #endif
     }
 
     /// Must complete before the batch pipeline calls `ensureAsrReady()`, so both engines' CoreML
-    /// models are released before the offline model loads.
+    /// models are released before the offline model loads. Cloud engines close their connections.
     func stop() async {
-        #if arch(arm64)
-        let (microphone, application) = self.stateLock.withLock { () -> (MeetingLiveTrackEngine?, MeetingLiveTrackEngine?) in
+        let (microphone, application) = self.stateLock.withLock { () -> ((any MeetingLiveCaptionEngine)?, (any MeetingLiveCaptionEngine)?) in
             defer {
                 self.microphoneEngine = nil
                 self.applicationEngine = nil
@@ -137,11 +168,9 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         await microphone?.stop()
         await application?.stop()
         self.diag("[live] engines stopped, models released")
-        #endif
     }
 
-    #if arch(arm64)
-    private func launch(_ engine: MeetingLiveTrackEngine) {
+    private func launch(_ engine: any MeetingLiveCaptionEngine) {
         Task { [weak self] in
             guard let self else { return }
             await engine.configure(
@@ -205,20 +234,35 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     private func handleDegraded(kind: MeetingAudioTrackKind, reason: String) {
         DebugLogger.shared.warning("Live captions degraded: \(reason)", source: "MeetingLive")
-        self.publish { $0.settingAvailability(.degraded(reason: reason)) }
+        self.setAvailability(.degraded(reason: reason), for: kind)
     }
 
+    /// A cloud engine reports ready again after it reconnects, which clears its own degraded state.
     private func handleReady(kind: MeetingAudioTrackKind) {
-        self.publish { snapshot in
-            guard case .unavailable = snapshot.availability else { return snapshot }
-            return snapshot.settingAvailability(.available)
+        self.setAvailability(.available, for: kind)
+    }
+
+    private func setAvailability(_ availability: MeetingLiveAvailability, for kind: MeetingAudioTrackKind) {
+        let combined = self.stateLock.withLock { () -> MeetingLiveAvailability? in
+            self.trackAvailability[kind] = availability
+            return Self.combinedAvailability(self.trackAvailability)
         }
+        guard let combined else { return }
+        self.publish { $0.settingAvailability(combined) }
+    }
+
+    /// A degraded track wins, so its reason stays visible; otherwise one ready track makes captions
+    /// available. Nil while no track has reported, which keeps the starting message.
+    static func combinedAvailability(_ tracks: [MeetingAudioTrackKind: MeetingLiveAvailability]) -> MeetingLiveAvailability? {
+        for kind in [MeetingAudioTrackKind.microphone, .applicationAudio] {
+            if case .degraded = tracks[kind] { return tracks[kind] }
+        }
+        return tracks.values.contains(.available) ? .available : nil
     }
 
     private static func speaker(for kind: MeetingAudioTrackKind) -> MeetingLiveSpeaker {
         kind == .microphone ? .you : .them
     }
-    #endif
 
     private func publish(_ transform: (MeetingLiveTranscriptSnapshot) -> MeetingLiveTranscriptSnapshot) {
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {

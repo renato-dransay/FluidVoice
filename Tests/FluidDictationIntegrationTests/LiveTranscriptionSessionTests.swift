@@ -188,6 +188,29 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(second, "hello")
     }
 
+    func testProgressSplitsStableTextFromTheProvisionalTail() async throws {
+        let transport = FakeLiveTransport()
+        let session = self.session { transport }
+        var iterator = session.progress.makeAsyncIterator()
+        try await session.start()
+        transport.deliver(.success(.text("final:hello:500")))
+        let first = await iterator.next()
+        transport.deliver(.success(.text("pending:wor")))
+        let second = await iterator.next()
+        XCTAssertEqual(first, LiveTranscriptProgress(displayText: "hello", stableText: "hello"))
+        XCTAssertEqual(second, LiveTranscriptProgress(displayText: "hello wor", stableText: "hello"))
+    }
+
+    func testProgressEndsWhenTheSessionFailsAndNamesTheFailure() async throws {
+        let transport = FakeLiveTransport()
+        let session = self.session { transport }
+        try await session.start()
+        transport.deliver(.success(.text("error")))
+        for await _ in session.progress {}
+        let failure = await session.failureReason
+        XCTAssertEqual(failure, .authentication)
+    }
+
     func testTimesOutWhenTheProviderNeverFinishes() async throws {
         let transport = FakeLiveTransport()
         let session = self.session(timeout: .milliseconds(200)) { transport }

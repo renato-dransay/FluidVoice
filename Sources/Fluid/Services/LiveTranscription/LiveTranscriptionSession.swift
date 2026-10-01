@@ -35,15 +35,24 @@ actor LiveTranscriptionSession {
     private var isSending = false
     private var sendWaiters: [CheckedContinuation<Void, Never>] = []
     private var lastPublished = ""
+    private var lastProgress = LiveTranscriptProgress.empty
     private let partialsContinuation: AsyncStream<String>.Continuation
     nonisolated let partials: AsyncStream<String>
+    private let progressContinuation: AsyncStream<LiveTranscriptProgress>.Continuation
+    /// The newest transcript split into stable and provisional text. It keeps only the latest value,
+    /// so a session nobody reads it from holds one, and it ends when the session finishes, is
+    /// cancelled or fails; `failureReason` then says which.
+    nonisolated let progress: AsyncStream<LiveTranscriptProgress>
 
+    /// `partialsBuffering` defaults to unbounded so dictation loses no intermediate text; a caller
+    /// that reads only `progress` passes `.bufferingNewest(1)` so unread partials do not pile up.
     init(
         adapter: any LiveTranscriptionAdapter,
         configuration: LiveTranscriptionConfiguration,
         apiKey: String,
         makeTransport: @escaping TransportFactory,
-        finishTimeout: Duration = .seconds(5)
+        finishTimeout: Duration = .seconds(5),
+        partialsBuffering: AsyncStream<String>.Continuation.BufferingPolicy = .unbounded
     ) {
         self.adapter = adapter
         self.initialAdapter = adapter
@@ -51,13 +60,18 @@ actor LiveTranscriptionSession {
         self.apiKey = apiKey
         self.makeTransport = makeTransport
         self.finishTimeout = finishTimeout
-        // Unbounded so no intermediate text is lost; ASRService consumes each update at once.
-        let stream = AsyncStream.makeStream(of: String.self, bufferingPolicy: .unbounded)
+        let stream = AsyncStream.makeStream(of: String.self, bufferingPolicy: partialsBuffering)
         self.partials = stream.stream
         self.partialsContinuation = stream.continuation
+        let progress = AsyncStream.makeStream(of: LiveTranscriptProgress.self, bufferingPolicy: .bufferingNewest(1))
+        self.progress = progress.stream
+        self.progressContinuation = progress.continuation
     }
 
     var streamedMilliseconds: Int { self.audio.count / LivePCM16.bytesPerMillisecond }
+
+    /// Why the session ended early, or nil while it runs or after it finished normally.
+    var failureReason: LiveTranscriptionError? { self.failure }
 
     func start() async throws {
         do {
@@ -108,6 +122,7 @@ actor LiveTranscriptionSession {
         }
         self.transport?.close()
         self.partialsContinuation.finish()
+        self.progressContinuation.finish()
         // JUDGMENT: a cancel during the final pass (the dictation was discarded) ends the wait without a
         // failure; returning the text received so far would insert a partial transcript as a success.
         if self.isCancelled { throw CancellationError() }
@@ -149,6 +164,7 @@ actor LiveTranscriptionSession {
         self.isFinishing = true
         self.transport?.close()
         self.partialsContinuation.finish()
+        self.progressContinuation.finish()
         self.resumeWaiter()
     }
 
@@ -339,15 +355,20 @@ actor LiveTranscriptionSession {
     }
 
     private func publish() {
-        let text = self.assembler.displayText
-        guard text != self.lastPublished else { return }
-        self.lastPublished = text
-        self.partialsContinuation.yield(text)
+        let progress = LiveTranscriptProgress(displayText: self.assembler.displayText, stableText: self.assembler.stableText)
+        guard progress != self.lastProgress else { return }
+        self.lastProgress = progress
+        self.progressContinuation.yield(progress)
+        guard progress.displayText != self.lastPublished else { return }
+        self.lastPublished = progress.displayText
+        self.partialsContinuation.yield(progress.displayText)
     }
 
     private func fail(_ error: LiveTranscriptionError) {
         if self.failure == nil { self.failure = error }
         self.transport?.close()
+        // The failure is terminal, so a reader of `progress` learns of it here instead of at `finish()`.
+        self.progressContinuation.finish()
         self.resumeWaiter()
     }
 

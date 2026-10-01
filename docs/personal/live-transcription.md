@@ -42,10 +42,26 @@ These always stay on the selected local model, even with Live cloud active and e
 
 - Imported audio and video files.
 - The local HTTP API.
-- Meetings, including live captions.
+- Completed meeting transcripts, which use their own setting (Parakeet on this Mac, or OpenRouter).
 - Dictionary training captures, which compare against the local model's pronunciation.
 
 The selected local model must therefore still be downloaded for those features. The Local tab's header reads **Selected local model** while another engine is active, for this reason.
+
+## Meeting live captions
+
+FluidMeet's live captions can stream to a Live cloud provider instead of the on-device English model. The choice is separate from dictation: Live cloud does not need to be the active voice engine, and activating a provider for dictation does not change meeting captions.
+
+1. Add the provider and save its key under **AI Settings > Voice Engine > Live cloud**, as for dictation.
+2. In FluidMeet, open the recording settings and pick the provider under **Live captions**. The picker lists every added provider with a saved key; **On this Mac (English)** keeps captions local.
+3. The choice applies from the next recording.
+
+During a recording, the microphone streams to the provider on one connection and, in an online call, the call audio on a second one, using the model chosen in the provider's Manage sheet. Each connection is billed separately for the whole recording, including silence: a track that delivers no audio streams silence so providers that close idle connections keep it open. Captions use the meeting's transcript language when OpenRouter makes the completed transcript, and automatic detection when Parakeet does, with the dictation Primary and Secondary languages as hints. A language the provider does not list is detected automatically instead; Speechmatics, which cannot detect, uses the Primary language when the meeting language is automatic.
+
+Turns are cut on the Mac: a caption bubble closes after a short pause once the provider's text is final, after a longer pause if the provider still holds provisional text, and at the provider's last final text after 20 seconds of continuous speech. The connection is replaced at the first pause after 10 minutes (and after 30 minutes regardless), which bounds the audio kept for replay after a drop.
+
+Captions never affect the recording or the completed transcript, which is still made from the recorded audio. When a connection drops, the session reconnects once on its own; if that fails, the captions card shows that captions are reconnecting and a new connection opens after a short backoff (1, 2, 5, 10, then every 30 seconds), and audio in between is not captioned. A rejected key, exhausted credits or an unsupported language stops captions for the rest of the recording with a message that names the provider. If only the chosen provider's key is removed, captions stay off and say that the key is required; the app does not fall back to the on-device model on its own. **Remove provider** in its Manage sheet also returns meeting captions to **On this Mac (English)**.
+
+The recording screen names the caption provider in its privacy line whenever audio leaves the Mac. Each recording's caption streams count towards the provider's **Streamed on this Mac** usage, one recording per stream.
 
 ## Languages and the overlay
 
@@ -67,7 +83,7 @@ Partial text is never inserted, and the app never switches to another engine on 
 
 ## Privacy
 
-- Audio leaves the Mac only while Live cloud is active (or a provider test is armed), and only to the active provider. It streams during the recording, not after it. The key check at activation sends no audio.
+- Audio leaves the Mac only while Live cloud is active (or a provider test is armed), and only to the active provider, or while a meeting records with a caption provider chosen in FluidMeet, and then only to that provider. It streams during the recording, not after it. The key check at activation sends no audio.
 - No network contact with a provider happens until you save its key.
 - Only audio and the session settings (model, and language where the provider takes it) are sent. App or window context, preceding text and Custom Dictionary terms are not sent to live providers.
 - Deepgram requests carry `mip_opt_out=true`, which opts them out of Deepgram's Model Improvement Program.

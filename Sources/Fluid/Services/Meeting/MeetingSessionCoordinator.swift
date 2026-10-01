@@ -448,7 +448,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
-        liveTranscriptionCoordinator.start(mode: configuration.mode, languageCode: configuration.languageCode)
+        liveTranscriptionCoordinator.start(
+            mode: configuration.mode,
+            languageCode: configuration.languageCode,
+            source: SettingsStore.shared.meetingLiveCaptionSource()
+        )
 
         do {
             try await self.store.create(session)
@@ -1970,7 +1974,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// Must complete before any code path that calls into `processing.process`, so both live
-    /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
+    /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads,
+    /// and a caption provider's connections are closed when the recording ends.
     private func tearDownLiveTranscription() async {
         guard let coordinator = self.liveTranscriptionCoordinator else { return }
         self.liveTranscriptionCoordinator = nil

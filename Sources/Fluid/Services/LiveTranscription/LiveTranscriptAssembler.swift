@@ -39,6 +39,17 @@ nonisolated struct LiveTranscriptAssembler: Equatable, Sendable {
         Self.join(self.order.compactMap { self.segments[$0]?.text })
     }
 
+    /// The leading run of final segments: text the provider no longer revises, while later segments
+    /// and the pending tail still can change.
+    var stableText: String {
+        var parts: [String] = []
+        for key in self.order {
+            guard let segment = self.segments[key], segment.isFinal else { break }
+            parts.append(segment.text)
+        }
+        return Self.join(parts)
+    }
+
     /// Prepares for a new connection after a drop or a language change and returns the recording
     /// position, in milliseconds, whose audio the new connection must receive again.
     mutating func beginGeneration() -> Int {

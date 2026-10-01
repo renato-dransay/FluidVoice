@@ -74,6 +74,16 @@ nonisolated struct LiveTranscriptSegment: Equatable, Sendable {
     let audioEndMilliseconds: Int?
 }
 
+/// The transcript of one session so far, split where the provider stops revising it.
+nonisolated struct LiveTranscriptProgress: Equatable, Sendable {
+    /// Everything shown while speaking, including text the provider may still revise.
+    let displayText: String
+    /// The leading final text, a prefix of `displayText` that no later update changes.
+    let stableText: String
+
+    static let empty = LiveTranscriptProgress(displayText: "", stableText: "")
+}
+
 nonisolated enum LiveTranscriptUpdate: Equatable, Sendable {
     /// Adds the segment, or replaces the one with the same id. Order is first appearance.
     case segment(LiveTranscriptSegment)

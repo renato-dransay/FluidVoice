@@ -277,6 +277,7 @@ struct MeetingRecordingSettingsSheet: View {
             }
 
             MeetingCloudSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
+            MeetingLiveCaptionSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {

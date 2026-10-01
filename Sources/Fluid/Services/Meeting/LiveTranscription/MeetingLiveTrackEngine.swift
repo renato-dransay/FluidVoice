@@ -4,7 +4,6 @@ import Foundation
 #if arch(arm64)
 @preconcurrency import CoreML
 import FluidAudio
-import os
 
 /// Only public dependency operations are represented. A completed reset does NOT prove that
 /// decoder state reset succeeded (the dependency currently suppresses internal reset errors).
@@ -48,11 +47,11 @@ nonisolated struct MeetingLiveDiagnosticSnapshot: Sendable {
 /// Audio arrives via the nonisolated `offer(_:)`, called synchronously from the capture-tee copy
 /// (never from the SCStream callback itself). A polling drain loop pulls off the bounded queue and
 /// does all FluidAudio work on this actor, off the capture path entirely.
-actor MeetingLiveTrackEngine {
-    typealias PartialHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
-    typealias UtteranceHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
-    typealias DegradedHandler = @Sendable (MeetingAudioTrackKind, String) -> Void
-    typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
+actor MeetingLiveTrackEngine: MeetingLiveCaptionEngine {
+    typealias PartialHandler = MeetingLiveCaptionHandlers.Partial
+    typealias UtteranceHandler = MeetingLiveCaptionHandlers.Utterance
+    typealias DegradedHandler = MeetingLiveCaptionHandlers.Degraded
+    typealias ReadyHandler = MeetingLiveCaptionHandlers.Ready
 
     private let kind: MeetingAudioTrackKind
     /// Sized to ride out first-inference CoreML warmup without dropping audio: at the ~10.7ms
@@ -70,14 +69,8 @@ actor MeetingLiveTrackEngine {
     private let diagnosticsEnabled: Bool
     private var diagnosticSnapshot = MeetingLiveDiagnosticSnapshot()
     private var diagnosticResetUptime: Double?
-    private let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
-        // Fixed Float32 PCM format with positive sample rate and channels is valid by construction.
-        // swiftlint:disable:next force_unwrapping
-    )!
-
-    private var converter: AVAudioConverter?
-    private var converterSourceFormat: AVAudioFormat?
+    private let audioConverter = MeetingLiveAudioConverter()
+    private var targetFormat: AVAudioFormat { self.audioConverter.targetFormat }
     private var utteranceStartPTS: CMTime?
     private var utteranceTurnID: UUID?
     private var lastPartialText = ""
@@ -475,43 +468,10 @@ actor MeetingLiveTrackEngine {
     func diagnosticSnapshotValue() -> MeetingLiveDiagnosticSnapshot { self.diagnosticSnapshot }
     #endif
 
-    /// Persistent converter reused across calls; FluidAudio's own `appendAudio` takes a fast path
-    /// once the buffer already matches its 16kHz mono target, so this is the only resample per chunk.
+    /// FluidAudio's own `appendAudio` takes a fast path once the buffer already matches its 16kHz
+    /// mono target, so this is the only resample per chunk.
     private func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        let format = buffer.format
-        if format.sampleRate == self.targetFormat.sampleRate,
-           format.channelCount == self.targetFormat.channelCount,
-           format.commonFormat == self.targetFormat.commonFormat
-        {
-            return buffer
-        }
-        if self.converter == nil || self.converterSourceFormat != format {
-            self.converterSourceFormat = format
-            self.converter = AVAudioConverter(from: format, to: self.targetFormat)
-        }
-        guard let converter = self.converter else { return nil }
-
-        let ratio = self.targetFormat.sampleRate / format.sampleRate
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 16
-        guard let output = AVAudioPCMBuffer(pcmFormat: self.targetFormat, frameCapacity: capacity) else { return nil }
-
-        let provided = OSAllocatedUnfairLock(initialState: false)
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, inputStatus in
-            let wasProvided = provided.withLock { state -> Bool in
-                if state { return true }
-                state = true
-                return false
-            }
-            if wasProvided {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            inputStatus.pointee = .haveData
-            return buffer
-        }
-        guard status != .error else { return nil }
-        return output
+        self.audioConverter.convert(buffer)
     }
 }
 #endif

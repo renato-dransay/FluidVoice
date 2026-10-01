@@ -2250,10 +2250,26 @@ private struct MeetingSetupCanvas: View {
         self.settings.meetingTranscriptionBackendID == .openRouterNemotron
     }
 
+    /// The provider live captions stream to, named only when it can run (a saved key).
+    private var liveCaptionProviderName: String? {
+        self.settings.meetingLiveCaptionSource().cloudProvider.map { LiveTranscriptionCatalog.info(for: $0).name }
+    }
+
+    private var sendsMeetingAudioOffDevice: Bool {
+        self.usesCloudTranscription || self.liveCaptionProviderName != nil
+    }
+
     private var recordingFooterDetail: String {
-        let privacy = self.usesCloudTranscription
-            ? "Recorded audio is sent to OpenRouter for transcription. Speaker detection and live captions stay on this Mac."
-            : "Stays on this Mac."
+        let privacy = switch (self.usesCloudTranscription, self.liveCaptionProviderName) {
+        case (true, nil):
+            "Recorded audio is sent to OpenRouter for transcription. Speaker detection and live captions stay on this Mac."
+        case let (true, provider?):
+            "Audio streams to \(provider) for live captions and is sent to OpenRouter for transcription. Speaker detection stays on this Mac."
+        case let (false, provider?):
+            "Audio streams to \(provider) for live captions. Transcription and speaker detection stay on this Mac."
+        case (false, nil):
+            "Stays on this Mac."
+        }
         let guidance = self.resolvedApplication != nil
             ? "Use headphones for clearer speaker separation."
             : "Place it where everyone can be heard."
@@ -2264,7 +2280,7 @@ private struct MeetingSetupCanvas: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             Label(
                 self.recordingFooterDetail,
-                systemImage: self.usesCloudTranscription ? "cloud" : "lock"
+                systemImage: self.sendsMeetingAudioOffDevice ? "cloud" : "lock"
             )
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
