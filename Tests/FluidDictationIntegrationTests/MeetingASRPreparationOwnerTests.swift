@@ -1179,6 +1179,11 @@ private enum ScopeBodyTestError: Error {
 /// only in DEBUG builds, so the whole suite compiles out of release-config baseline builds.
 @MainActor
 final class ASRServiceMeetingASRScopeTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        self.pinLocalSpeechExecutionSource()
+    }
+
     @MainActor private final class Harness {
         let residency = MeetingModelResidencyCoordinator()
         lazy var service = ASRService(meetingModelResidency: self.residency)

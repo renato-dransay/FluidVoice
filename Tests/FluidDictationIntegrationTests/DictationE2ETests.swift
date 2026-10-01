@@ -16,6 +16,7 @@ final class DictationE2ETests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        self.pinLocalSpeechExecutionSource()
         self.priorSharedFeaturesFlag = UserDefaults.standard.object(forKey: "DictionarySharedFeatureMatcherEnabled")
         UserDefaults.standard.set(true, forKey: "DictionarySharedFeatureMatcherEnabled")
     }
@@ -1981,7 +1982,7 @@ extension DictationE2ETests {
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
                     baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
-                    apiKey: ""
+                    apiKey: settings.providerAPIKeys["ollama"] ?? ""
                 ) ?? "",
             ]
             settings.setDictationPromptSelection(.default, for: .primary)
@@ -2012,7 +2013,10 @@ extension DictationE2ETests {
             let baseURL = ModelRepository.shared.defaultBaseURL(for: "ollama")
             settings.selectedProviderID = PrivateAIProviderFeature.shared.providerID
             settings.verifiedProviderFingerprints = [
-                "ollama": DictationAIPostProcessingGate.providerFingerprint(baseURL: baseURL, apiKey: "") ?? "",
+                "ollama": DictationAIPostProcessingGate.providerFingerprint(
+                    baseURL: baseURL,
+                    apiKey: settings.providerAPIKeys["ollama"] ?? ""
+                ) ?? "",
             ]
 
             XCTAssertTrue(
@@ -2178,7 +2182,7 @@ extension DictationE2ETests {
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
                     baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
-                    apiKey: ""
+                    apiKey: settings.providerAPIKeys["ollama"] ?? ""
                 ) ?? "",
             ]
             settings.setDictationPromptSelection(.default, for: .primary)

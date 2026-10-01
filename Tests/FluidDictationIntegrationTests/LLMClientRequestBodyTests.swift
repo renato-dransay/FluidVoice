@@ -8,6 +8,11 @@ import XCTest
 
 @MainActor
 final class LLMClientRequestBodyTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        self.pinLocalSpeechExecutionSource()
+    }
+
     func testDictationStreamingFallbackSkipsTransportFailuresAndCancellation() {
         XCTAssertFalse(
             DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(

@@ -898,6 +898,7 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        self.pinLocalSpeechExecutionSource()
         self.priorSharedFeaturesFlag = UserDefaults.standard.object(forKey: "DictionarySharedFeatureMatcherEnabled")
         UserDefaults.standard.set(true, forKey: "DictionarySharedFeatureMatcherEnabled")
     }
