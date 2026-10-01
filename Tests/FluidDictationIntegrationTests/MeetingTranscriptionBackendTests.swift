@@ -1460,3 +1460,99 @@ final class MeetingCalendarReminderPolicyTests: XCTestCase {
         XCTAssertEqual(MeetingCalendarReminderPolicy.startDescription(start: self.now.addingTimeInterval(10), now: self.now), "Starting now")
     }
 }
+
+final class MeetingUpcomingEventsPolicyTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar
+    }
+
+    private func entry(
+        id: String,
+        title: String = "Daily",
+        startOffset: TimeInterval,
+        duration: TimeInterval = 30 * 60,
+        isAllDay: Bool = false,
+        declined: Bool = false,
+        tentative: Bool = false,
+        links: [String] = []
+    ) -> (candidate: MeetingCalendarReminderCandidate, isTentative: Bool, color: MeetingUpcomingEvent.Color?) {
+        (
+            candidate: MeetingCalendarReminderCandidate(
+                eventIdentifier: id,
+                title: title,
+                start: self.now.addingTimeInterval(startOffset),
+                end: self.now.addingTimeInterval(startOffset + duration),
+                isAllDay: isAllDay,
+                currentUserDeclined: declined,
+                linkSources: links,
+                attendees: []
+            ),
+            isTentative: tentative,
+            color: nil
+        )
+    }
+
+    func testListsTimedEventsThatHaveNotEndedEarliestFirst() {
+        let events = MeetingUpcomingEventsPolicy.upcoming(from: [
+            self.entry(id: "later", startOffset: 3600),
+            self.entry(id: "running", startOffset: -600),
+            self.entry(id: "ended", startOffset: -3600),
+            self.entry(id: "all-day", startOffset: 0, isAllDay: true),
+            self.entry(id: "declined", startOffset: 600, declined: true),
+            self.entry(id: "tentative", startOffset: 1800, tentative: true),
+        ], at: self.now)
+        XCTAssertEqual(events.map(\.title).count, 3)
+        XCTAssertEqual(events.map { $0.id.components(separatedBy: "@")[0] }, ["running", "tentative", "later"])
+        XCTAssertEqual(events.map(\.isTentative), [false, true, false])
+    }
+
+    func testOffersJoinOnlyForACallLinkAboutToStartOrRunning() throws {
+        let events = MeetingUpcomingEventsPolicy.upcoming(from: [
+            self.entry(id: "running", startOffset: -600, links: ["https://meet.google.com/abc-defg-hij"]),
+            self.entry(id: "soon", startOffset: 4 * 60, links: ["https://zoom.us/j/123456789"]),
+            self.entry(id: "later", startOffset: 3600, links: ["https://meet.google.com/xyz-abcd-efg"]),
+            self.entry(id: "no-link", startOffset: -60, links: ["Room 4"]),
+        ], at: self.now)
+        let byID = Dictionary(uniqueKeysWithValues: events.map { ($0.id.components(separatedBy: "@")[0], $0) })
+        XCTAssertTrue(MeetingUpcomingEventsPolicy.isJoinable(try XCTUnwrap(byID["running"]), at: self.now))
+        XCTAssertTrue(MeetingUpcomingEventsPolicy.isJoinable(try XCTUnwrap(byID["soon"]), at: self.now))
+        XCTAssertFalse(MeetingUpcomingEventsPolicy.isJoinable(try XCTUnwrap(byID["later"]), at: self.now))
+        XCTAssertFalse(MeetingUpcomingEventsPolicy.isJoinable(try XCTUnwrap(byID["no-link"]), at: self.now))
+        XCTAssertEqual(byID["soon"]?.reminder?.serviceName, "Zoom")
+    }
+
+    func testMatchesTheDetectedRoomToItsRunningEvent() {
+        let events = MeetingUpcomingEventsPolicy.upcoming(from: [
+            self.entry(id: "other", title: "AI", startOffset: -300, links: ["https://meet.google.com/zzz-zzzz-zzz"]),
+            self.entry(id: "otc", title: "OTC Refinement", startOffset: -600, links: ["https://meet.google.com/abc-defg-hij?authuser=0"]),
+            self.entry(id: "next", title: "OTC Refinement", startOffset: 7 * 24 * 3600 - 60, links: ["https://meet.google.com/abc-defg-hij"]),
+        ], at: self.now)
+        let match = MeetingUpcomingEventsPolicy.event(matchingConferenceFragment: "meet.google.com/abc-defg-hij", among: events, at: self.now)
+        XCTAssertEqual(match?.title, "OTC Refinement")
+        XCTAssertEqual(match?.id.components(separatedBy: "@")[0], "otc", "next week's occurrence of the same room is not the call running now")
+        XCTAssertNil(MeetingUpcomingEventsPolicy.event(matchingConferenceFragment: nil, among: events, at: self.now))
+        XCTAssertNil(MeetingUpcomingEventsPolicy.event(matchingConferenceFragment: "meet.google.com/qqq-qqqq-qqq", among: events, at: self.now))
+    }
+
+    func testTimeLabelsSayTomorrowAndTheWeekday() throws {
+        let locale = Locale(identifier: "en_US")
+        let startOfToday = self.calendar.startOfDay(for: self.now)
+        func event(at date: Date) -> MeetingUpcomingEvent {
+            MeetingUpcomingEvent(id: "e", title: "E", start: date, end: date.addingTimeInterval(1800), isTentative: false, calendarColor: nil, reminder: nil, searchableText: "")
+        }
+        let tomorrow = try XCTUnwrap(self.calendar.date(byAdding: .day, value: 1, to: startOfToday)).addingTimeInterval(9.5 * 3600)
+        XCTAssertEqual(
+            MeetingUpcomingEventsPolicy.timeLabel(for: event(at: tomorrow), at: self.now, calendar: self.calendar, locale: locale)
+                .replacingOccurrences(of: "\u{202F}", with: " "),
+            "Tomorrow 9:30 AM"
+        )
+        let inThreeDays = try XCTUnwrap(self.calendar.date(byAdding: .day, value: 3, to: startOfToday)).addingTimeInterval(14 * 3600)
+        let weekday = MeetingUpcomingEventsPolicy.timeLabel(for: event(at: inThreeDays), at: self.now, calendar: self.calendar, locale: locale)
+        XCTAssertTrue(weekday.hasPrefix("Mon"), weekday)
+        XCTAssertTrue(weekday.contains("2:00"), weekday)
+    }
+}

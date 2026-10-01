@@ -177,7 +177,7 @@ final class MeetingCalendarReminderScheduler {
         controller.present(reminder)
     }
 
-    private static func candidate(from event: EKEvent) -> MeetingCalendarReminderCandidate {
+    static func candidate(from event: EKEvent) -> MeetingCalendarReminderCandidate {
         var participants = (event.attendees ?? []).map { participant in
             MeetingCalendarParticipantRecord(
                 name: participant.name,

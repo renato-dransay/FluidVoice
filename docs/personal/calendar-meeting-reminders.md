@@ -14,3 +14,11 @@ The calendar also helps automatic detection find a browser call that is already 
 The setting is **Remind me before calendar meetings**, under Settings > Meeting Detection and in FluidMeet settings. It is on by default but does nothing until calendar access is granted; turning it on asks for access if needed. Calendar data is read through EventKit, as for meeting names, and nothing is written to the calendar. Google Calendar events appear once the Google account is added under System Settings > Internet Accounts with Calendars enabled.
 
 The scheduler logs `reminder-due`, `reminder-open`, `reminder-open-and-transcribe`, `reminder-dismissed`, `reminder-expired` and `reminder-start-failed` under the `MeetingCalendarReminders` source, without event titles or links.
+
+## Upcoming events and the call headline
+
+FluidMeet's meeting home lists the next calendar events below the recording card: the next five by default, up to seven days ahead, with **View all** for the rest. Each row shows the calendar's color, the title and the time ("11:00 – 11:30 AM" today, "Tomorrow 9:30 AM", or the weekday later in the week). A dashed square marks an invitation you have not accepted yet. All-day events and declined invitations are left out.
+
+From five minutes before an event with a supported call link until it ends, the row offers **Join**, which opens the link, and **Transcribe**, which works like the reminder's Open & Transcribe. When automatic detection has already found that call, **Transcribe** records it in place instead of opening the link again. The list needs calendar access and either calendar names or calendar reminders turned on, and refreshes every 30 seconds and whenever the calendar changes.
+
+When automatic detection has found a call, the card names it instead of only the app: the calendar event whose link is the detected room gives the title, then the meeting name the page exposes, then the service, for example "OTC Refinement" with "Google Meet in Vivaldi. Vivaldi and your mic will be recorded." A recording started from the card is named after that event when calendar names are on. The list logs `upcoming-join`, `upcoming-open-and-transcribe` and `upcoming-start-failed` under `MeetingUpcomingEvents`, without titles or links.

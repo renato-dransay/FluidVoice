@@ -702,8 +702,9 @@ struct MeetingTranscriptionView: View {
             defer { self.isStarting = false }
             do {
                 var configuration = configuration
-                // Manual start knows no conference link; a single overlapping event still names the recording.
-                if let match = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: nil) {
+                // A detected call's room picks its event; otherwise a single overlapping event still names the recording.
+                let fragment = self.setupDraft.usesAutomaticApplication ? self.appServices.meetingAutomaticTarget?.conferenceFragment : nil
+                if let match = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: fragment) {
                     configuration.calendar = match
                     if self.draftTitleIsDefault, !match.title.isEmpty {
                         configuration.title = match.title
@@ -2005,6 +2006,8 @@ private struct MeetingHistoryRow: View {
 private struct MeetingSetupCanvas: View {
     @Binding var draft: MeetingTranscriptionSetupDraft
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var appServices = AppServices.shared
+    @StateObject private var upcomingEvents = MeetingUpcomingEventsModel()
 
     let applications: [MeetingApplicationOption]
     let readiness: MeetingSetupReadiness
@@ -2044,13 +2047,46 @@ private struct MeetingSetupCanvas: View {
         return "Check the recording setup."
     }
 
+    /// The call auto-detection found in the app that will be recorded, if that app was picked automatically.
+    private var detectedCall: MeetingAutoDetector.ResolvedTarget? {
+        guard self.draft.usesAutomaticApplication, let app = self.resolvedApplication,
+              let target = self.appServices.meetingAutomaticTarget,
+              target.bundleIdentifier == app.identity.bundleIdentifier, target.pid == app.identity.processID
+        else { return nil }
+        return target
+    }
+
+    /// The calendar event whose call link is the detected room.
+    private var liveEvent: MeetingUpcomingEvent? {
+        MeetingUpcomingEventsPolicy.event(
+            matchingConferenceFragment: self.detectedCall?.conferenceFragment,
+            among: self.upcomingEvents.events,
+            at: self.upcomingEvents.now
+        )
+    }
+
+    private var callTitle: String? {
+        let title = (self.liveEvent?.title ?? self.detectedCall?.exposedTitle)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title?.isEmpty == false ? title : nil
+    }
+
     private var planHeadline: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) is open." }
+        if let app = resolvedApplication {
+            if let callTitle { return callTitle }
+            if let service = self.detectedCall?.serviceName { return "\(service) call in \(app.identity.displayName)." }
+            return "\(app.identity.displayName) is open."
+        }
         return self.draft.mode == .inRoom ? "In-person meeting." : "No call open."
     }
 
     private var planDetail: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) and your mic will be recorded." }
+        if let app = resolvedApplication {
+            let recorded = "\(app.identity.displayName) and your mic will be recorded."
+            if self.callTitle != nil, let service = self.detectedCall?.serviceName {
+                return "\(service) in \(app.identity.displayName). \(recorded)"
+            }
+            return recorded
+        }
         if self.draft.mode == .inRoom { return "Your mic will record the room." }
         if self.readiness.showScreenRecordingSettingsAction {
             return "Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too."
@@ -2107,7 +2143,19 @@ private struct MeetingSetupCanvas: View {
             }
 
             self.recordingFooter
+
+            MeetingUpcomingEventsList(
+                model: self.upcomingEvents,
+                liveEventID: self.liveEvent?.id,
+                isEnabled: !self.isStarting && self.isQuiescent,
+                onTranscribeLive: self.onStart
+            )
+            .padding(.top, self.theme.metrics.spacing.md)
         }
+        .onAppear { self.upcomingEvents.start() }
+        .onDisappear { self.upcomingEvents.stop() }
+        .onChange(of: self.settings.meetingCalendarNamesEnabled) { _, _ in self.upcomingEvents.refresh() }
+        .onChange(of: self.settings.meetingCalendarRemindersEnabled) { _, _ in self.upcomingEvents.refresh() }
     }
 
     @ViewBuilder private var plan: some View {
