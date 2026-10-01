@@ -39,7 +39,8 @@ final class FakeLiveTransport: LiveTranscriptionTransport, @unchecked Sendable {
         }
     }
 
-    func close() {}
+    private(set) var closeCount = 0
+    func close() { self.lock.withLock { self.closeCount += 1 } }
 
     func deliver(_ result: Result<LiveTransportMessage, Error>) {
         let waiter = self.lock.withLock { () -> CheckedContinuation<LiveTransportMessage, Error>? in
@@ -88,6 +89,19 @@ struct GreetingScriptAdapter: LiveTranscriptionAdapter {
     mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] {
         message == .text("ready") ? [.ready] : self.script.parse(message)
     }
+}
+
+/// `ScriptAdapter` for a provider that accepts a replay at real time only.
+struct RealTimeReplayScriptAdapter: LiveTranscriptionAdapter {
+    private var script = ScriptAdapter()
+    var provider: LiveTranscriptionProviderID { .deepgram }
+    var maximumReplaySpeed: Double? { 1 }
+    func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
+        try self.script.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+    func finishMessages() -> [LiveTransportMessage] { self.script.finishMessages() }
+    func keyCheckRequest(apiKey: String) throws -> URLRequest { try self.script.keyCheckRequest(apiKey: apiKey) }
+    mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] { self.script.parse(message) }
 }
 
 /// `ScriptAdapter` whose close codes 4001, 4002 and 4003 name a rejected key, exhausted quota and an unsupported language.
@@ -337,6 +351,21 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         let text = try await session.finish()
         XCTAssertEqual(text, "hello olá")
         XCTAssertEqual(second.openedRequests.first?.url?.lastPathComponent, "pt")
+    }
+
+    func testACancelledRetryClosesItsConnection() async throws {
+        let transport = FakeLiveTransport()
+        let session = LiveTranscriptionSession(adapter: RealTimeReplayScriptAdapter(), configuration: self.configuration, apiKey: "test-key") { transport }
+        let retry = Task { try await session.replay([Float](repeating: 0.1, count: 160_000)) } // 10 s at real time
+        try await Task.sleep(for: .milliseconds(150))
+        retry.cancel()
+        do {
+            _ = try await retry.value
+            XCTFail("Expected the retry to be cancelled")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertGreaterThan(transport.closeCount, 0, "A cancelled retry must not leave its socket open")
     }
 
     func testOverlappingFlushesSendEveryByteOnceAndInOrder() async throws {

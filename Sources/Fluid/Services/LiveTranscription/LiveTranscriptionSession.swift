@@ -106,18 +106,31 @@ actor LiveTranscriptionSession {
 
     /// Retry path: streams a saved recording through a fresh connection at the provider's
     /// maximum accepted speed.
+    /// A cancelled or failed retry closes its socket before it throws.
     func replay(_ samples: [Float]) async throws -> String {
-        try await self.start()
-        let chunk = 16_000 / 10
-        let speed = self.adapter.maximumReplaySpeed
-        var index = 0
-        while index < samples.count {
-            let end = min(index + chunk, samples.count)
-            await self.append(Array(samples[index ..< end]))
-            index = end
-            if let speed { try await Task.sleep(for: .milliseconds(Int(100 / speed))) }
+        do {
+            return try await withTaskCancellationHandler {
+                try await self.start()
+                let chunk = 16_000 / 10
+                let speed = self.adapter.maximumReplaySpeed
+                var index = 0
+                while index < samples.count {
+                    try Task.checkCancellation()
+                    let end = min(index + chunk, samples.count)
+                    await self.append(Array(samples[index ..< end]))
+                    index = end
+                    if let speed { try await Task.sleep(for: .milliseconds(Int(100 / speed))) }
+                }
+                return try await self.finish()
+            } onCancel: {
+                // A retry cancelled while it waits for the final text stops waiting at once.
+                Task { await self.cancel() }
+            }
+        } catch {
+            // The receive loop keeps the actor and its socket alive until the socket closes.
+            await self.cancel()
+            throw error
         }
-        return try await self.finish()
     }
 
     func cancel() async {
