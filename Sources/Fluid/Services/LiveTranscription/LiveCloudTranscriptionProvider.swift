@@ -6,7 +6,9 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
     let configuration: LiveTranscriptionConfiguration
     private let apiKey: String
     private let localProvider: (any TranscriptionProvider)?
-    private let makeTransport: LiveTranscriptionSession.TransportFactory
+    // JUDGMENT: in the app's Swift 5 mode a main-actor stored closure reads back as non-Sendable when passed
+    // to the session (a data-race warning); the closure is immutable and @Sendable, so nonisolated is exact.
+    nonisolated private let makeTransport: LiveTranscriptionSession.TransportFactory
     private let finishTimeout: Duration
     private var session: LiveTranscriptionSession?
     private var startFailure: Error?
