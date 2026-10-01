@@ -1,0 +1,59 @@
+#if canImport(LiveTranscriptionHarness)
+@testable import LiveTranscriptionHarness
+#else
+@testable import FluidVoice_Debug
+#endif
+import XCTest
+
+final class LiveTranscriptionDeepgramTests: XCTestCase {
+    private let automatic = LiveTranscriptionConfiguration(provider: .deepgram, modelID: "nova-3", languageCode: nil, languageHints: ["en", "pt"])
+
+    func testConnectionQueryAndTokenHeader() throws {
+        let request = try DeepgramLiveAdapter().connectionRequest(apiKey: "k", configuration: self.automatic)
+        let items = Dictionary(uniqueKeysWithValues: (URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(request.url?.host, "api.deepgram.com")
+        XCTAssertEqual(request.url?.path, "/v1/listen")
+        XCTAssertEqual(items["model"], "nova-3")
+        XCTAssertEqual(items["encoding"], "linear16")
+        XCTAssertEqual(items["sample_rate"], "16000")
+        XCTAssertEqual(items["channels"], "1")
+        XCTAssertEqual(items["interim_results"], "true")
+        XCTAssertEqual(items["smart_format"], "true")
+        XCTAssertEqual(items["language"], "multi")
+        XCTAssertEqual(items["mip_opt_out"], "true")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Token k")
+    }
+
+    func testChosenLanguageReplacesMulti() throws {
+        let request = try DeepgramLiveAdapter().connectionRequest(apiKey: "k", configuration: self.automatic.with(languageCode: "pt"))
+        XCTAssertTrue(request.url?.query?.contains("language=pt") == true)
+    }
+
+    func testInterimReplacesPendingAndFinalAppendsWithItsEndTime() {
+        var adapter = DeepgramLiveAdapter()
+        XCTAssertEqual(
+            adapter.parse(.text(#"{"type":"Results","start":0.0,"duration":1.04,"is_final":false,"channel":{"alternatives":[{"transcript":"olá mun"}]}}"#)),
+            [.pending("olá mun")]
+        )
+        XCTAssertEqual(
+            adapter.parse(.text(#"{"type":"Results","start":0.0,"duration":1.04,"is_final":true,"channel":{"alternatives":[{"transcript":"Olá mundo"}]}}"#)),
+            [.segment(.init(id: "f1", text: "Olá mundo", isFinal: true, audioEndMilliseconds: 1_040)), .pending("")]
+        )
+    }
+
+    func testEmptyFinalsAddNothingAndMetadataMeansFinished() {
+        var adapter = DeepgramLiveAdapter()
+        XCTAssertEqual(adapter.parse(.text(#"{"type":"Results","start":1.0,"duration":0.5,"is_final":true,"channel":{"alternatives":[{"transcript":""}]}}"#)), [.pending("")])
+        XCTAssertEqual(adapter.parse(.text(#"{"type":"Metadata","request_id":"r"}"#)), [.finished])
+    }
+
+    func testFinishClosesTheStreamAndNeverSendsAnEmptyFrame() {
+        XCTAssertEqual(DeepgramLiveAdapter().finishMessages(), [.text(#"{"type":"CloseStream"}"#)])
+    }
+
+    func testKeyCheck() throws {
+        let request = try DeepgramLiveAdapter().keyCheckRequest(apiKey: "k")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.deepgram.com/v1/projects")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Token k")
+    }
+}

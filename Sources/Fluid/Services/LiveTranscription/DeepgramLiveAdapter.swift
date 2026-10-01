@@ -1,0 +1,59 @@
+import Foundation
+
+/// Protocols §3. Configuration in the query, binary PCM, finals cover consecutive ranges.
+/// A zero-length binary frame closes the stream, so the finish message is CloseStream only.
+nonisolated struct DeepgramLiveAdapter: LiveTranscriptionAdapter {
+    private var finalCount = 0
+
+    var provider: LiveTranscriptionProviderID { .deepgram }
+
+    func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
+        var components = URLComponents(string: "wss://api.deepgram.com/v1/listen")
+        components?.queryItems = [
+            URLQueryItem(name: "model", value: configuration.modelID),
+            URLQueryItem(name: "encoding", value: "linear16"),
+            URLQueryItem(name: "sample_rate", value: "16000"),
+            URLQueryItem(name: "channels", value: "1"),
+            URLQueryItem(name: "interim_results", value: "true"),
+            URLQueryItem(name: "punctuate", value: "true"),
+            URLQueryItem(name: "smart_format", value: "true"),
+            // Code-switching works best with short endpointing (Deepgram multilingual guide).
+            URLQueryItem(name: "endpointing", value: "100"),
+            URLQueryItem(name: "language", value: configuration.languageCode ?? "multi"),
+            // Opt out of Deepgram's model improvement program for dictated audio.
+            URLQueryItem(name: "mip_opt_out", value: "true"),
+        ]
+        guard let url = components?.url else { throw LiveTranscriptionError.connectionFailed }
+        var request = URLRequest(url: url)
+        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    func finishMessages() -> [LiveTransportMessage] { [.text(#"{"type":"CloseStream"}"#)] }
+
+    mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] {
+        guard let object = LiveJSON.object(message) else { return [] }
+        switch object["type"] as? String {
+        case "Results":
+            let channel = object["channel"] as? [String: Any]
+            let transcript = ((channel?["alternatives"] as? [[String: Any]])?.first?["transcript"] as? String) ?? ""
+            guard object["is_final"] as? Bool == true else { return [.pending(transcript)] }
+            guard !transcript.isEmpty else { return [.pending("")] }
+            self.finalCount += 1
+            let start = object["start"] as? Double ?? 0
+            let duration = object["duration"] as? Double ?? 0
+            return [
+                .segment(.init(id: "f\(self.finalCount)", text: transcript, isFinal: true, audioEndMilliseconds: Int(((start + duration) * 1000).rounded()))),
+                .pending(""),
+            ]
+        case "Metadata":
+            return [.finished]
+        default:
+            return []
+        }
+    }
+
+    func keyCheckRequest(apiKey: String) throws -> URLRequest {
+        try LiveHTTPStatus.request("https://api.deepgram.com/v1/projects", headers: ["Authorization": "Token \(apiKey)"])
+    }
+}
