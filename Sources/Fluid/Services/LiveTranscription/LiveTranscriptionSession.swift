@@ -9,6 +9,8 @@ actor LiveTranscriptionSession {
     private static let maximumChunkBytes = 1000 * LivePCM16.bytesPerMillisecond
 
     private var adapter: any LiveTranscriptionAdapter
+    /// The adapter as given, restored at every connection: adapter state describes one connection.
+    private let initialAdapter: any LiveTranscriptionAdapter
     private var configuration: LiveTranscriptionConfiguration
     private let apiKey: String
     private let makeTransport: TransportFactory
@@ -39,6 +41,7 @@ actor LiveTranscriptionSession {
         finishTimeout: Duration = .seconds(5)
     ) {
         self.adapter = adapter
+        self.initialAdapter = adapter
         self.configuration = configuration
         self.apiKey = apiKey
         self.makeTransport = makeTransport
@@ -123,6 +126,9 @@ actor LiveTranscriptionSession {
     private func connect(replayingFrom milliseconds: Int) async throws {
         self.connection += 1
         let connection = self.connection
+        // JUDGMENT: adapters number segments and track the last one per connection; carried into a new
+        // connection, a Soniox continuation would extend a segment of the previous generation.
+        self.adapter = self.initialAdapter
         self.isReady = false
         self.sentOffset = min(self.audio.count, max(0, milliseconds) * LivePCM16.bytesPerMillisecond)
         let transport = self.makeTransport()
