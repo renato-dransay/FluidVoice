@@ -108,6 +108,22 @@ final class LiveTranscriptionGladiaTests: XCTestCase {
         )
     }
 
+    func testAFailedPostProcessingStepKeepsTheRealtimeFinals() {
+        var adapter = GladiaLiveAdapter()
+        var assembler = LiveTranscriptAssembler()
+        for message in [
+            #"{"type":"transcript","data":{"id":"00-1","is_final":true,"utterance":{"start":0,"end":0.5,"text":"Hello world."}}}"#,
+            #"{"type":"post_transcript","error":{"status_code":500,"exception":"InternalError","message":"PRIVATE"},"data":null}"#,
+            #"{"type":"translation","error":{"status_code":500,"exception":"InternalError","message":"PRIVATE"},"data":null}"#,
+        ] {
+            let updates = adapter.parse(.text(message))
+            XCTAssertFalse(updates.contains { if case .failure = $0 { true } else { false } }, "An add-on error does not end the session")
+            updates.forEach { assembler.apply($0) }
+        }
+        XCTAssertEqual(adapter.parse(.text(#"{"type":"end_session","session_id":"s"}"#)), [.finished])
+        XCTAssertEqual(assembler.finalText, "Hello world.")
+    }
+
     func testKeyCheck() throws {
         let request = try GladiaLiveAdapter().keyCheckRequest(apiKey: "k")
         XCTAssertEqual(request.url?.absoluteString, "https://api.gladia.io/v2/live?limit=1")

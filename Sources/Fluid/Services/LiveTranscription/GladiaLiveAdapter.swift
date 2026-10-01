@@ -76,11 +76,25 @@ nonisolated struct GladiaLiveAdapter: LiveTranscriptionAdapter {
 
     func finishMessages() -> [LiveTransportMessage] { [.text(#"{"type":"stop_recording"}"#)] }
 
+    // EVIDENCE: https://docs.gladia.io/api-reference/v2/live/websocket (checked 2026-10-01): there is no separate
+    // error message. The `error` object ("Standard error container included in payloads when an operation
+    // fails") rides on the add-on, post-processing and acknowledgment messages, and `transcript` has none.
+    // A failed add-on or post-processing step leaves the realtime finals standing, so only an error on any
+    // other message, such as a refused audio chunk, fails the session.
+    private static let operationScopedTypes: Set<String> = [
+        "translation", "named_entity_recognition", "sentiment_analysis",
+        "post_transcript", "post_final_transcript", "post_chapterization", "post_summarization",
+    ]
+
     mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] {
         guard let object = LiveJSON.object(message) else { return [] }
-        if let error = object["error"] as? [String: Any] { return [.failure(Self.failure(error))] }
+        let type = object["type"] as? String
+        if let error = object["error"] as? [String: Any] {
+            guard let type, Self.operationScopedTypes.contains(type) else { return [.failure(Self.failure(error))] }
+            return []
+        }
         let data = object["data"] as? [String: Any]
-        switch object["type"] as? String {
+        switch type {
         case "transcript":
             let utterance = data?["utterance"] as? [String: Any]
             let text = utterance?["text"] as? String ?? ""

@@ -92,7 +92,8 @@ nonisolated enum LiveTranscriptionCatalog {
             // 100+ languages with automatic detection and code-switching.
             detectsLanguageAutomatically: true,
             languageCodes: nil,
-            keyURL: URL(string: "https://app.gladia.io"),
+            // EVIDENCE: https://docs.gladia.io/llms-full.txt (checked 2026-10-01) links keys at app.gladia.io/apikeys.
+            keyURL: URL(string: "https://app.gladia.io/apikeys"),
             usageURL: URL(string: "https://app.gladia.io")
         ),
     ]
