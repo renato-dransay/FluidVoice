@@ -43,30 +43,36 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
     }
 
     func testRingWrapRetainsNewestCapacityWithoutReordering() {
+        // The ring is process-wide, and the host app's own audio listeners can publish into it
+        // while this test runs, so exact sequence numbers are only expected for this test's events.
         let capacity = Int(fv_audio_topology_trace_capacity())
-        for index in 0..<(capacity + 17) {
-            _ = Self.record(.callback, objectID: AudioObjectID(index + 1))
-        }
+        let firstObjectID: AudioObjectID = 0xF1D0_1000
+        let objectIDs = firstObjectID..<(firstObjectID + AudioObjectID(capacity + 17))
+        let recorded = objectIDs.map { Self.record(.callback, objectID: $0) }
 
         let snapshot = Self.snapshot()
+        let sequences = snapshot.events.map(\.sequence)
         XCTAssertEqual(snapshot.events.count, capacity)
-        XCTAssertEqual(snapshot.events.first?.sequence, 18)
-        XCTAssertEqual(snapshot.events.last?.sequence, UInt64(capacity + 17))
-        XCTAssertEqual(snapshot.events.map(\.sequence), snapshot.events.map(\.sequence).sorted())
+        XCTAssertEqual(sequences, sequences.sorted())
+        // At least `capacity` newer events followed the first 17, so the wrap dropped them.
+        XCTAssertGreaterThan(sequences.first ?? 0, recorded[16])
+        XCTAssertGreaterThanOrEqual(sequences.last ?? 0, recorded.last ?? .max)
+        let retained = snapshot.events.filter { objectIDs.contains($0.objectID) }.map(\.sequence)
+        XCTAssertEqual(retained, recorded.filter { $0 >= (sequences.first ?? 0) })
     }
 
     func testUnmatchedBeginSurvivesSnapshotAndClassifiesPhaseOpen() throws {
-        _ = Self.record(.listenerRemoveBegin, objectID: 99)
-        let snapshot = Self.snapshot()
+        _ = Self.record(.listenerRemoveBegin, objectID: Self.testObjectID)
+        let events = Self.ownEvents()
 
-        XCTAssertEqual(snapshot.events.count, 1)
-        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(snapshot.events))
-        let line = try AudioTopologyDiagnostics.jsonLine(for: XCTUnwrap(snapshot.events.first))
+        XCTAssertEqual(events.count, 1)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(events))
+        let line = try AudioTopologyDiagnostics.jsonLine(for: XCTUnwrap(events.first))
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
         )
         XCTAssertEqual(object["event"] as? String, "listenerRemoveBegin")
-        XCTAssertEqual((object["object_id"] as? NSNumber)?.uint32Value, 99)
+        XCTAssertEqual((object["object_id"] as? NSNumber)?.uint32Value, Self.testObjectID)
         XCTAssertNil(object["device_name"])
         XCTAssertNil(object["device_uid"])
         XCTAssertNil(object["meeting_title"])
@@ -97,49 +103,49 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
         for (begin, end) in pairs {
             fv_audio_topology_trace_reset()
             fv_audio_topology_trace_set_enabled(true)
-            _ = Self.record(begin, objectID: 17)
-            XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events), "\(begin)")
-            _ = Self.record(end, objectID: 17)
-            XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events), "\(end)")
+            _ = Self.record(begin, objectID: Self.testObjectID)
+            XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()), "\(begin)")
+            _ = Self.record(end, objectID: Self.testObjectID)
+            XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()), "\(end)")
         }
     }
 
     func testRecoveryCancelCannotCloseAnUnrelatedPhase() {
-        _ = Self.record(.phaseBegin, objectID: 17)
-        _ = Self.record(.recoveryCancel, objectID: 17)
-        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+        _ = Self.record(.phaseBegin, objectID: Self.testObjectID)
+        _ = Self.record(.recoveryCancel, objectID: Self.testObjectID)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()))
     }
 
     func testDifferentPropertyAddressCannotCloseOpenBoundary() {
-        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 100)
-        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 200)
-        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+        _ = Self.record(.listenerRemoveBegin, objectID: Self.testObjectID, selector: 100)
+        _ = Self.record(.listenerRemoveEnd, objectID: Self.testObjectID, selector: 200)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()))
 
-        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 100)
-        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+        _ = Self.record(.listenerRemoveEnd, objectID: Self.testObjectID, selector: 100)
+        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()))
     }
 
     func testInterleavedListenerBoundariesRemainOpenUntilBothEnd() {
-        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 100)
-        _ = Self.record(.listenerRemoveBegin, objectID: 17, selector: 200)
-        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 100)
-        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+        _ = Self.record(.listenerRemoveBegin, objectID: Self.testObjectID, selector: 100)
+        _ = Self.record(.listenerRemoveBegin, objectID: Self.testObjectID, selector: 200)
+        _ = Self.record(.listenerRemoveEnd, objectID: Self.testObjectID, selector: 100)
+        XCTAssertTrue(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()))
 
-        _ = Self.record(.listenerRemoveEnd, objectID: 17, selector: 200)
-        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.snapshot().events))
+        _ = Self.record(.listenerRemoveEnd, objectID: Self.testObjectID, selector: 200)
+        XCTAssertFalse(AudioTopologyDiagnostics.hasOpenTopologyPhase(Self.ownEvents()))
     }
 
     func testMainThreadFlagIsCapturedPerEvent() async throws {
         await MainActor.run {
-            _ = Self.record(.callbackBegin, objectID: 101)
+            _ = Self.record(.callbackBegin, objectID: Self.testObjectID + 101)
         }
         await Task.detached {
-            _ = Self.record(.callbackBegin, objectID: 202)
+            _ = Self.record(.callbackBegin, objectID: Self.testObjectID + 202)
         }.value
 
         let events = Self.snapshot().events
-        XCTAssertEqual(events.first(where: { $0.objectID == 101 })?.isMainThread, 1)
-        XCTAssertEqual(events.first(where: { $0.objectID == 202 })?.isMainThread, 0)
+        XCTAssertEqual(events.first(where: { $0.objectID == Self.testObjectID + 101 })?.isMainThread, 1)
+        XCTAssertEqual(events.first(where: { $0.objectID == Self.testObjectID + 202 })?.isMainThread, 0)
     }
 
     func testClockAnchorContainsBothTimeDomains() throws {
@@ -158,18 +164,19 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
 
     func testConcurrentProducersAndSnapshotsRemainOrdered() {
         DispatchQueue.concurrentPerform(iterations: 1000) { index in
-            _ = Self.record(.callback, objectID: AudioObjectID(index + 1))
+            _ = Self.record(.callback, objectID: Self.testObjectID + AudioObjectID(index + 1))
             if index.isMultiple(of: 17) { _ = Self.snapshot() }
         }
         let snapshot = Self.snapshot()
-        XCTAssertEqual(snapshot.latest, 1000)
+        // Host app events may also have been recorded since setUp reset the ring.
+        XCTAssertGreaterThanOrEqual(snapshot.latest, 1000)
         XCTAssertEqual(snapshot.events.map(\.sequence), snapshot.events.map(\.sequence).sorted())
         XCTAssertEqual(Set(snapshot.events.map(\.sequence)).count, snapshot.events.count)
     }
 
     func testJSONSchemaContainsOnlyPrivacyAllowlistedKeys() throws {
-        _ = Self.record(.topologySnapshot, objectID: 123)
-        let event = try XCTUnwrap(Self.snapshot().events.first)
+        _ = Self.record(.topologySnapshot, objectID: Self.testObjectID)
+        let event = try XCTUnwrap(Self.ownEvents().first)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(
                 with: Data(AudioTopologyDiagnostics.jsonLine(for: event))
@@ -586,6 +593,15 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
             status,
             7
         )
+    }
+
+    /// Distinct from real Core Audio object ids, which the host app's own listeners record into
+    /// the same process-wide ring while a test runs.
+    private static let testObjectID: AudioObjectID = 0xF1D0_0017
+
+    /// This test's events only: the ring also holds whatever the host app recorded meanwhile.
+    private static func ownEvents(objectID: AudioObjectID = testObjectID) -> [FVAudioTopologyTraceEvent] {
+        Self.snapshot().events.filter { $0.objectID == objectID }
     }
 
     private static func snapshot(after sequence: UInt64 = 0) -> (
