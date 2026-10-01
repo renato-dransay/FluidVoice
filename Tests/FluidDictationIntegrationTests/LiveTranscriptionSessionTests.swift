@@ -339,12 +339,60 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(second.openedRequests.first?.url?.lastPathComponent, "pt")
     }
 
+    func testOverlappingFlushesSendEveryByteOnceAndInOrder() async throws {
+        let inner = FakeLiveTransport()
+        inner.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
+        let transport = SlowSendingTransport(inner, delay: .milliseconds(30))
+        let session = self.session { transport }
+        try await session.start()
+        let first = Self.ramp(count: 3_200, offset: 0)
+        let second = Self.ramp(count: 3_200, offset: 3_200)
+        let third = Self.ramp(count: 3_200, offset: 6_400)
+        // Each append enters the actor while the previous one's chunk is still being sent.
+        let a = Task { await session.append(first) }
+        try await Task.sleep(for: .milliseconds(5))
+        let b = Task { await session.append(second) }
+        try await Task.sleep(for: .milliseconds(5))
+        let c = Task { await session.append(third) }
+        _ = await (a.value, b.value, c.value)
+        _ = try await session.finish()
+        let sent = inner.sent.compactMap { message -> Data? in if case .data(let data) = message { data } else { nil } }
+        XCTAssertEqual(sent.reduce(Data(), +), LivePCM16.encode(first + second + third), "Every byte goes out once, in capture order")
+        XCTAssertEqual(inner.sent.last, .text("finish"))
+    }
+
+    func testAFlushStillSendingOnADroppedConnectionDoesNotSkipTheReplay() async throws {
+        let firstInner = FakeLiveTransport()
+        let first = SlowSendingTransport(firstInner, delay: .milliseconds(80))
+        let second = FakeLiveTransport()
+        second.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
+        let transports = LockedQueue<any LiveTranscriptionTransport>([first, second])
+        let session = self.session { transports.next() }
+        try await session.start()
+        let samples = Self.ramp(count: 16_000, offset: 0)
+        let append = Task { await session.append(samples) }
+        try await Task.sleep(for: .milliseconds(20))
+        // The drop arrives while the first connection's chunk is still in flight.
+        firstInner.deliver(.failure(LiveTransportClosed(closeCode: 1006, reason: nil, upgradeStatus: nil)))
+        await append.value
+        try await Task.sleep(for: .milliseconds(150))
+        let later = Self.ramp(count: 8_000, offset: 16_000)
+        await session.append(later)
+        _ = try await session.finish()
+        let replayed = second.sent.compactMap { message -> Data? in if case .data(let data) = message { data } else { nil } }
+        XCTAssertEqual(replayed.reduce(Data(), +), LivePCM16.encode(samples + later), "The new connection gets the replay and the later audio, nothing skipped")
+    }
+
+    private static func ramp(count: Int, offset: Int) -> [Float] {
+        (0 ..< count).map { Float((offset + $0) % 30_000) / 30_000 }
+    }
+
     private func session(timeout: Duration = .seconds(2), _ makeTransport: @escaping @Sendable () -> any LiveTranscriptionTransport) -> LiveTranscriptionSession {
         LiveTranscriptionSession(adapter: ScriptAdapter(), configuration: self.configuration, apiKey: "test-key", makeTransport: makeTransport, finishTimeout: timeout)
     }
 }
 
-final class LockedQueue<Element: AnyObject>: @unchecked Sendable {
+final class LockedQueue<Element>: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [Element]
     let snapshot: [Element]
@@ -362,6 +410,21 @@ final class SlowOpeningTransport: LiveTranscriptionTransport, @unchecked Sendabl
         try await self.inner.open(request)
     }
     func send(_ message: LiveTransportMessage) async throws { try await self.inner.send(message) }
+    func receive() async throws -> LiveTransportMessage { try await self.inner.receive() }
+    func close() { self.inner.close() }
+}
+
+/// Delays every `send` so a test can make a second flush start while a chunk is still in flight.
+final class SlowSendingTransport: LiveTranscriptionTransport, @unchecked Sendable {
+    let inner: FakeLiveTransport
+    private let delay: Duration
+    init(_ inner: FakeLiveTransport, delay: Duration) { self.inner = inner; self.delay = delay }
+    func open(_ request: URLRequest) async throws { try await self.inner.open(request) }
+    func send(_ message: LiveTransportMessage) async throws {
+        try await Task.sleep(for: self.delay)
+        try await self.inner.send(message)
+    }
+
     func receive() async throws -> LiveTransportMessage { try await self.inner.receive() }
     func close() { self.inner.close() }
 }

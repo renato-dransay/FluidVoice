@@ -29,6 +29,9 @@ actor LiveTranscriptionSession {
     private var failure: LiveTranscriptionError?
     private var reconnectsLeft = 1
     private var finishWaiter: CheckedContinuation<Void, Never>?
+    /// True while one flush owns the socket; the others wait in `sendWaiters`.
+    private var isSending = false
+    private var sendWaiters: [CheckedContinuation<Void, Never>] = []
     private var lastPublished = ""
     private let partialsContinuation: AsyncStream<String>.Continuation
     nonisolated let partials: AsyncStream<String>
@@ -68,7 +71,7 @@ actor LiveTranscriptionSession {
     func append(_ samples: [Float]) async {
         guard !samples.isEmpty, !self.isFinishing else { return }
         self.audio.append(LivePCM16.encode(samples))
-        await self.flush(final: false)
+        await self.flush()
     }
 
     func reconfigure(languageCode: String?) async {
@@ -84,12 +87,8 @@ actor LiveTranscriptionSession {
         self.isFinishing = true
         let silence = self.adapter.trailingSilenceMilliseconds * LivePCM16.bytesPerMillisecond
         if silence > 0 { self.audio.append(Data(count: silence)) }
-        let tail = self.audio.count - self.sentOffset
-        if tail > 0, tail < Self.minimumChunkBytes { self.audio.append(Data(count: Self.minimumChunkBytes - tail)) }
-        if self.failure == nil, self.isReady {
-            await self.flush(final: true)
-            await self.sendFinishMessages()
-        }
+        // Not ready yet: the connection that becomes ready sends the tail and the finish messages.
+        if self.failure == nil { await self.flush() }
         if self.failure == nil, !self.didFinish {
             let timeout = self.finishTimeout
             let timer = Task { [weak self] in
@@ -156,9 +155,8 @@ actor LiveTranscriptionSession {
         Task { [weak self] in await self?.receiveLoop(transport, connection: connection) }
         if !self.adapter.waitsForReady {
             self.isReady = true
-            await self.flush(final: self.isFinishing)
-            // `finish()` ran while this connection was opening and left the finish messages to it.
-            if self.isFinishing { await self.sendFinishMessages() }
+            // When `finish()` ran while this connection was opening, this also sends the tail and the finish messages.
+            await self.flush()
         }
     }
 
@@ -180,13 +178,14 @@ actor LiveTranscriptionSession {
         for update in self.adapter.parse(message) {
             switch update {
             case .reply(let messages):
+                await self.acquireSending()
                 for reply in messages {
                     try? await self.transport?.send(reply)
                 }
+                self.releaseSending()
             case .ready:
                 self.isReady = true
-                await self.flush(final: self.isFinishing)
-                if self.isFinishing { await self.sendFinishMessages() }
+                await self.flush()
             case .finished:
                 self.didFinish = true
                 self.resumeWaiter()
@@ -219,13 +218,9 @@ actor LiveTranscriptionSession {
         let resume = self.assembler.beginGeneration()
         self.publish()
         do {
+            // When `finish()` ran while the new connection was opening, its first flush sends the tail
+            // and the finish messages.
             try await self.connect(replayingFrom: resume)
-            // `finish()` may have run while the new connection was opening; it then left the tail
-            // and the finish messages to this branch.
-            if self.isFinishing, self.isReady {
-                await self.flush(final: true)
-                await self.sendFinishMessages()
-            }
         } catch {
             // A refused reconnect (a rejected key, no quota) names its cause; a plain network failure
             // after a drop is still reported as the lost connection the user experienced.
@@ -236,10 +231,41 @@ actor LiveTranscriptionSession {
         }
     }
 
-    private func flush(final: Bool) async {
+    // MARK: - Sending
+
+    /// Takes the socket for one writer. The turn passes straight to the next waiter, so no caller
+    /// slips in between.
+    private func acquireSending() async {
+        guard self.isSending else {
+            self.isSending = true
+            return
+        }
+        await withCheckedContinuation { self.sendWaiters.append($0) }
+    }
+
+    private func releaseSending() {
+        if self.sendWaiters.isEmpty { self.isSending = false } else { self.sendWaiters.removeFirst().resume() }
+    }
+
+    // JUDGMENT: appends, the greeting, a reconnect and the stop path all flush, and each awaits the socket.
+    // One writer at a time keeps every byte sent once and in order; the offset moves only after a send
+    // on the connection that is still current, because a reconnect resets it to its own replay point.
+    /// Sends the audio the current connection has not received; once finishing, also the last short
+    /// chunk and the finish messages.
+    private func flush() async {
+        await self.acquireSending()
+        defer { self.releaseSending() }
+        let connection = self.connection
         guard self.isReady, let transport = self.transport else { return }
-        while self.audio.count - self.sentOffset >= (final ? 1 : Self.minimumChunkBytes) {
-            let remaining = self.audio.count - self.sentOffset
+        while connection == self.connection {
+            let final = self.isFinishing
+            var remaining = self.audio.count - self.sentOffset
+            // AssemblyAI closes the session on a final chunk under 50 ms (error 3007); silence pads it.
+            if final, remaining > 0, remaining < Self.minimumChunkBytes {
+                self.audio.append(Data(count: Self.minimumChunkBytes - remaining))
+                remaining = Self.minimumChunkBytes
+            }
+            guard remaining >= (final ? 1 : Self.minimumChunkBytes) else { break }
             var length = min(remaining, Self.maximumChunkBytes)
             // JUDGMENT: audio held back before the provider's greeting, or replayed while finishing, can
             // leave a final remainder shorter than 50 ms after a full chunk; AssemblyAI closes the session
@@ -249,19 +275,22 @@ actor LiveTranscriptionSession {
             let message = self.adapter.audioMessage(chunk)
             do {
                 try await transport.send(message)
-                self.sentOffset += length
             } catch {
                 return
             }
+            guard connection == self.connection else { return }
+            self.sentOffset += length
         }
+        guard connection == self.connection, self.isFinishing else { return }
+        await self.sendFinishMessages(on: transport, connection: connection)
     }
 
     // JUDGMENT: `finish()` and a reconnect that completes during it can both reach the finish step for
     // the same connection. Sending the finish messages twice makes some providers transcribe the tail
     // twice, so they go out once per connection.
-    private func sendFinishMessages() async {
-        guard let transport = self.transport, self.finishedConnection != self.connection else { return }
-        self.finishedConnection = self.connection
+    private func sendFinishMessages(on transport: any LiveTranscriptionTransport, connection: Int) async {
+        guard self.finishedConnection != connection else { return }
+        self.finishedConnection = connection
         for message in self.adapter.finishMessages() {
             try? await transport.send(message)
         }
