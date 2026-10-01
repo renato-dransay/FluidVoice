@@ -92,8 +92,7 @@ final class CloudTranscriptionClientTests: XCTestCase {
             XCTAssertNil(provider["only"])
             XCTAssertNil(provider["order"])
             let options = try XCTUnwrap(provider["options"] as? [String: [String: String]])
-            let expectedProviders: Set<String> = model.supportsWordTimings ? ["groq", "together"] : ["openai"]
-            XCTAssertEqual(Set(options.keys), expectedProviders)
+            XCTAssertEqual(Set(options.keys), Set(model.languageHintProviderTags))
             for hint in options.values {
                 XCTAssertTrue(hint["prompt"]?.contains("Portuguese and English") == true)
                 XCTAssertTrue(hint["prompt"]?.contains("Other languages") == true)
@@ -309,7 +308,7 @@ final class CloudTranscriptionClientTests: XCTestCase {
         defer { cleanup() }
         XCTAssertEqual(store.models, CloudTranscriptionModel.builtIn)
         XCTAssertTrue(store.isRefreshDue())
-        XCTAssertEqual(store.models.filter(\.supportsWordTimings).map(\.id), ["openai/whisper-large-v3-turbo", "openai/whisper-large-v3"])
+        XCTAssertEqual(store.models.filter(\.supportsWordTimings).map(\.id), ["openai/whisper-large-v3-turbo", "openai/whisper-large-v3", "openai/whisper-1"])
     }
 
     func testCatalogStoreAddsListedModelsAsUnverifiedAndKeepsBuiltInCapabilities() throws {
