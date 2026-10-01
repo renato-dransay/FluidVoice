@@ -2317,7 +2317,7 @@ private struct MeetingSetupCanvas: View {
         Button(action: self.onStart) {
             Label(self.isStarting ? "Starting…" : "Start recording", systemImage: self.isStarting ? "hourglass" : "record.circle")
         }
-        .meetingGlassAction(prominent: true, spacious: true)
+        .meetingGlassAction(prominent: true, tone: self.theme.palette.accent, spacious: true)
         .disabled(!self.canStart || self.isStarting)
         .keyboardShortcut(.defaultAction)
     }

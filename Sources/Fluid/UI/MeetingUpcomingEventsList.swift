@@ -214,7 +214,7 @@ private struct MeetingUpcomingEventRow: View {
         Button(action: self.onTranscribe) {
             Label(self.isStarting ? "Starting…" : "Transcribe", systemImage: self.isStarting ? "hourglass" : "record.circle")
         }
-        .meetingGlassAction(prominent: true)
+        .meetingGlassAction(prominent: true, tone: self.theme.palette.accent)
         .disabled(!self.isEnabled)
         .help(self.isLive ? "Record this call" : "Open the call and record it")
         .accessibilityLabel(self.isLive ? "Transcribe \(self.event.title)" : "Open and transcribe \(self.event.title)")
@@ -223,6 +223,7 @@ private struct MeetingUpcomingEventRow: View {
     private var joinAction: some View {
         Button(action: self.onJoin) {
             Label("Join", systemImage: "arrow.up.right")
+                .foregroundStyle(self.theme.palette.accent)
         }
         .meetingGlassAction()
         .disabled(!self.isEnabled)
