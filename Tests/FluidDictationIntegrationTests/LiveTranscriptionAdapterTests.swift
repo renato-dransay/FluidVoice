@@ -5,8 +5,6 @@
 #endif
 import XCTest
 
-// The factory test (`testEveryProviderHasAnAdapter`) arrives with the provider adapters,
-// because `LiveTranscriptionAdapters.make` cannot compile before they exist.
 final class LiveTranscriptionAdapterTests: XCTestCase {
     func testPCM16ClipsAndIsLittleEndian() {
         let data = LivePCM16.encode([0, 1, -1, 2, -2, 0.5])
@@ -25,5 +23,11 @@ final class LiveTranscriptionAdapterTests: XCTestCase {
         XCTAssertEqual(LiveHTTPStatus.failure(for: 402), .quotaExhausted)
         XCTAssertEqual(LiveHTTPStatus.failure(for: 429), .rateLimited)
         XCTAssertEqual(LiveHTTPStatus.failure(for: 503), .connectionFailed)
+    }
+
+    func testEveryProviderHasAnAdapter() {
+        for id in LiveTranscriptionProviderID.allCases {
+            XCTAssertEqual(LiveTranscriptionAdapters.make(id).provider, id)
+        }
     }
 }

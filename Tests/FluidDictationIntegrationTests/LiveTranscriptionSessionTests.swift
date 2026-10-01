@@ -75,6 +75,21 @@ struct ScriptAdapter: LiveTranscriptionAdapter {
     }
 }
 
+/// `ScriptAdapter` for a provider that sends no audio before its greeting, the text "ready".
+struct GreetingScriptAdapter: LiveTranscriptionAdapter {
+    private var script = ScriptAdapter()
+    var provider: LiveTranscriptionProviderID { .assemblyAI }
+    var waitsForReady: Bool { true }
+    func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
+        try self.script.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+    func finishMessages() -> [LiveTransportMessage] { self.script.finishMessages() }
+    func keyCheckRequest(apiKey: String) throws -> URLRequest { try self.script.keyCheckRequest(apiKey: apiKey) }
+    mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] {
+        message == .text("ready") ? [.ready] : self.script.parse(message)
+    }
+}
+
 final class LiveTranscriptionSessionTests: XCTestCase {
     private let configuration = LiveTranscriptionConfiguration(provider: .deepgram, modelID: "nova-3", languageCode: nil, languageHints: [])
 
@@ -93,6 +108,21 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertTrue(chunks.allSatisfy { $0 >= 50 * 32 && $0 <= 1000 * 32 }, "\(chunks)")
         XCTAssertEqual(chunks.reduce(0, +), (800 + 16_000) * 2)
         XCTAssertEqual(transport.sent.last, .text("finish"))
+    }
+
+    func testAudioHeldUntilTheGreetingStillGoesOutInValidChunks() async throws {
+        let transport = FakeLiveTransport()
+        transport.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
+        let session = LiveTranscriptionSession(adapter: GreetingScriptAdapter(), configuration: self.configuration, apiKey: "test-key") { transport }
+        try await session.start()
+        await session.append([Float](repeating: 0.1, count: 16_320)) // 1020 ms, all held until "ready"
+        async let text = session.finish()
+        try await Task.sleep(for: .milliseconds(20))
+        transport.deliver(.success(.text("ready")))
+        _ = try await text
+        let chunks = transport.sent.compactMap { message -> Int? in if case .data(let data) = message { data.count } else { nil } }
+        XCTAssertTrue(chunks.allSatisfy { $0 >= 50 * 32 && $0 <= 1000 * 32 }, "\(chunks)")
+        XCTAssertEqual(chunks.reduce(0, +), 16_320 * 2)
     }
 
     func testPublishesDisplayTextAsUpdatesArrive() async throws {

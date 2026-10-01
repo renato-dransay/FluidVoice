@@ -219,7 +219,12 @@ actor LiveTranscriptionSession {
     private func flush(final: Bool) async {
         guard self.isReady, let transport = self.transport else { return }
         while self.audio.count - self.sentOffset >= (final ? 1 : Self.minimumChunkBytes) {
-            let length = min(self.audio.count - self.sentOffset, Self.maximumChunkBytes)
+            let remaining = self.audio.count - self.sentOffset
+            var length = min(remaining, Self.maximumChunkBytes)
+            // JUDGMENT: audio held back before the provider's greeting, or replayed while finishing, can
+            // leave a final remainder shorter than 50 ms after a full chunk; AssemblyAI closes the session
+            // on that (error 3007). Shorten this chunk so the last one is at least the minimum.
+            if final, remaining > length, remaining - length < Self.minimumChunkBytes { length = remaining - Self.minimumChunkBytes }
             let chunk = self.audio.subdata(in: self.sentOffset ..< self.sentOffset + length)
             do {
                 try await transport.send(self.adapter.audioMessage(chunk))

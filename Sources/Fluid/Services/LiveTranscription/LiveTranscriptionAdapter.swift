@@ -30,9 +30,15 @@ nonisolated extension LiveTranscriptionAdapter {
     }
 }
 
-// JUDGMENT: `LiveTranscriptionAdapters.make(_:)` switches over the Soniox, Deepgram and AssemblyAI
-// adapters, which do not exist yet. The plan forbids placeholder adapters, so the factory is added
-// together with the adapters rather than here; nothing calls it before then.
+nonisolated enum LiveTranscriptionAdapters {
+    static func make(_ id: LiveTranscriptionProviderID) -> any LiveTranscriptionAdapter {
+        switch id {
+        case .soniox: SonioxLiveAdapter()
+        case .deepgram: DeepgramLiveAdapter()
+        case .assemblyAI: AssemblyAILiveAdapter()
+        }
+    }
+}
 
 nonisolated enum LivePCM16 {
     static let bytesPerMillisecond = 32
