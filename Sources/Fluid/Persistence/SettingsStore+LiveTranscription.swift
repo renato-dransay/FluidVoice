@@ -34,6 +34,11 @@ struct LiveTranscriptionPreferences {
         guard LiveTranscriptionCatalog.info(for: provider).models.contains(where: { $0.id == modelID }) else { return }
         self.defaults.set(modelID, forKey: "LiveTranscriptionModel.\(provider.rawValue)")
     }
+
+    /// Forgets the chosen model, so a provider added again starts from its default.
+    mutating func removeModelChoice(for provider: LiveTranscriptionProviderID) {
+        self.defaults.removeObject(forKey: "LiveTranscriptionModel.\(provider.rawValue)")
+    }
 }
 
 extension SettingsStore {

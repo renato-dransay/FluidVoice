@@ -23,24 +23,23 @@ struct VoiceEngineSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Active voice engine: \(self.settings.speechExecutionSource.displayName)", systemImage: "checkmark.circle.fill")
+            Label("Active voice engine: \(self.settings.activeVoiceEngineDescription)", systemImage: "checkmark.circle.fill")
                 .font(.callout)
                 .accessibilityIdentifier("active-voice-engine")
             Picker("Provider settings", selection: self.$viewModel.browsedSpeechExecutionSource) {
-                // Live cloud stays hidden until its settings tab exists; the engine cannot be activated without it.
-                ForEach(SpeechExecutionSource.allCases.filter { $0 != .liveCloud }) { source in
+                ForEach(SpeechExecutionSource.allCases) { source in
                     Text(source.displayName).tag(source)
                 }
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("voice-engine-provider-tabs")
-            Text("Tabs show provider settings. Use the OpenRouter switch or activate a local model to change the voice engine.")
+            Text("Tabs only show settings. Activate a local model or a live provider, or turn on OpenRouter, to change the voice engine.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if self.viewModel.browsedSpeechExecutionSource == .openRouter {
-                OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
-            } else {
-                self.speechRecognitionCard
+            switch self.viewModel.browsedSpeechExecutionSource {
+            case .openRouter: OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
+            case .liveCloud: LiveCloudSettingsView(settings: self.settings, viewModel: self.viewModel)
+            case .local: self.speechRecognitionCard
             }
         }
             .onAppear { self.viewModel.onAppear() }

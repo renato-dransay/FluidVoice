@@ -26,6 +26,11 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var installedOnlyFilter: Bool = false
     @Published var showSpeechFilters: Bool = false
     @Published var browsedSpeechExecutionSource: SpeechExecutionSource
+    /// Why the last Activate of a live provider failed; cleared when it succeeds or its key changes.
+    @Published var liveActivationStatus: [LiveTranscriptionProviderID: String] = [:]
+    /// Providers whose key the provider rejected at activation, shown as "Key rejected" in the row.
+    @Published var liveRejectedKeys: Set<LiveTranscriptionProviderID> = []
+    @Published var liveProviderBeingChecked: LiveTranscriptionProviderID?
 
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
@@ -117,6 +122,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func activateSpeechModel(_ model: SettingsStore.SpeechModel) {
         guard !self.areSpeechModelActionsBlocked else { return }
         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            // Exactly one engine is active: a local model replaces any live provider.
+            self.settings.clearActiveLiveProvider()
             self.settings.speechExecutionSource = .local
             self.settings.selectedSpeechModel = model
             self.previewSpeechModel = model
@@ -178,7 +185,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         do {
             // Browsing Local while cloud is active must still target the local model cache.
             try await self.asr.clearModelCache(for: model)
-            if !self.settings.usesCloudTranscription, self.settings.selectedSpeechModel == model {
+            if self.settings.speechExecutionSource == .local, self.settings.selectedSpeechModel == model {
                 self.asr.resetTranscriptionProvider()
             }
         } catch {
@@ -187,13 +194,104 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func isActiveSpeechModel(_ model: SettingsStore.SpeechModel) -> Bool {
-        !self.settings.usesCloudTranscription && self.settings.selectedSpeechModel == model
+        self.settings.speechExecutionSource == .local && self.settings.selectedSpeechModel == model
     }
 
     func setCloudTranscriptionEnabled(_ enabled: Bool) {
         guard !self.areSpeechModelActionsBlocked else { return }
         guard !enabled || !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
-        self.settings.speechExecutionSource = enabled ? .openRouter : .local
+        if enabled {
+            // Exactly one engine is active: OpenRouter replaces any live provider.
+            self.settings.clearActiveLiveProvider()
+            self.settings.speechExecutionSource = .openRouter
+        } else if self.settings.speechExecutionSource == .openRouter {
+            // JUDGMENT: turning OpenRouter off (or removing its key) must not leave Live cloud,
+            // so only an active OpenRouter engine falls back to Local.
+            self.settings.speechExecutionSource = .local
+        }
+        self.asr.resetTranscriptionProvider()
+    }
+
+    // MARK: - Live cloud
+
+    /// Adding a provider never changes the voice engine.
+    func addLiveProvider(_ provider: LiveTranscriptionProviderID) {
+        var preferences = LiveTranscriptionPreferences(defaults: .standard)
+        preferences.addedProviders.append(provider)
+        self.settings.objectWillChange.send()
+    }
+
+    /// Saves or, for an empty key, removes the provider's key and returns the status line to show.
+    func saveLiveKey(_ key: String, for provider: LiveTranscriptionProviderID) -> String {
+        let isRemoval = key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let wasActive = self.settings.activeLiveProvider == provider
+        do {
+            try self.settings.saveLiveTranscriptionAPIKey(key, for: provider)
+        } catch {
+            return error.localizedDescription
+        }
+        self.liveActivationStatus[provider] = nil
+        self.liveRejectedKeys.remove(provider)
+        if isRemoval {
+            guard wasActive else { return "API key removed." }
+            self.deactivateLiveProvider()
+            return "API key removed. \(LiveTranscriptionCatalog.info(for: provider).name) is no longer active; dictation uses your selected local model."
+        }
+        if wasActive { self.asr.resetTranscriptionProvider() }
+        // JUDGMENT: UX §D says "Start a test or activate"; the test arrives with Task 2.12, so the
+        // line names only what this tab offers today.
+        return "Key saved. Activate to check it."
+    }
+
+    /// Checks the key with one REST request and switches the engine only when it passes.
+    func activateLiveProvider(_ provider: LiveTranscriptionProviderID) async {
+        guard !self.areSpeechModelActionsBlocked, self.liveProviderBeingChecked == nil else { return }
+        let name = LiveTranscriptionCatalog.info(for: provider).name
+        self.liveProviderBeingChecked = provider
+        self.liveActivationStatus[provider] = nil
+        defer { self.liveProviderBeingChecked = nil }
+        do {
+            try await LiveTranscriptionKeyChecker.check(provider: provider, apiKey: self.settings.liveTranscriptionAPIKey(for: provider))
+            // A recording may have started while the check ran; the engine never changes under it.
+            guard !self.areSpeechModelActionsBlocked else {
+                self.liveActivationStatus[provider] = "Couldn't activate \(name): finish the current recording first."
+                return
+            }
+            var preferences = LiveTranscriptionPreferences(defaults: .standard)
+            preferences.activeProvider = provider
+            self.liveRejectedKeys.remove(provider)
+            self.settings.speechExecutionSource = .liveCloud
+            self.asr.resetTranscriptionProvider()
+        } catch let error as LiveTranscriptionError {
+            if error == .authentication { self.liveRejectedKeys.insert(provider) }
+            self.liveActivationStatus[provider] = "Couldn't activate \(name): \(error.message(providerName: name))"
+        } catch {
+            self.liveActivationStatus[provider] = "Couldn't activate \(name): \(error.localizedDescription)"
+        }
+    }
+
+    /// Removes the provider from the list with its key and model choice. If it was active, dictation returns to Local.
+    func removeLiveProvider(_ provider: LiveTranscriptionProviderID) {
+        let wasActive = self.settings.storedLiveProvider == provider
+        do {
+            try self.settings.saveLiveTranscriptionAPIKey("", for: provider)
+        } catch {
+            DebugLogger.shared.warning("Live provider key removal failed: provider=\(provider.rawValue)", source: "VoiceEngineVM")
+        }
+        var preferences = LiveTranscriptionPreferences(defaults: .standard)
+        preferences.addedProviders.removeAll { $0 == provider }
+        preferences.removeModelChoice(for: provider)
+        self.liveActivationStatus[provider] = nil
+        self.liveRejectedKeys.remove(provider)
+        if wasActive { self.deactivateLiveProvider() }
+        self.settings.objectWillChange.send()
+    }
+
+    private func deactivateLiveProvider() {
+        self.settings.clearActiveLiveProvider()
+        if CloudTranscriptionPreferences(defaults: .standard).source == .liveCloud {
+            self.settings.speechExecutionSource = .local
+        }
         self.asr.resetTranscriptionProvider()
     }
 

@@ -75,16 +75,12 @@ extension VoiceEngineSettingsView {
                         VStack(alignment: .leading, spacing: 10) {
                             if let activeModel {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("Active Model")
-                                        .font(self.theme.typography.sectionTitle)
-                                        .foregroundStyle(self.voiceEngineTitleText)
+                                    self.activeModelHeader
                                     self.speechModelCard(for: activeModel)
                                 }
                             } else {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("Active Model")
-                                        .font(self.theme.typography.sectionTitle)
-                                        .foregroundStyle(self.voiceEngineTitleText)
+                                    self.activeModelHeader
                                     Label("No active model yet. Download and activate one below.", systemImage: "arrow.down.circle")
                                         .font(self.theme.typography.bodySmall)
                                         .foregroundStyle(self.voiceEngineSecondaryText)
@@ -124,6 +120,25 @@ extension VoiceEngineSettingsView {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// "Active Model" while the local engine is active; otherwise the model kept for imported files.
+    @ViewBuilder
+    private var activeModelHeader: some View {
+        if self.settings.speechExecutionSource == .local {
+            Text("Active Model")
+                .font(self.theme.typography.sectionTitle)
+                .foregroundStyle(self.voiceEngineTitleText)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Selected local model")
+                    .font(self.theme.typography.sectionTitle)
+                    .foregroundStyle(self.voiceEngineTitleText)
+                Text("Used for imported files, and for dictation when you activate it.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.voiceEngineSecondaryText)
+            }
+        }
     }
 
     /// Stats panel showing speed/accuracy bars that animate when model changes
