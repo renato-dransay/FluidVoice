@@ -205,6 +205,43 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         }
     }
 
+    func testRefusedReconnectReportsTheRefusalNotTheDrop() async throws {
+        let first = FakeLiveTransport()
+        let second = FakeLiveTransport()
+        second.openError = LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: 401)
+        let transports = LockedQueue([first, second])
+        let session = self.session { transports.next() }
+        try await session.start()
+        await session.append([Float](repeating: 0.1, count: 16_000))
+        first.deliver(.failure(LiveTransportClosed(closeCode: 1006, reason: nil, upgradeStatus: nil)))
+        try await Task.sleep(for: .milliseconds(50))
+        do {
+            _ = try await session.finish()
+            XCTFail("Expected authentication")
+        } catch {
+            XCTAssertEqual(error as? LiveTranscriptionError, .authentication)
+        }
+        XCTAssertEqual(second.openedRequests.count, 1)
+    }
+
+    func testReconnectThatCannotReachTheProviderStillReportsTheLostConnection() async throws {
+        let first = FakeLiveTransport()
+        let second = FakeLiveTransport()
+        second.openError = URLError(.notConnectedToInternet)
+        let transports = LockedQueue([first, second])
+        let session = self.session { transports.next() }
+        try await session.start()
+        await session.append([Float](repeating: 0.1, count: 16_000))
+        first.deliver(.failure(LiveTransportClosed(closeCode: 1006, reason: nil, upgradeStatus: nil)))
+        try await Task.sleep(for: .milliseconds(50))
+        do {
+            _ = try await session.finish()
+            XCTFail("Expected connectionLost")
+        } catch {
+            XCTAssertEqual(error as? LiveTranscriptionError, .connectionLost)
+        }
+    }
+
     func testUpgradeRejectionMapsToAuthenticationWithoutReconnecting() async {
         let transport = FakeLiveTransport()
         transport.openError = LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: 401)

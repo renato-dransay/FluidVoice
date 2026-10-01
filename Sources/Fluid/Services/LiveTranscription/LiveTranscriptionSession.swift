@@ -213,7 +213,12 @@ actor LiveTranscriptionSession {
                 await self.sendFinishMessages()
             }
         } catch {
-            self.fail(.connectionLost)
+            // A refused reconnect (a rejected key, no quota) names its cause; a plain network failure
+            // after a drop is still reported as the lost connection the user experienced.
+            // JUDGMENT: `connect` maps every unknown error to `.connectionFailed`; keeping `.connectionLost` for
+            // that case preserves the "recording is kept" wording for transient drops.
+            let refusal = error as? LiveTranscriptionError
+            self.fail(refusal.flatMap { $0 == .connectionFailed ? nil : $0 } ?? .connectionLost)
         }
     }
 
