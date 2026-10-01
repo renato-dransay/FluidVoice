@@ -170,6 +170,9 @@ final class AppServices: ObservableObject {
             isNativeDetectionEnabled: { SettingsStore.shared.meetingAutoDetectEnabled },
             isBrowserDetectionEnabled: {
                 SettingsStore.shared.meetingAutoDetectEnabled && SettingsStore.shared.meetingAutoDetectBrowserEnabled
+            },
+            isScheduledInCalendar: { fragment, date in
+                await MeetingCalendarContext.shared.isConferenceScheduled(fragment, at: date)
             }
         )
         self._meetingAutoDetector = detector

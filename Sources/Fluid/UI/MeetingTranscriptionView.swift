@@ -167,7 +167,12 @@ struct MeetingTranscriptionView: View {
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
-    @AppStorage("MeetingHistoryInspectorVisible") private var isMeetingHistoryVisible = true
+    /// Only the toolbar toggle changes this. A new key so the old one, which the narrow-window
+    /// overlay used to clear as a side effect of picking a meeting, no longer hides the column.
+    @AppStorage("MeetingHistoryColumnPinned") private var isMeetingHistoryPinned = true
+    /// The narrow-window overlay is transient, so dismissing it never unpins the wide column.
+    @State private var isMeetingHistoryOverlayVisible = false
+    @State private var isNarrowLayout = false
 
     init(
         coordinator: MeetingSessionCoordinator,
@@ -226,7 +231,7 @@ struct MeetingTranscriptionView: View {
                     if self.isMeetingHistoryVisible {
                         if geometry.size.width < 900 {
                             Button {
-                                self.isMeetingHistoryVisible = false
+                                self.isMeetingHistoryOverlayVisible = false
                             } label: {
                                 self.theme.palette.windowBackground.opacity(0.65)
                             }
@@ -240,7 +245,7 @@ struct MeetingTranscriptionView: View {
                                 set: {
                                     if self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
                                         self.selectedHistorySessionID = $0
-                                        if geometry.size.width < 900 { self.isMeetingHistoryVisible = false }
+                                        if geometry.size.width < 900 { self.isMeetingHistoryOverlayVisible = false }
                                     }
                                 }
                             ),
@@ -270,6 +275,13 @@ struct MeetingTranscriptionView: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
+                .onAppear { self.isNarrowLayout = geometry.size.width < 900 }
+                .onChange(of: geometry.size.width < 900) { _, isNarrow in
+                    self.isNarrowLayout = isNarrow
+                    if self.isMeetingHistoryVisible, self.historySnapshot.sessions.isEmpty {
+                        Task { await self.loadMeetingHistory() }
+                    }
+                }
             }
         }
         .background(self.theme.palette.contentBackground)
@@ -282,7 +294,11 @@ struct MeetingTranscriptionView: View {
                 onToggleMeetingHistory: {
                     let willShowHistory = !self.isMeetingHistoryVisible
                     withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                        self.isMeetingHistoryVisible.toggle()
+                        if self.isNarrowLayout {
+                            self.isMeetingHistoryOverlayVisible.toggle()
+                        } else {
+                            self.isMeetingHistoryPinned.toggle()
+                        }
                     }
                     if willShowHistory, self.historySnapshot.sessions.isEmpty {
                         Task { await self.loadMeetingHistory() }
@@ -433,6 +449,10 @@ struct MeetingTranscriptionView: View {
         case let .failed(_, failure):
             return .failed(session: self.coordinator.activeSession, message: failure.message)
         }
+    }
+
+    private var isMeetingHistoryVisible: Bool {
+        self.isNarrowLayout ? self.isMeetingHistoryOverlayVisible : self.isMeetingHistoryPinned
     }
 
     private var selectedHistorySession: MeetingSession? {
@@ -682,8 +702,9 @@ struct MeetingTranscriptionView: View {
             defer { self.isStarting = false }
             do {
                 var configuration = configuration
-                // Manual start knows no conference link; a single overlapping event still names the recording.
-                if let match = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: nil) {
+                // A detected call's room picks its event; otherwise a single overlapping event still names the recording.
+                let fragment = self.setupDraft.usesAutomaticApplication ? self.appServices.meetingAutomaticTarget?.conferenceFragment : nil
+                if let match = await MeetingCalendarContext.shared.match(at: Date(), conferenceFragment: fragment) {
                     configuration.calendar = match
                     if self.draftTitleIsDefault, !match.title.isEmpty {
                         configuration.title = match.title
@@ -1476,6 +1497,7 @@ private struct MeetingTranscriptionHeader: View {
                     ? "rectangle.righthalf.inset.filled"
                     : "sidebar.right",
                 label: self.isMeetingHistoryVisible ? "Hide meeting history" : "Show meeting history",
+                title: "History",
                 isSelected: self.isMeetingHistoryVisible,
                 action: self.onToggleMeetingHistory
             )
@@ -1503,14 +1525,23 @@ private struct MeetingTranscriptionHeader: View {
 private struct MeetingHeaderIconButton: View {
     let systemImage: String
     let label: String
+    /// A visible title for actions that are hard to find from the icon alone.
+    var title: String?
     var isSelected = false
     let action: () -> Void
 
     @Environment(\.theme) private var theme
     var body: some View {
         Button(action: self.action) {
-            Label(self.label, systemImage: self.systemImage)
-                .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
+            Group {
+                if let title {
+                    Label(title, systemImage: self.systemImage)
+                        .labelStyle(.titleAndIcon)
+                } else {
+                    Label(self.label, systemImage: self.systemImage)
+                }
+            }
+            .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
         }
         .buttonStyle(.automatic)
         .help(self.label)
@@ -1975,6 +2006,8 @@ private struct MeetingHistoryRow: View {
 private struct MeetingSetupCanvas: View {
     @Binding var draft: MeetingTranscriptionSetupDraft
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var appServices = AppServices.shared
+    @StateObject private var upcomingEvents = MeetingUpcomingEventsModel()
 
     let applications: [MeetingApplicationOption]
     let readiness: MeetingSetupReadiness
@@ -2014,13 +2047,46 @@ private struct MeetingSetupCanvas: View {
         return "Check the recording setup."
     }
 
+    /// The call auto-detection found in the app that will be recorded, if that app was picked automatically.
+    private var detectedCall: MeetingAutoDetector.ResolvedTarget? {
+        guard self.draft.usesAutomaticApplication, let app = self.resolvedApplication,
+              let target = self.appServices.meetingAutomaticTarget,
+              target.bundleIdentifier == app.identity.bundleIdentifier, target.pid == app.identity.processID
+        else { return nil }
+        return target
+    }
+
+    /// The calendar event whose call link is the detected room.
+    private var liveEvent: MeetingUpcomingEvent? {
+        MeetingUpcomingEventsPolicy.event(
+            matchingConferenceFragment: self.detectedCall?.conferenceFragment,
+            among: self.upcomingEvents.events,
+            at: self.upcomingEvents.now
+        )
+    }
+
+    private var callTitle: String? {
+        let title = (self.liveEvent?.title ?? self.detectedCall?.exposedTitle)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title?.isEmpty == false ? title : nil
+    }
+
     private var planHeadline: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) is open." }
+        if let app = resolvedApplication {
+            if let callTitle { return callTitle }
+            if let service = self.detectedCall?.serviceName { return "\(service) call in \(app.identity.displayName)." }
+            return "\(app.identity.displayName) is open."
+        }
         return self.draft.mode == .inRoom ? "In-person meeting." : "No call open."
     }
 
     private var planDetail: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) and your mic will be recorded." }
+        if let app = resolvedApplication {
+            let recorded = "\(app.identity.displayName) and your mic will be recorded."
+            if self.callTitle != nil, let service = self.detectedCall?.serviceName {
+                return "\(service) in \(app.identity.displayName). \(recorded)"
+            }
+            return recorded
+        }
         if self.draft.mode == .inRoom { return "Your mic will record the room." }
         if self.readiness.showScreenRecordingSettingsAction {
             return "Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too."
@@ -2077,7 +2143,19 @@ private struct MeetingSetupCanvas: View {
             }
 
             self.recordingFooter
+
+            MeetingUpcomingEventsList(
+                model: self.upcomingEvents,
+                liveEventID: self.liveEvent?.id,
+                isEnabled: !self.isStarting && self.isQuiescent,
+                onTranscribeLive: self.onStart
+            )
+            .padding(.top, self.theme.metrics.spacing.md)
         }
+        .onAppear { self.upcomingEvents.start() }
+        .onDisappear { self.upcomingEvents.stop() }
+        .onChange(of: self.settings.meetingCalendarNamesEnabled) { _, _ in self.upcomingEvents.refresh() }
+        .onChange(of: self.settings.meetingCalendarRemindersEnabled) { _, _ in self.upcomingEvents.refresh() }
     }
 
     @ViewBuilder private var plan: some View {
