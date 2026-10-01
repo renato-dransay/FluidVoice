@@ -76,10 +76,12 @@ nonisolated struct SonioxLiveAdapter: LiveTranscriptionAdapter {
         try LiveHTTPStatus.request("https://api.soniox.com/v1/models", headers: ["Authorization": "Bearer \(apiKey)"])
     }
 
+    // EVIDENCE: https://soniox.com/docs/api-reference/errors (checked 2026-10-01): the two monthly budget caps
+    // are HTTP 402 errors that surface on the STT WebSocket, next to an exhausted balance.
     private static func failure(errorType: String) -> LiveTranscriptionError {
         switch errorType {
         case "unauthenticated", "permission_denied": .authentication
-        case "organization_balance_exhausted": .quotaExhausted
+        case "organization_balance_exhausted", "organization_monthly_budget_exhausted", "project_monthly_budget_exhausted": .quotaExhausted
         case "limit_exceeded": .rateLimited
         default: .sessionClosed(errorType)
         }

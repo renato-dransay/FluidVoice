@@ -80,6 +80,8 @@ final class LiveTranscriptionSonioxTests: XCTestCase {
         var adapter = SonioxLiveAdapter()
         XCTAssertEqual(adapter.parse(.text(#"{"tokens":[],"error_code":401,"error_type":"unauthenticated","error_message":"PRIVATE"}"#)), [.failure(.authentication)])
         XCTAssertEqual(adapter.parse(.text(#"{"error_code":402,"error_type":"organization_balance_exhausted"}"#)), [.failure(.quotaExhausted)])
+        XCTAssertEqual(adapter.parse(.text(#"{"error_code":402,"error_type":"organization_monthly_budget_exhausted"}"#)), [.failure(.quotaExhausted)])
+        XCTAssertEqual(adapter.parse(.text(#"{"error_code":402,"error_type":"project_monthly_budget_exhausted"}"#)), [.failure(.quotaExhausted)])
         XCTAssertEqual(adapter.parse(.text(#"{"error_code":429,"error_type":"limit_exceeded"}"#)), [.failure(.rateLimited)])
         XCTAssertEqual(adapter.parse(.text(#"{"error_code":400,"error_type":"model_not_available"}"#)), [.failure(.sessionClosed("model_not_available"))])
     }
