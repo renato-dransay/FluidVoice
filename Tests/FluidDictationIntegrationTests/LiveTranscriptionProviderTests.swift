@@ -41,6 +41,21 @@ final class LiveTranscriptionProviderTests: XCTestCase {
         }
     }
 
+    func testAFinalPassAfterCancelReturnsNoTextAndOpensNoConnection() async {
+        let transport = FakeLiveTransport()
+        let provider = LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "k", localProvider: nil, makeTransport: { transport })
+        await provider.begin()
+        await provider.append([Float](repeating: 0.1, count: 16_000))
+        await provider.cancel()
+        do {
+            _ = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+            XCTFail("Expected a cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertEqual(transport.openedRequests.count, 1, "A discarded dictation is never replayed on a new connection")
+    }
+
     func testReadinessIsLocal() {
         XCTAssertTrue(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "k", localProvider: nil).isReady)
         XCTAssertFalse(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "  ", localProvider: nil).isReady)

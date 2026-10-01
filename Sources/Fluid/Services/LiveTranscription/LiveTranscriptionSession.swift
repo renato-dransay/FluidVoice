@@ -26,6 +26,8 @@ actor LiveTranscriptionSession {
     private var isReady = false
     private var isFinishing = false
     private var didFinish = false
+    /// Set by `cancel()`: the dictation was discarded, so `finish()` returns no text.
+    private var isCancelled = false
     private var failure: LiveTranscriptionError?
     private var reconnectsLeft = 1
     private var finishWaiter: CheckedContinuation<Void, Never>?
@@ -83,7 +85,9 @@ actor LiveTranscriptionSession {
         do { try await self.connect(replayingFrom: resume) } catch { self.fail(Self.mapped(error, adapter: self.adapter)) }
     }
 
+    /// Throws `CancellationError` once the session was cancelled, even with text already received.
     func finish() async throws -> String {
+        guard !self.isCancelled else { throw CancellationError() }
         self.isFinishing = true
         let silence = self.adapter.trailingSilenceMilliseconds * LivePCM16.bytesPerMillisecond
         if silence > 0 { self.audio.append(Data(count: silence)) }
@@ -100,6 +104,9 @@ actor LiveTranscriptionSession {
         }
         self.transport?.close()
         self.partialsContinuation.finish()
+        // JUDGMENT: a cancel during the final pass (the dictation was discarded) ends the wait without a
+        // failure; returning the text received so far would insert a partial transcript as a success.
+        if self.isCancelled { throw CancellationError() }
         if let failure { throw failure }
         return self.assembler.finalText
     }
@@ -134,6 +141,7 @@ actor LiveTranscriptionSession {
     }
 
     func cancel() async {
+        self.isCancelled = true
         self.isFinishing = true
         self.transport?.close()
         self.partialsContinuation.finish()
@@ -215,7 +223,8 @@ actor LiveTranscriptionSession {
     }
 
     private func connectionEnded(_ error: Error) async {
-        if self.didFinish { return }
+        // After a cancel the socket the client closed reports a normal closure; that is no finish.
+        if self.didFinish || self.isCancelled { return }
         if self.isFinishing, let closed = error as? LiveTransportClosed, closed.closeCode == 1000 {
             // Providers that close cleanly after the finish messages have delivered everything.
             self.didFinish = true

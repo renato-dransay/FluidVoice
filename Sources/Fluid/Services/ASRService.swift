@@ -7942,8 +7942,10 @@ private extension ASRService {
         }
         self.isLoadingModel = false
         self.modelPreparationPhase = nil
+        // A cancelled final pass (the dictation was discarded) is no provider failure.
+        let kind = error is CancellationError ? "cancelled" : liveError.kind
         DebugLogger.shared.error(
-            "Live transcription failed: \(liveError.kind); provider=\(live.configuration.provider.rawValue) model=\(live.configuration.modelID)",
+            "Live transcription failed: \(kind); provider=\(live.configuration.provider.rawValue) model=\(live.configuration.modelID)",
             source: "ASRService"
         )
         return true

@@ -13,6 +13,8 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
     private var session: LiveTranscriptionSession?
     private var startFailure: Error?
     private var appendedSamples = 0
+    /// The recording's stream was cancelled, so its final pass returns no text.
+    private var isCancelled = false
 
     init(
         configuration: LiveTranscriptionConfiguration,
@@ -54,6 +56,7 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
         self.session = session
         self.startFailure = nil
         self.appendedSamples = 0
+        self.isCancelled = false
         do { try await session.start() } catch { self.startFailure = error }
     }
 
@@ -74,6 +77,7 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
     }
 
     func cancel() async {
+        self.isCancelled = true
         await self.session?.cancel()
         self.session = nil
     }
@@ -83,6 +87,9 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        // JUDGMENT: a cancel clears the session; without this the final pass would take the Retry path and
+        // stream the discarded recording on a new connection.
+        if self.isCancelled { throw CancellationError() }
         if let startFailure { throw startFailure }
         guard let session else { return try await self.transcribe(samples) }
         if samples.count > self.appendedSamples {

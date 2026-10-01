@@ -368,6 +368,40 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertGreaterThan(transport.closeCount, 0, "A cancelled retry must not leave its socket open")
     }
 
+    func testCancellingDuringTheFinalPassReturnsNoText() async throws {
+        let transport = FakeLiveTransport()
+        let session = self.session { transport }
+        try await session.start()
+        await session.append([Float](repeating: 0.1, count: 16_000))
+        transport.deliver(.success(.text("final:partial words:500")))
+        let finish = Task { try await session.finish() }
+        try await Task.sleep(for: .milliseconds(30))
+        await session.cancel()
+        // The socket the client closed reports a normal closure, which must not read as a clean finish.
+        transport.deliver(.failure(LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil)))
+        do {
+            let text = try await finish.value
+            XCTFail("A cancelled session returned text: \(text.count) characters")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+    }
+
+    func testFinishingAfterCancelReturnsNoText() async throws {
+        let transport = FakeLiveTransport()
+        let session = self.session { transport }
+        try await session.start()
+        transport.deliver(.success(.text("final:partial words:500")))
+        try await Task.sleep(for: .milliseconds(20))
+        await session.cancel()
+        do {
+            _ = try await session.finish()
+            XCTFail("Expected a cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+    }
+
     func testOverlappingFlushesSendEveryByteOnceAndInOrder() async throws {
         let inner = FakeLiveTransport()
         inner.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
