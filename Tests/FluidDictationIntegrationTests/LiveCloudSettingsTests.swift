@@ -62,6 +62,72 @@ final class LiveCloudSettingsTests: XCTestCase {
         XCTAssertEqual(SpeechExecutionSource.liveCloud.displayName, "Live cloud")
     }
 
+    func testStoredLocalAndOpenRouterSourcesAreKept() throws {
+        XCTAssertEqual(try self.effectiveSource(stored: .local, activeProvider: .soniox, apiKey: "key"), .local)
+        XCTAssertEqual(try self.effectiveSource(stored: .openRouter, activeProvider: nil, apiKey: ""), .openRouter)
+        XCTAssertEqual(try self.effectiveSource(stored: .openRouter, activeProvider: .soniox, apiKey: "key"), .openRouter)
+    }
+
+    func testLiveCloudWithoutAnActiveProviderReadsAsLocal() throws {
+        XCTAssertEqual(try self.effectiveSource(stored: .liveCloud, activeProvider: nil, apiKey: "key"), .local)
+    }
+
+    func testLiveCloudWithAnActiveProviderButNoSavedKeyReadsAsLocal() throws {
+        XCTAssertEqual(try self.effectiveSource(stored: .liveCloud, activeProvider: .deepgram, apiKey: ""), .local)
+    }
+
+    func testLiveCloudWithAnActiveProviderAndASavedKeyReadsAsLiveCloud() throws {
+        XCTAssertEqual(try self.effectiveSource(stored: .liveCloud, activeProvider: .deepgram, apiKey: "key"), .liveCloud)
+        XCTAssertEqual(try self.usableProvider(stored: .liveCloud, activeProvider: .deepgram, apiKey: "key"), .deepgram)
+    }
+
+    func testNoLiveProviderIsUsableUnlessLiveCloudIsTheStoredSource() throws {
+        XCTAssertNil(try self.usableProvider(stored: .local, activeProvider: .soniox, apiKey: "key"))
+        XCTAssertNil(try self.usableProvider(stored: .openRouter, activeProvider: .soniox, apiKey: "key"))
+        XCTAssertNil(try self.usableProvider(stored: .liveCloud, activeProvider: nil, apiKey: "key"))
+        XCTAssertNil(try self.usableProvider(stored: .liveCloud, activeProvider: .soniox, apiKey: ""))
+    }
+
+    func testTheKeyIsLookedUpForTheActiveProviderOnly() throws {
+        let (defaults, cleanup) = try self.defaults()
+        defer { cleanup() }
+        var preferences = LiveTranscriptionPreferences(defaults: defaults)
+        preferences.activeProvider = .assemblyAI
+        let keys: [LiveTranscriptionProviderID: String] = [.soniox: "soniox-key"]
+        XCTAssertNil(SettingsStore.usableLiveProvider(
+            storedSource: .liveCloud,
+            activeProvider: preferences.activeProvider,
+            apiKey: { keys[$0] ?? "" }
+        ))
+    }
+
+    private func usableProvider(
+        stored: SpeechExecutionSource,
+        activeProvider: LiveTranscriptionProviderID?,
+        apiKey: String
+    ) throws -> LiveTranscriptionProviderID? {
+        let (defaults, cleanup) = try self.defaults()
+        defer { cleanup() }
+        var cloud = CloudTranscriptionPreferences(defaults: defaults)
+        cloud.source = stored
+        var live = LiveTranscriptionPreferences(defaults: defaults)
+        live.activeProvider = activeProvider
+        return SettingsStore.usableLiveProvider(
+            storedSource: cloud.source,
+            activeProvider: live.activeProvider,
+            apiKey: { _ in apiKey }
+        )
+    }
+
+    private func effectiveSource(
+        stored: SpeechExecutionSource,
+        activeProvider: LiveTranscriptionProviderID?,
+        apiKey: String
+    ) throws -> SpeechExecutionSource {
+        let provider = try self.usableProvider(stored: stored, activeProvider: activeProvider, apiKey: apiKey)
+        return SpeechExecutionSource.effective(stored: stored, usableLiveProvider: provider)
+    }
+
     private func defaults() throws -> (UserDefaults, () -> Void) {
         let suite = "LiveCloudSettingsTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

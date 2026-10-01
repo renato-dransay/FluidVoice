@@ -14,6 +14,12 @@ nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Send
         case .liveCloud: "Live cloud"
         }
     }
+
+    /// The engine dictation really uses. A stored Live cloud choice without a usable live provider
+    /// reads as Local; every other stored value is kept as is.
+    static func effective(stored: SpeechExecutionSource, usableLiveProvider: LiveTranscriptionProviderID?) -> SpeechExecutionSource {
+        stored == .liveCloud && usableLiveProvider == nil ? .local : stored
+    }
 }
 
 struct CloudTranscriptionPreferences {
@@ -126,7 +132,7 @@ extension SettingsStore {
     var speechExecutionSource: SpeechExecutionSource {
         get {
             let stored = CloudTranscriptionPreferences(defaults: .standard).source
-            return stored == .liveCloud && self.activeLiveProvider == nil ? .local : stored
+            return SpeechExecutionSource.effective(stored: stored, usableLiveProvider: self.activeLiveProvider)
         }
         set {
             self.objectWillChange.send()

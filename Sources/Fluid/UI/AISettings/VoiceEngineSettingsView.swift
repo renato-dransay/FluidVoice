@@ -27,7 +27,8 @@ struct VoiceEngineSettingsView: View {
                 .font(.callout)
                 .accessibilityIdentifier("active-voice-engine")
             Picker("Provider settings", selection: self.$viewModel.browsedSpeechExecutionSource) {
-                ForEach(SpeechExecutionSource.allCases) { source in
+                // Live cloud stays hidden until its settings tab exists; the engine cannot be activated without it.
+                ForEach(SpeechExecutionSource.allCases.filter { $0 != .liveCloud }) { source in
                     Text(source.displayName).tag(source)
                 }
             }

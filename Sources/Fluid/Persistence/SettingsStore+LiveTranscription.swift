@@ -53,9 +53,22 @@ extension SettingsStore {
 
     /// The live provider dictation uses, or nil when Live cloud is not the effective engine.
     var activeLiveProvider: LiveTranscriptionProviderID? {
-        guard CloudTranscriptionPreferences(defaults: .standard).source == .liveCloud,
-              let provider = LiveTranscriptionPreferences(defaults: .standard).activeProvider,
-              !self.liveTranscriptionAPIKey(for: provider).isEmpty
+        Self.usableLiveProvider(
+            storedSource: CloudTranscriptionPreferences(defaults: .standard).source,
+            activeProvider: LiveTranscriptionPreferences(defaults: .standard).activeProvider,
+            apiKey: { self.liveTranscriptionAPIKey(for: $0) }
+        )
+    }
+
+    /// The active live provider when Live cloud is the stored source and that provider has a saved key.
+    static func usableLiveProvider(
+        storedSource: SpeechExecutionSource,
+        activeProvider: LiveTranscriptionProviderID?,
+        apiKey: (LiveTranscriptionProviderID) -> String
+    ) -> LiveTranscriptionProviderID? {
+        guard storedSource == .liveCloud,
+              let provider = activeProvider,
+              !apiKey(provider).isEmpty
         else { return nil }
         return provider
     }
