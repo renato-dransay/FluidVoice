@@ -580,6 +580,22 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.stopTask != nil || self.interruptionTask != nil || self.terminationTask != nil || self.retryTask != nil
     }
 
+    /// Stop requested from a floating control (pill, captions panel, still-recording nudge) that
+    /// has no place to show an error. A refused or failed stop is logged and the app's meeting
+    /// page is opened, so the user sees the meeting state and can stop from there.
+    func stopAndTranscribeFromOverlay(source: String) async {
+        DebugLogger.shared.info("overlay-stop requested source=\(source) state=\(self.state)", source: "MeetingSessionCoordinator")
+        do {
+            _ = try await self.stopAndTranscribe()
+            return
+        } catch is CancellationError {
+            DebugLogger.shared.warning("overlay-stop cancelled source=\(source)", source: "MeetingSessionCoordinator")
+        } catch {
+            DebugLogger.shared.warning("overlay-stop failed source=\(source) error=\(error)", source: "MeetingSessionCoordinator")
+        }
+        AppNavigationRouter.shared.request(.meetingTranscription)
+    }
+
     @discardableResult
     func stopAndTranscribe() async throws -> MeetingSession {
         if let stopTask = self.stopTask { return try await stopTask.value }

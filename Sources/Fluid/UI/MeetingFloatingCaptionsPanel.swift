@@ -205,7 +205,6 @@ struct MeetingFloatingCaptionsContent: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
 
     @Environment(\.theme) private var theme
-    @State private var isStopping = false
 
     private static let fluidVoiceIcon: NSImage = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
 
@@ -243,9 +242,6 @@ struct MeetingFloatingCaptionsContent: View {
                 .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
-        .onChange(of: self.isRecordingActive) { _, active in
-            if active { self.isStopping = false }
-        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("FluidMeet live captions")
     }
@@ -273,7 +269,7 @@ struct MeetingFloatingCaptionsContent: View {
                     .background(Color(red: 0.93, green: 0.23, blue: 0.23), in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(self.isStopping || !self.isRecordingActive)
+            .disabled(!self.isRecordingActive)
             .help("Stop recording and transcribe")
             .accessibilityLabel("Stop meeting recording and transcribe")
             Button {
@@ -291,10 +287,12 @@ struct MeetingFloatingCaptionsContent: View {
         }
     }
 
+    /// No local "stopping" latch: this panel outlives sessions while hidden, so a latch could
+    /// miss its reset and disable Stop for the next meeting. The coordinator joins repeated
+    /// stop requests, and its state leaves `.recording` as soon as a stop begins.
     private func stopRecording() {
-        guard !self.isStopping, self.isRecordingActive else { return }
-        self.isStopping = true
+        guard self.isRecordingActive else { return }
         let coordinator = self.coordinator
-        Task { _ = try? await coordinator.stopAndTranscribe() }
+        Task { await coordinator.stopAndTranscribeFromOverlay(source: "captions-panel") }
     }
 }

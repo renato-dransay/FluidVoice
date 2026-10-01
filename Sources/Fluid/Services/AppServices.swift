@@ -212,7 +212,7 @@ final class AppServices: ObservableObject {
         }
         MeetingStillRecordingNudgeController.shared.onStop = { [weak self] in
             guard let self else { return }
-            Task { @MainActor in _ = try? await self.meetingSessionCoordinator.stopAndTranscribe() }
+            Task { @MainActor in await self.meetingSessionCoordinator.stopAndTranscribeFromOverlay(source: "still-recording-nudge") }
         }
     }
 

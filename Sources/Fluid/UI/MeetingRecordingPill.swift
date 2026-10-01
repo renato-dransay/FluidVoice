@@ -299,7 +299,6 @@ struct MeetingRecordingPillContent: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isStopping = false
 
     private var microphoneLevel: Float {
         self.coordinator.trackHealth[.microphone]?.level ?? 0
@@ -313,10 +312,6 @@ struct MeetingRecordingPillContent: View {
 
     var body: some View {
         self.compactPill
-            // The panel and its view persist across meetings; re-arm the stop button per recording.
-            .onChange(of: self.isRecordingActive) { _, active in
-                if active { self.isStopping = false }
-            }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .padding(.top, MeetingRecordingPillController.overlayPadding.top)
             .padding(.leading, MeetingRecordingPillController.overlayPadding.left)
@@ -361,13 +356,13 @@ struct MeetingRecordingPillContent: View {
         }
     }
 
+    /// No local "stopping" latch: this panel outlives sessions while hidden, so a latch could
+    /// miss its reset and disable Stop for the next meeting. The coordinator joins repeated
+    /// stop requests, and its state leaves `.recording` as soon as a stop begins.
     private func stopRecording() {
-        guard !self.isStopping, self.isRecordingActive else { return }
-        self.isStopping = true
+        guard self.isRecordingActive else { return }
         let coordinator = self.coordinator
-        Task {
-            _ = try? await coordinator.stopAndTranscribe()
-        }
+        Task { await coordinator.stopAndTranscribeFromOverlay(source: "pill") }
     }
 
     private var stopButton: some View {
@@ -381,7 +376,7 @@ struct MeetingRecordingPillContent: View {
                 .background(Color(red: 0.93, green: 0.23, blue: 0.23), in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(self.isStopping || !self.isRecordingActive)
+        .disabled(!self.isRecordingActive)
         .accessibilityLabel("Stop meeting recording and transcribe")
     }
 }
