@@ -625,13 +625,30 @@ final class ASRService: ObservableObject {
     private var activeActivityLease: ASRActivityLease?
     private var frozenTranscriptionProvider: (any TranscriptionProvider)?
     private var frozenSpeechExecutionSource: SpeechExecutionSource?
+    /// The local model's readiness when a live lease overwrote `isAsrReady`, restored if the lease
+    /// turns out to be a dictionary training capture.
+    private var asrReadyBeforeLiveLease: Bool?
     private var cloudSpeechProvider: CloudTranscriptionProvider?
     private var frozenCloudConfiguration: CloudTranscriptionConfiguration?
     private var frozenCloudAPIKey: String?
     private var frozenCloudDictationModelID: String?
     private var lastCompletedCloudDictationOutput: CloudAudioDictationOutput?
-    private var failedCloudDictation: (samples: [Float], configuration: CloudTranscriptionConfiguration)?
+    enum FailedRemoteDictation {
+        case openRouter(samples: [Float], configuration: CloudTranscriptionConfiguration)
+        case live(samples: [Float], configuration: LiveTranscriptionConfiguration)
+
+        var samples: [Float] {
+            switch self {
+            case .openRouter(let samples, _), .live(let samples, _): samples
+            }
+        }
+    }
+
+    private var failedRemoteDictation: FailedRemoteDictation?
+    /// An OpenRouter recording is waiting for Retry, Transcribe locally or Discard.
     @Published private(set) var hasFailedCloudDictation = false
+    /// The live provider whose failed recording is waiting, for the Live cloud tab's triad.
+    @Published private(set) var failedLiveProvider: LiveTranscriptionProviderID?
     private var dictationActivityLease: ASRActivityLease?
     private var providerResetPending = false
     private var meetingAudioHandoffGeneration: UInt64 = 0
@@ -673,7 +690,28 @@ final class ASRService: ObservableObject {
             // Freeze the provider before an await or a preference change can redirect this audio.
             if [.dictation, .fileTranscription, .localAPI].contains(activity) {
                 self.frozenSpeechExecutionSource = SettingsStore.shared.speechExecutionSource
-                if SettingsStore.shared.usesCloudTranscription {
+                // Task 2.12 adds the provider test's override configuration ahead of the active provider.
+                if activity == .dictation, let configuration = SettingsStore.shared.liveDictationConfiguration {
+                    let key = SettingsStore.shared.liveTranscriptionAPIKey(for: configuration.provider)
+                    // With no frozen provider yet, this is the cached local provider (Live cloud is not OpenRouter).
+                    let localProvider = self.transcriptionProvider
+                    self.asrReadyBeforeLiveLease = self.isAsrReady
+                    self.frozenSpeechExecutionSource = .liveCloud
+                    self.frozenTranscriptionProvider = LiveCloudTranscriptionProvider(
+                        configuration: configuration,
+                        apiKey: key,
+                        localProvider: localProvider
+                    )
+                    // Keeps the overlay's warm-provider branch (live text stays visible) and lets the stop
+                    // path skip `ensureAsrReady`, which would otherwise prepare the local model.
+                    self.isAsrReady = !key.isEmpty
+                } else if SettingsStore.shared.usesLiveCloudDictation {
+                    // Files and the local API use the local model while Live cloud is active.
+                    // JUDGMENT: the plan froze `getProvider(for:)`, which builds a new, unloaded provider per
+                    // file; the cached provider keeps the loaded model, as the local branch below does.
+                    self.frozenSpeechExecutionSource = .local
+                    self.frozenTranscriptionProvider = self.transcriptionProvider
+                } else if SettingsStore.shared.usesCloudTranscription {
                     let configuration = activity == .dictation
                         ? SettingsStore.shared.cloudDictationConfiguration
                         : SettingsStore.shared.cloudTranscriptionConfiguration
@@ -715,6 +753,13 @@ final class ASRService: ObservableObject {
         #endif
         self.activeActivityLease = nil
         self.activeExclusiveActivity = nil
+        if self.frozenTranscriptionProvider is LiveCloudTranscriptionProvider {
+            // Every exit of a live dictation, including skipped silence, failures and a failed start, closes the stream.
+            self.endLiveCloudStream()
+            // The flag described the live stream; the local model's readiness is unknown again.
+            self.isAsrReady = false
+        }
+        self.asrReadyBeforeLiveLease = nil
         self.frozenTranscriptionProvider = nil
         self.frozenSpeechExecutionSource = nil
         self.frozenCloudConfiguration = nil
@@ -727,9 +772,31 @@ final class ASRService: ObservableObject {
         self.resetTranscriptionProvider()
     }
 
+    // JUDGMENT: the plan kept the live provider and delegated `transcribeDictionaryTraining` to the local
+    // one. That loses the `capturePronunciation` argument and skips preparing the local model, because the
+    // live lease marks ASR ready; refreezing the local provider avoids both.
+    /// Dictionary training captures compare against the local model's pronunciation, so a live lease
+    /// taken for one goes back to the cached local provider and its readiness before any audio flows.
+    private func freezeLocalProviderForDictionaryTrainingCapture(_ isDictionaryTraining: Bool) {
+        guard isDictionaryTraining, self.frozenTranscriptionProvider is LiveCloudTranscriptionProvider else { return }
+        self.frozenTranscriptionProvider = nil
+        self.frozenSpeechExecutionSource = .local
+        self.frozenTranscriptionProvider = self.transcriptionProvider
+        self.isAsrReady = self.asrReadyBeforeLiveLease ?? false
+        self.asrReadyBeforeLiveLease = nil
+    }
+
     /// Apply an overlay language choice to the recording already in progress.
     /// Other frozen request settings remain tied to the original activity lease.
     func refreshActiveCloudDictationLanguage() {
+        if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider,
+           self.activeActivityLease?.activity == .dictation, !self.isStoppingFinalTranscription
+        {
+            // The session reconnects with the new language and replays the audio after the last final segment.
+            let languageCode = SettingsStore.shared.cloudDictationLanguageCode
+            Task { await live.reconfigure(languageCode: languageCode) }
+            return
+        }
         guard self.activeActivityLease?.activity == .dictation,
               !self.isStoppingFinalTranscription,
               let configuration = self.frozenCloudConfiguration
@@ -1281,6 +1348,19 @@ final class ASRService: ObservableObject {
         (self.frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
     }
 
+    var isUsingLiveCloudDictation: Bool {
+        self.frozenTranscriptionProvider is LiveCloudTranscriptionProvider
+            || (self.activeActivityLease == nil && SettingsStore.shared.usesLiveCloudDictation)
+    }
+
+    /// True when dictation audio leaves the Mac. Privacy wording such as "ON-DEVICE" must use this.
+    var sendsDictationAudioOffDevice: Bool { self.isUsingCloudTranscription || self.isUsingLiveCloudDictation }
+
+    var activeLiveProviderName: String? {
+        (self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider)?.name
+            ?? SettingsStore.shared.activeLiveProvider.map { LiveTranscriptionCatalog.info(for: $0).name }
+    }
+
     var isUsingCombinedCloudDictation: Bool {
         self.isUsingCloudTranscription && (self.activeActivityLease != nil
             ? self.frozenCloudDictationModelID != nil : SettingsStore.shared.usesCombinedCloudDictation)
@@ -1302,6 +1382,9 @@ final class ASRService: ObservableObject {
     }
 
     private func currentTranscriptionAnalyticsDimensions() -> (provider: String, model: String) {
+        if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider {
+            return (provider: "live-\(live.configuration.provider.rawValue)", model: live.configuration.modelID)
+        }
         if self.isUsingCloudTranscription {
             return (provider: "openrouter", model: self.transcriptionProvider.name)
         }
@@ -2050,6 +2133,8 @@ final class ASRService: ObservableObject {
 
     // Streaming transcription state (no VAD)
     private let streamingTaskLifecycle = StreamingTaskLifecycle()
+    private var liveFeedTask: Task<Void, Never>?
+    private var livePartialsTask: Task<Void, Never>?
     private var streamingWorkState = StreamingTranscriptionWorkState()
     private var streamingSchedulingSessionID: Int?
     private let recordingBufferHandoffGate = RecordingBufferHandoffGate()
@@ -2392,7 +2477,8 @@ final class ASRService: ObservableObject {
     }
 
     private func recordWordBoostHitIfAny(transcribedText: String) {
-        guard !self.isUsingCloudTranscription else { return }
+        // JUDGMENT: word boosting is a property of the local model; a live provider's text is not a boost hit.
+        guard !self.sendsDictationAudioOffDevice else { return }
         let model = SettingsStore.shared.selectedSpeechModel
         guard model.supportsCustomVocabulary,
               let provider = self.fluidAudioProvider,
@@ -2776,6 +2862,7 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.warning("START() blocked - \(message)", source: "ASRService")
             return .failed
         }
+        self.freezeLocalProviderForDictionaryTrainingCapture(forDictionaryTraining)
         self.retainDictionaryLearningRecording(nil)
         self.audioCaptureStartGeneration &+= 1
         let startGeneration = self.audioCaptureStartGeneration
@@ -3103,7 +3190,9 @@ final class ASRService: ObservableObject {
 
             // Only start streaming for models that support it (large Whisper models are too slow)
             let model = SettingsStore.shared.selectedSpeechModel
-            if !self.isUsingCloudTranscription, model.supportsStreaming, !forDictionaryTraining {
+            if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider, !forDictionaryTraining {
+                self.startLiveCloudStream(live, sessionID: self.benchmarkSessionID)
+            } else if !self.isUsingCloudTranscription, model.supportsStreaming, !forDictionaryTraining {
                 DebugLogger.shared.debug("📡 Starting streaming transcription...", source: "ASRService")
                 self.benchmarkLog("streaming_timer_start intervalMs=\(Int((self.streamingChunkDurationSeconds * 1000).rounded())) minSamples=\(self.minimumStreamingPreviewSamples)")
                 self.startStreamingTranscription()
@@ -3480,6 +3569,8 @@ final class ASRService: ObservableObject {
                 self.isStoppingFinalTranscription = false
             }
         }
+        // Also stops the live feed: the final pass sends the samples the feed did not reach, late partials
+        // keep updating the overlay, and releasing the lease closes the stream on every exit.
         self.stopStreamingScheduler(sessionID: stoppingSessionID)
         let isolatedDictionaryCapture = forDictionaryTraining || self.isDictionaryTrainingCaptureActive
         // Tests use normal recognition and saved corrections, but never enroll or retain learning audio.
@@ -3760,6 +3851,7 @@ final class ASRService: ObservableObject {
                 delayedFinalStatusTask.cancel()
                 self.publishStoppedState(for: stoppingSessionID)
                 self.benchmarkLog("final_executor_return")
+                await self.recordLiveFinalIfNeeded(provider, finalStartedAt: finalStartedAt)
                 finalSource = "full"
             }
             let finalElapsedMs = self.elapsedMilliseconds(since: finalStartedAt)
@@ -3775,7 +3867,8 @@ final class ASRService: ObservableObject {
             let finalAudioSeconds = Double(pcm.count) / 16_000.0
             let finalRTF = finalAudioSeconds > 0 ? (Double(finalElapsedMs) / 1000.0) / finalAudioSeconds : 0
             DebugLogger.shared.debug("stop(): final transcription finished source=\(finalSource)", source: "ASRService")
-            if !self.isUsingCloudTranscription {
+            // Transcript text from a provider that received the audio is never logged.
+            if !self.sendsDictationAudioOffDevice {
                 DebugLogger.shared.debug(
                     "Transcription completed: '\(result.text)' (confidence: \(result.confidence))",
                     source: "ASRService"
@@ -3813,6 +3906,7 @@ final class ASRService: ObservableObject {
 
             try Task.checkCancellation()
             let outputText: String
+            // Live cloud output is treated like local output here.
             if self.isUsingCloudTranscription {
                 outputText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             } else {
@@ -3825,13 +3919,12 @@ final class ASRService: ObservableObject {
             if !isolatedDictionaryCapture {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
             }
-            if !self.isUsingCloudTranscription {
+            if !self.sendsDictationAudioOffDevice {
                 DebugLogger.shared.debug("After post-processing: '\(outputText)'", source: "ASRService")
             }
-            self
-                .benchmarkLog(
-                    "stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)"
-                )
+            self.benchmarkLog(
+                "stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)"
+            )
             if !isolatedDictionaryCapture,
                SettingsStore.shared.saveTranscriptionHistory,
                SettingsStore.shared.saveAudioWithTranscriptionHistory,
@@ -3854,9 +3947,11 @@ final class ASRService: ObservableObject {
             return outputText
         } catch {
             self.lastStopOutcome = .failed
+            if self.retainFailedLiveDictationIfNeeded(samples: pcm, error: error) { return "" }
             if self.isUsingCloudTranscription {
                 if !Task.isCancelled, !(error is CancellationError), let configuration = self.frozenCloudConfiguration {
-                    self.failedCloudDictation = (pcm, configuration)
+                    self.failedRemoteDictation = .openRouter(samples: pcm, configuration: configuration)
+                    self.failedLiveProvider = nil
                     self.hasFailedCloudDictation = true
                     self.errorTitle = "OpenRouter transcription failed"
                     self.errorMessage = error.localizedDescription + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
@@ -3902,24 +3997,35 @@ final class ASRService: ObservableObject {
     }
 
     func discardFailedCloudDictation() {
-        self.failedCloudDictation = nil
+        self.failedRemoteDictation = nil
         self.hasFailedCloudDictation = false
+        self.failedLiveProvider = nil
     }
 
     /// Retry is explicit and copies its result only when requested by the user in settings.
     func retryFailedCloudDictation(useLocal: Bool) async throws -> String {
-        guard let failed = self.failedCloudDictation else { return "" }
+        guard let failed = self.failedRemoteDictation else { return "" }
         let lease = try self.acquireExclusiveActivity(.dictation)
         defer { self.releaseExclusiveActivity(lease) }
         let provider: any TranscriptionProvider
         if useLocal {
             provider = self.getProvider(for: SettingsStore.shared.selectedSpeechModel)
         } else {
-            provider = CloudTranscriptionProvider(
-                configuration: failed.configuration,
-                apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
-                persistChunks: false
-            )
+            switch failed {
+            case .openRouter(_, let configuration):
+                provider = CloudTranscriptionProvider(
+                    configuration: configuration,
+                    apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
+                    persistChunks: false
+                )
+            case .live(_, let configuration):
+                // `transcribe` replays the saved recording through a new connection at the provider's accepted speed.
+                provider = LiveCloudTranscriptionProvider(
+                    configuration: configuration,
+                    apiKey: SettingsStore.shared.liveTranscriptionAPIKey(for: configuration.provider),
+                    localProvider: nil
+                )
+            }
         }
         try await provider.prepare(progressHandler: nil)
         let result = try await provider.transcribeFinal(failed.samples)
@@ -4446,6 +4552,7 @@ final class ASRService: ObservableObject {
             }
         }
         self.stopStreamingScheduler(sessionID: stoppingSessionID)
+        self.endLiveCloudStream()
         defer {
             self.applyPendingParakeetVocabularyReloadIfNeeded()
             self.isDictionaryTrainingCaptureActive = false
@@ -6452,6 +6559,14 @@ final class ASRService: ObservableObject {
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         try Task.checkCancellation()
+        if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider {
+            // A live dictation needs only its saved key; the local model is neither loaded nor downloaded for it.
+            guard live.isReady else { throw LiveTranscriptionError.missingAPIKey }
+            self.isAsrReady = true
+            self.isLoadingModel = false
+            self.isDownloadingModel = false
+            return
+        }
         if self.isUsingCloudTranscription {
             // Readiness for cloud dictation is local: a saved key and a valid frozen configuration.
             // The request itself reports authentication and availability errors, so validating over
@@ -7715,6 +7830,95 @@ private extension SettingsStore.SpeechModel {
 }
 
 private extension ASRService {
+    /// Feeds the live session every 100 ms with samples captured since the last tick and
+    /// publishes its text through `partialTranscription`, the property the overlay already follows.
+    func startLiveCloudStream(_ provider: LiveCloudTranscriptionProvider, sessionID: Int) {
+        DebugLogger.shared.debug("Starting live cloud stream (\(provider.name))", source: "ASRService")
+        self.stopLiveCloudStream()
+        self.livePartialsTask?.cancel()
+        self.livePartialsTask = nil
+        let buffer = self.audioBuffer
+        self.liveFeedTask = Task { [weak self] in
+            await provider.begin()
+            // A feed stopped while the connection opened must not replace a newer recording's partials task.
+            guard !Task.isCancelled else { return }
+            if let partials = provider.partials {
+                self?.livePartialsTask = Task { [weak self] in
+                    for await text in partials {
+                        // JUDGMENT: no `isRunning` check, so partials that arrive while the final text is
+                        // pending still update the overlay; the session id keeps a later recording's text apart.
+                        guard let self, self.benchmarkSessionID == sessionID else { continue }
+                        self.partialTranscription = text
+                    }
+                }
+            }
+            var sent = 0
+            while !Task.isCancelled {
+                let count = buffer.count
+                if count > sent {
+                    let samples = buffer.getRange(startingAt: sent, count: count - sent)
+                    if !samples.isEmpty {
+                        sent += samples.count
+                        await provider.append(samples)
+                    }
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    func stopLiveCloudStream() {
+        self.liveFeedTask?.cancel()
+        self.liveFeedTask = nil
+    }
+
+    /// Stops feeding and following the frozen live session and closes its connection. A retry keeps
+    /// the samples and opens its own connection.
+    func endLiveCloudStream() {
+        self.stopLiveCloudStream()
+        self.livePartialsTask?.cancel()
+        self.livePartialsTask = nil
+        if let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider {
+            Task { await live.cancel() }
+        }
+    }
+
+    func recordLiveFinalIfNeeded(_ provider: any TranscriptionProvider, finalStartedAt: TimeInterval) async {
+        guard let live = provider as? LiveCloudTranscriptionProvider else { return }
+        self.livePartialsTask?.cancel()
+        self.livePartialsTask = nil
+        let milliseconds = await live.streamedMilliseconds
+        LiveTranscriptionUsageStore.shared.record(provider: live.configuration.provider, milliseconds: milliseconds)
+        DebugLogger.shared.info(
+            "LIVE_FINAL provider=\(live.configuration.provider.rawValue) model=\(live.configuration.modelID) " +
+                "stopToFinalMs=\(self.elapsedMilliseconds(since: finalStartedAt)) streamedMs=\(milliseconds)",
+            source: "ASRService"
+        )
+    }
+
+    /// Nothing is inserted: the recording waits for Retry, Transcribe locally or Discard in the Live cloud tab.
+    /// False when the failed recording was not a live one.
+    func retainFailedLiveDictationIfNeeded(samples: [Float], error: Error) -> Bool {
+        guard let live = self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider else { return false }
+        let liveError = (error as? LiveTranscriptionError) ?? .connectionFailed
+        if !Task.isCancelled, !(error is CancellationError) {
+            self.failedRemoteDictation = .live(samples: samples, configuration: live.configuration)
+            self.hasFailedCloudDictation = false
+            self.failedLiveProvider = live.configuration.provider
+            self.errorTitle = "\(live.name) transcription failed"
+            self.errorMessage = liveError.message(providerName: live.name)
+                + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
+            self.showError = true
+        }
+        self.isLoadingModel = false
+        self.modelPreparationPhase = nil
+        DebugLogger.shared.error(
+            "Live transcription failed: \(liveError.kind); provider=\(live.configuration.provider.rawValue) model=\(live.configuration.modelID)",
+            source: "ASRService"
+        )
+        return true
+    }
+
     /// Cancels only the idle delay. Active provider work is intentionally not
     /// cancelled because incremental providers use cancellation to discard state
     /// needed by the final pass.
@@ -7724,6 +7928,8 @@ private extension ASRService {
             self.streamingSchedulingSessionID = nil
         }
         let cancelled = self.streamingTaskLifecycle.cancelScheduler()
+        // The live feed is the same kind of idle loop; the live session itself keeps running for the final pass.
+        self.stopLiveCloudStream()
         self.benchmarkLog(
             "streaming_scheduler_cancel session=\(sessionID) hadIdleTask=\(cancelled) " +
                 "elapsedMs=\(self.elapsedMilliseconds(since: startedAt))"

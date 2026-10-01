@@ -20,6 +20,8 @@ os.environ["DEVELOPER_DIR"] = developer_dir
 source = (repo / 'Sources/Fluid/Services/ASRService.swift').read_text()
 methods = source[source.index('    func transcribeSamplesForAPI('):source.index('    // MARK: - Exclusive model residency')]
 leases = source[source.index('    func acquireExclusiveActivity('):source.index('    func prepareMeetingAudioHandoff(')]
+# The harness calls the training-capture refreeze directly; in the app only `start` does.
+leases = leases.replace('private func freezeLocalProviderForDictionaryTrainingCapture', 'func freezeLocalProviderForDictionaryTrainingCapture')
 types = source[source.index('enum ASRExclusiveActivity:'):source.index('nonisolated enum ASRHardwareListenerEventDisposition:')]
 executor = source[source.index('actor TranscriptionExecutor {'):source.index('private nonisolated func logTranscriptionExecutorPhase')]
 swift = r'''
@@ -28,17 +30,36 @@ TYPES
 EXECUTOR
 func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {}
 struct ASRTranscriptionResult { let text: String; let confidence: Float }
-enum SpeechExecutionSource { case local, openRouter }
+enum SpeechExecutionSource { case local, openRouter, liveCloud }
 struct CloudTranscriptionConfiguration: Equatable {
+    var modelID: String
+    var languageCode: String?
+    var primaryLanguageCode: String? = nil
+    var secondaryLanguageCode: String? = nil
+    var audioDictation: String? = nil
+}
+struct LiveTranscriptionConfiguration: Equatable {
+    let provider: String
     let modelID: String
-    let languageCode: String?
 }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
     var speechExecutionSource = SpeechExecutionSource.local
     var cloudTranscriptionConfiguration = CloudTranscriptionConfiguration(modelID: "original", languageCode: "en")
+    var cloudDictationConfiguration: CloudTranscriptionConfiguration { cloudTranscriptionConfiguration }
+    var cloudDictationModelID = "dictation-model"
+    var cloudDictationLanguageCode: String?
+    var usesCombinedCloudDictation: Bool { usesCloudTranscription }
     var openRouterTranscriptionAPIKey = "fixture-credential"
     var usesCloudTranscription: Bool { speechExecutionSource == .openRouter }
+    /// Set only while Live cloud is the effective engine, as in the app.
+    var liveDictationConfiguration: LiveTranscriptionConfiguration?
+    var usesLiveCloudDictation: Bool { liveDictationConfiguration != nil }
+    func liveTranscriptionAPIKey(for provider: String) -> String { "live-fixture-credential" }
+}
+nonisolated final class OpenRouterTranscriptionClient: Sendable {
+    static let shared = OpenRouterTranscriptionClient()
+    func prewarmIfIdle(apiKey: String) async {}
 }
 final class DictionaryAudioLearningService {
     static let shared = DictionaryAudioLearningService()
@@ -88,6 +109,19 @@ class Provider {
         return ASRTranscriptionResult(text: responseText ?? "file result", confidence: 0.8)
     }
 }
+final class LiveCloudTranscriptionProvider: Provider {
+    let configuration: LiveTranscriptionConfiguration
+    let apiKey: String
+    let localProvider: Provider?
+    var reconfiguredLanguages: [String?] = []
+    init(configuration: LiveTranscriptionConfiguration, apiKey: String, localProvider: Provider?) {
+        self.configuration = configuration
+        self.apiKey = apiKey
+        self.localProvider = localProvider
+        super.init()
+    }
+    func reconfigure(languageCode: String?) async { reconfiguredLanguages.append(languageCode) }
+}
 final class CloudTranscriptionProvider: Provider {
     static var nextGate: Gate?
     let configuration: CloudTranscriptionConfiguration
@@ -111,6 +145,13 @@ final class CloudTranscriptionProvider: Provider {
     var frozenTranscriptionProvider: Provider?
     var frozenSpeechExecutionSource: SpeechExecutionSource?
     var frozenCloudConfiguration: CloudTranscriptionConfiguration?
+    var frozenCloudAPIKey: String?
+    var frozenCloudDictationModelID: String?
+    var isAsrReady = false
+    var asrReadyBeforeLiveLease: Bool?
+    var isStoppingFinalTranscription = false
+    var endedLiveStreams = 0
+    func endLiveCloudStream() { endedLiveStreams += 1 }
     var transcriptionProvider: Provider { frozenTranscriptionProvider ?? localProvider }
     var isUsingCloudTranscription: Bool {
         (frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
@@ -253,6 +294,63 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             do { _ = try await request.value; fatalError("Cancelled API request returned late output") } catch is CancellationError {}
             check(service.activeActivityLease == nil && service.frozenTranscriptionProvider == nil, "Cancellation releases API ownership")
             check(service.outputCount == 0, "Cancelled API must not publish output metadata")
+            passes += 1
+        }
+        do {
+            // Live cloud: dictation streams to the live provider; files and the local API stay on the local model.
+            let settings = SettingsStore.shared
+            settings.speechExecutionSource = .liveCloud
+            settings.liveDictationConfiguration = LiveTranscriptionConfiguration(provider: "soniox", modelID: "stt-rt-v5")
+            defer {
+                settings.speechExecutionSource = .local
+                settings.liveDictationConfiguration = nil
+            }
+            let service = ASRService()
+            service.isAsrReady = false
+            let dictation = try service.acquireExclusiveActivity(.dictation)
+            guard let live = service.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider else {
+                fatalError("A Live cloud dictation lease must freeze the live provider")
+            }
+            check(live.configuration == settings.liveDictationConfiguration && live.apiKey == "live-fixture-credential", "Live configuration and key are frozen at acquisition")
+            check(live.localProvider === service.localProvider, "The live provider keeps the cached local provider, not a new unloaded one")
+            check(service.frozenSpeechExecutionSource == .liveCloud && !service.isUsingCloudTranscription, "A live lease is not an OpenRouter lease")
+            check(service.isAsrReady, "A live lease with a saved key is ready without the local model")
+            service.releaseExclusiveActivity(dictation)
+            check(!service.isAsrReady && service.endedLiveStreams == 1, "Releasing a live lease closes the stream and forgets the live readiness")
+            check(service.frozenTranscriptionProvider == nil && service.asrReadyBeforeLiveLease == nil, "Release clears live state")
+            passes += 1
+
+            service.isAsrReady = true
+            let training = try service.acquireExclusiveActivity(.dictation)
+            service.freezeLocalProviderForDictionaryTrainingCapture(true)
+            check(service.frozenTranscriptionProvider === service.localProvider && service.frozenSpeechExecutionSource == .local, "Dictionary training captures use the local model")
+            check(service.isAsrReady, "A training capture restores the local model's readiness")
+            service.releaseExclusiveActivity(training)
+            check(service.endedLiveStreams == 1, "A training capture opened no live stream")
+            passes += 1
+
+            for activity in [ASRExclusiveActivity.fileTranscription, .localAPI] {
+                let lease = try service.acquireExclusiveActivity(activity)
+                check(service.frozenTranscriptionProvider === service.localProvider, "Files and the local API use the cached local provider while Live cloud is active")
+                check(service.frozenSpeechExecutionSource == .local, "Files and the local API are attributed to the local engine")
+                service.releaseExclusiveActivity(lease)
+                passes += 1
+            }
+
+            ASRService.formattingCalls = 0
+            _ = try await service.transcribeSamplesForAPI([0.1])
+            check(service.localProvider.finalCalls.count == 1 && ASRService.formattingCalls == 3, "The local API applies local transformations while Live cloud is active")
+            passes += 1
+
+            let recording = try service.acquireExclusiveActivity(.dictation)
+            guard let active = service.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider else { fatalError("Expected live provider") }
+            settings.cloudDictationLanguageCode = "pt"
+            service.refreshActiveCloudDictationLanguage()
+            for _ in 0..<20 where active.reconfiguredLanguages.isEmpty { await Task.yield() }
+            check(active.reconfiguredLanguages == ["pt"], "A language picked during a live recording reconfigures the session")
+            check(service.frozenTranscriptionProvider === active, "A language change keeps the same live provider")
+            settings.cloudDictationLanguageCode = nil
+            service.releaseExclusiveActivity(recording)
             passes += 1
         }
         print("PASS \(passes) API scenarios using production API methods, activity ownership and transcription executor")
