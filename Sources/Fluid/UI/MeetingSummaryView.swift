@@ -15,10 +15,23 @@ struct MeetingSummaryView: View {
     }
 
     private var hint: String {
+        guard let engine = self.controller.engine else {
+            return "Meeting summaries need an AI provider. Choose one in AI Settings."
+        }
         if self.session == nil, self.controller.installed {
             return "Open a completed meeting to summarize its transcript."
         }
+        if case let .cloud(route) = engine {
+            return "Summaries, decisions, and action items, written by \(route.providerName)."
+        }
         return "Summaries, decisions, and action items, generated on your Mac."
+    }
+
+    private var isCloud: Bool {
+        if case .cloud = self.controller.engine {
+            return true
+        }
+        return false
     }
 
     var body: some View {
@@ -28,11 +41,11 @@ struct MeetingSummaryView: View {
                     .font(.system(.title3, design: .serif).weight(.medium))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .accessibilityAddTraits(.isHeader)
-                Text(self.controller.model == nil ? "Meeting summaries require a build with Fluid Intelligence." : self.hint)
+                Text(self.hint)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
-            if self.controller.model != nil {
+            if self.controller.engine != nil {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     if self.controller.installed {
                         Picker("Summary type", selection: self.$kind) {
@@ -59,9 +72,18 @@ struct MeetingSummaryView: View {
                     CommandMarkdownContent(text: self.controller.output)
                 }
             }
-            Label("On-device · English · Frees its memory when done", systemImage: "lock")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+            switch self.controller.engine {
+            case let .cloud(route):
+                Label("\(route.providerName) · \(route.model) · Sends the transcript to this provider", systemImage: "cloud")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            case .onDevice:
+                Label("On-device · English · Frees its memory when done", systemImage: "lock")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+            case nil:
+                EmptyView()
+            }
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: 620, alignment: .leading)
@@ -72,7 +94,9 @@ struct MeetingSummaryView: View {
         .alert("Delete summary model?", isPresented: self.$confirmDeletion) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
-                if let asrService { self.controller.deleteModel(asr: asrService) }
+                if let asrService {
+                    self.controller.deleteModel(asr: asrService)
+                }
             }
         } message: {
             Text("Remove the 1.45 GB download from this Mac. Your meetings and saved summaries stay. You can download it again anytime.")
@@ -110,31 +134,38 @@ struct MeetingSummaryView: View {
                     Button("Cancel") { self.controller.cancel() }.fluidGlassAction()
                 } else {
                     Button("Summarize", systemImage: "sparkles") {
-                        if let session, let asrService {
-                            self.controller.summarize(session: session, kind: self.kind, asr: asrService)
+                        if let session {
+                            self.controller.summarize(session: session, kind: self.kind, asr: self.asrService)
                         }
                     }
                     .fluidGlassAction(prominent: true)
-                    .disabled(self.session?.transcriptSegments.isEmpty != false || self.asrService == nil || !self.isQuiescent)
+                    .disabled(self.session?.transcriptSegments.isEmpty != false || (!self.isCloud && self.asrService == nil) || !self.isQuiescent)
                 }
-                Menu {
-                    Button("Delete model", systemImage: "trash", role: .destructive) {
-                        self.confirmDeletion = true
-                    }
-                    .disabled(!self.controller.installed || self.controller.busy || self.controller.checking || !self.isQuiescent || self.asrService == nil)
-                } label: { Image(systemName: "ellipsis") }
-                    .menuIndicator(.hidden)
-                    .fluidGlassAction(circular: true)
-                    .accessibilityLabel("Meeting summary actions")
-                    .disabled(self.controller.busy)
+                if !self.isCloud {
+                    self.modelMenu
+                }
                 if !self.controller.output.isEmpty {
                     Button("Copy", systemImage: "doc.on.doc") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(self.controller.output, forType: .string)
                     }
                     .fluidGlassAction()
+                    .disabled(self.controller.generating)
                 }
             }
         }
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            Button("Delete model", systemImage: "trash", role: .destructive) {
+                self.confirmDeletion = true
+            }
+            .disabled(!self.controller.installed || self.controller.busy || self.controller.checking || !self.isQuiescent || self.asrService == nil)
+        } label: { Image(systemName: "ellipsis") }
+            .menuIndicator(.hidden)
+            .fluidGlassAction(circular: true)
+            .accessibilityLabel("Meeting summary actions")
+            .disabled(self.controller.busy)
     }
 }

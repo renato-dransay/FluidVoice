@@ -110,8 +110,30 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     }
 }
 
+/// Where a summary runs. The on-device model wins when the build registers one; otherwise the
+/// transcript goes to the text AI provider configured in AI Settings.
+nonisolated enum MeetingSummaryEngine: Equatable, Sendable {
+    case onDevice(modelID: String)
+    case cloud(MeetingCloudSummaryRoute)
+
+    var savedModelID: String {
+        switch self {
+        case let .onDevice(modelID): modelID
+        case let .cloud(route): route.savedModelID
+        }
+    }
+
+    func accepts(savedModelID: String) -> Bool {
+        switch self {
+        case .onDevice: savedModelID == self.savedModelID
+        case .cloud: savedModelID.hasPrefix(MeetingCloudSummaryRoute.savedModelIDPrefix)
+        }
+    }
+}
+
 @MainActor
 final class MeetingSummaryController: ObservableObject {
+    @Published private(set) var engine: MeetingSummaryEngine?
     @Published private(set) var installed = false
     @Published private(set) var checking = true
     @Published private(set) var downloading = false
@@ -127,6 +149,17 @@ final class MeetingSummaryController: ObservableObject {
         PrivateAIModelRegistry.modelIDs(for: .meetingSummary).first.flatMap { PrivateAIModelRegistry.model(id: $0) }
     }
 
+    init() {
+        self.engine = self.resolveEngine()
+    }
+
+    private func resolveEngine() -> MeetingSummaryEngine? {
+        if let model {
+            return .onDevice(modelID: model.id)
+        }
+        return MeetingCloudSummaryRouteResolver.resolve().map { .cloud($0) }
+    }
+
     private nonisolated struct SavedSummary: Codable, Sendable {
         let transcriptHash: String
         let modelID: String
@@ -140,15 +173,20 @@ final class MeetingSummaryController: ObservableObject {
         self.output = ""
         self.error = nil
         self.checking = true
+        let engine = self.resolveEngine()
+        self.engine = engine
         let model = self.model
-        let modelID = model?.id
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, String) in
-            let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
-            guard let session, let modelID,
+            let installed: Bool = switch engine {
+            case .cloud: true
+            case .onDevice: model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
+            case nil: false
+            }
+            guard let session, let engine,
                   let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
-                  saved.modelID == modelID,
+                  engine.accepts(savedModelID: saved.modelID),
                   saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
             else { return (installed, "") }
             return (installed, saved.text)
@@ -160,7 +198,7 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func download() {
-        guard !self.busy, let model else { return }
+        guard !self.busy, case .onDevice = self.engine, let model else { return }
         self.downloading = true
         self.error = nil
         self.progress = .init(initialExpectedBytes: model.artifact.byteCount)
@@ -182,7 +220,7 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func deleteModel(asr: ASRService) {
-        guard !self.busy, !self.checking, self.installed, let model else { return }
+        guard !self.busy, !self.checking, self.installed, case .onDevice = self.engine, let model else { return }
         self.generation = UUID()
         self.deleting = true
         self.error = nil
@@ -208,8 +246,12 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService) {
-        guard !self.busy, self.installed, let model,
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService?) {
+        if case let .cloud(route) = self.engine {
+            self.summarizeInCloud(session: session, kind: kind, route: route)
+            return
+        }
+        guard !self.busy, self.installed, let asr, let model,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
@@ -244,6 +286,67 @@ final class MeetingSummaryController: ObservableObject {
                 self.error = nil
             } catch {
                 self.error = Task.isCancelled ? nil : error.localizedDescription
+            }
+        }
+    }
+
+    /// Cloud requests load no local model, so they skip the residency handoff that pauses dictation.
+    private func summarizeInCloud(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingCloudSummaryRoute) {
+        guard !self.busy, let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
+        let settings = SettingsStore.shared
+        var extraParameters: [String: Any] = [:]
+        if let config = settings.getReasoningConfig(forModel: route.model, provider: route.providerKey), config.isEnabled {
+            extraParameters[config.parameterName] = config.parameterName == "enable_thinking"
+                ? (config.parameterValue == "true")
+                : config.parameterValue
+        }
+        let sendsTemperature = !settings.isTemperatureUnsupported(route.model)
+        let generation = UUID()
+        self.generation = generation
+        self.generating = true
+        self.error = nil
+        self.output = ""
+        self.operation = Task {
+            defer {
+                self.generating = false
+                self.operation = nil
+                MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
+            }
+            do {
+                let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                guard transcript.utf8.count <= MeetingCloudSummaryPrompt.maximumTranscriptBytes else {
+                    throw MeetingPostProcessingError.inputTooLarge
+                }
+                guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                    throw MeetingPostProcessingError.invalidOutput
+                }
+                try Task.checkCancellation()
+                let text = try await MeetingCloudSummaryService.summarize(
+                    transcript: transcript,
+                    kind: kind,
+                    route: route,
+                    extraParameters: extraParameters,
+                    sendsTemperature: sendsTemperature
+                ) { [weak self] chunk in
+                    Task { @MainActor in
+                        guard let self, self.generation == generation, self.generating else { return }
+                        self.output += chunk
+                    }
+                }
+                try Task.checkCancellation()
+                self.output = text
+                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
+                let saved = SavedSummary(transcriptHash: MeetingSummaryInput.fingerprint(transcript), modelID: route.savedModelID, text: text)
+                try await Task.detached(priority: .utility) {
+                    try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                }.value
+            } catch is CancellationError {
+                self.error = nil
+            } catch {
+                self.error = Task.isCancelled ? nil : error.localizedDescription
+            }
+            if Task.isCancelled, self.generation == generation {
+                self.output = ""
             }
         }
     }
