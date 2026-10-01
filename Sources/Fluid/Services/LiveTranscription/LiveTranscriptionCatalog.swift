@@ -36,6 +36,16 @@ nonisolated enum LiveTranscriptionCatalog {
             keyURL: URL(string: "https://www.assemblyai.com/dashboard"),
             usageURL: URL(string: "https://www.assemblyai.com/dashboard")
         ),
+        LiveTranscriptionProviderInfo(
+            id: .elevenLabs,
+            name: "ElevenLabs",
+            models: [.init(id: "scribe_v2_realtime", name: "Scribe v2 Realtime")],
+            // 90+ languages; omitting language_code detects automatically.
+            detectsLanguageAutomatically: true,
+            languageCodes: nil,
+            keyURL: URL(string: "https://elevenlabs.io/app/settings/api-keys"),
+            usageURL: URL(string: "https://elevenlabs.io/app/usage")
+        ),
     ]
 
     static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {

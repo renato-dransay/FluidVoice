@@ -241,8 +241,9 @@ actor LiveTranscriptionSession {
             // on that (error 3007). Shorten this chunk so the last one is at least the minimum.
             if final, remaining > length, remaining - length < Self.minimumChunkBytes { length = remaining - Self.minimumChunkBytes }
             let chunk = self.audio.subdata(in: self.sentOffset ..< self.sentOffset + length)
+            let message = self.adapter.audioMessage(chunk)
             do {
-                try await transport.send(self.adapter.audioMessage(chunk))
+                try await transport.send(message)
                 self.sentOffset += length
             } catch {
                 return

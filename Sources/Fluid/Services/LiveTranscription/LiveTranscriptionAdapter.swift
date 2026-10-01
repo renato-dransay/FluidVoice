@@ -7,8 +7,10 @@ nonisolated protocol LiveTranscriptionAdapter: Sendable {
     func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest
     func openingMessages(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> [LiveTransportMessage]
     var waitsForReady: Bool { get }
-    func audioMessage(_ pcm16: Data) -> LiveTransportMessage
-    func finishMessages() -> [LiveTransportMessage]
+    /// Mutating so adapters can keep per-connection audio state, such as a frame count or a resampler.
+    mutating func audioMessage(_ pcm16: Data) -> LiveTransportMessage
+    /// Mutating so adapters can note that the stream is finishing.
+    mutating func finishMessages() -> [LiveTransportMessage]
     /// Silence appended before finishing, for providers that ask for it.
     var trailingSilenceMilliseconds: Int { get }
     /// Fastest replay the provider accepts, as a multiple of real time. Nil means no limit.
@@ -36,6 +38,7 @@ nonisolated enum LiveTranscriptionAdapters {
         case .soniox: SonioxLiveAdapter()
         case .deepgram: DeepgramLiveAdapter()
         case .assemblyAI: AssemblyAILiveAdapter()
+        case .elevenLabs: ElevenLabsLiveAdapter()
         }
     }
 }
