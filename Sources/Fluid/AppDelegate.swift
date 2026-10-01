@@ -369,7 +369,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func requestMainWindowReopenIfNeeded(activate: Bool = true) {
         guard !self.didRequestMainWindowReopen else { return }
         self.didRequestMainWindowReopen = true
+        self.requestMainWindowReopen(activate: activate)
+    }
 
+    /// Shows the main window from a flow that runs while it may be hidden, closed or behind
+    /// another app, such as a failed stop from a floating meeting control.
+    func revealMainWindow() {
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        guard !self.bringMainWindowToFrontIfPresent() else { return }
+        self.requestMainWindowReopen(activate: true)
+    }
+
+    private func requestMainWindowReopen(activate: Bool) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = activate
         if !activate {

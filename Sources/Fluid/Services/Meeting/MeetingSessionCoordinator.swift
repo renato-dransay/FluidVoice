@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Darwin
 import Foundation
@@ -581,8 +582,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// Stop requested from a floating control (pill, captions panel, still-recording nudge) that
-    /// has no place to show an error. A refused or failed stop is logged and the app's meeting
-    /// page is opened, so the user sees the meeting state and can stop from there.
+    /// has no place to show an error. A refused or failed stop is logged and the main window is
+    /// brought forward on the meeting page, so the user sees the meeting state and can stop there.
     func stopAndTranscribeFromOverlay(source: String) async {
         DebugLogger.shared.info("overlay-stop requested source=\(source) state=\(self.state)", source: "MeetingSessionCoordinator")
         do {
@@ -594,6 +595,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             DebugLogger.shared.warning("overlay-stop failed source=\(source) error=\(error)", source: "MeetingSessionCoordinator")
         }
         AppNavigationRouter.shared.request(.meetingTranscription)
+        (NSApp.delegate as? AppDelegate)?.revealMainWindow()
     }
 
     @discardableResult
