@@ -908,11 +908,13 @@ final class CGWindowSnapshotProvider: WindowSnapshotProviding {
 final class AXBrowserTabReader: BrowserTabReading {
     private static let messagingTimeoutSeconds: Float = 0.3
     // JUDGMENT: Vivaldi draws its browser UI as a web page, so the tab's web area sits inside the
-    // UI page's DOM groups, several levels deeper than in Chrome. 14/450 leaves headroom for that
-    // nesting; the messaging timeout and circuit breaker still bound a slow or frozen browser.
+    // UI page's DOM groups, several levels deeper than in Chrome. A Google Meet call in Vivaldi
+    // 8.2 was measured at depth 19 (about 30 elements visited), so 24/450 leaves headroom for that
+    // nesting; the visit budget, messaging timeout and circuit breaker still bound a slow or
+    // frozen browser.
     /// Safari nests its web area about six levels below the window (split group, tab group,
     /// groups, scroll area); Chrome and Edge sit shallower. Chrome-side subtrees are skipped by role.
-    private static let maxDepth = 14
+    private static let maxDepth = 24
     private static let maxChildrenPerLevel = 24
     /// Upper bound on elements visited per read; keeps a sprawling window from stalling the poll loop.
     private static let maxVisitedElements = 450
