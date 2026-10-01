@@ -90,6 +90,26 @@ struct GreetingScriptAdapter: LiveTranscriptionAdapter {
     }
 }
 
+/// `ScriptAdapter` whose close codes 4001, 4002 and 4003 name a rejected key, exhausted quota and an unsupported language.
+struct CloseCodeScriptAdapter: LiveTranscriptionAdapter {
+    private var script = ScriptAdapter()
+    var provider: LiveTranscriptionProviderID { .deepgram }
+    func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
+        try self.script.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+    func finishMessages() -> [LiveTransportMessage] { self.script.finishMessages() }
+    func keyCheckRequest(apiKey: String) throws -> URLRequest { try self.script.keyCheckRequest(apiKey: apiKey) }
+    mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] { self.script.parse(message) }
+    func failure(closeCode: Int, reason: String?) -> LiveTranscriptionError {
+        switch closeCode {
+        case 4001: .authentication
+        case 4002: .quotaExhausted
+        case 4003: .unsupportedLanguage("pt")
+        default: .connectionLost
+        }
+    }
+}
+
 final class LiveTranscriptionSessionTests: XCTestCase {
     private let configuration = LiveTranscriptionConfiguration(provider: .deepgram, modelID: "nova-3", languageCode: nil, languageHints: [])
 
@@ -196,6 +216,24 @@ final class LiveTranscriptionSessionTests: XCTestCase {
             XCTAssertEqual(error as? LiveTranscriptionError, .authentication)
         }
         XCTAssertEqual(transport.openedRequests.count, 1)
+    }
+
+    func testRejectedKeyQuotaOrLanguageCloseFailsWithoutReconnecting() async throws {
+        for (code, expected) in [(4001, LiveTranscriptionError.authentication), (4002, .quotaExhausted), (4003, .unsupportedLanguage("pt"))] {
+            let transports = LockedQueue([FakeLiveTransport(), FakeLiveTransport()])
+            let all = transports.snapshot
+            let session = LiveTranscriptionSession(adapter: CloseCodeScriptAdapter(), configuration: self.configuration, apiKey: "test-key", makeTransport: { transports.next() }, finishTimeout: .seconds(2))
+            try await session.start()
+            await session.append([Float](repeating: 0.1, count: 16_000))
+            all[0].deliver(.failure(LiveTransportClosed(closeCode: code, reason: nil, upgradeStatus: nil)))
+            do {
+                _ = try await session.finish()
+                XCTFail("Expected \(expected)")
+            } catch {
+                XCTAssertEqual(error as? LiveTranscriptionError, expected)
+            }
+            XCTAssertEqual(all[1].openedRequests.count, 0, "Close \(code) must not open a second connection")
+        }
     }
 
     func testProviderErrorFrameEndsTheSessionWithItsError() async throws {

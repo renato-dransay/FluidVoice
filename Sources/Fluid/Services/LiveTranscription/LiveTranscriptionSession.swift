@@ -196,8 +196,9 @@ actor LiveTranscriptionSession {
             self.resumeWaiter()
             return
         }
-        guard self.failure == nil, self.reconnectsLeft > 0 else {
-            self.fail(self.failure ?? Self.mapped(error, adapter: self.adapter))
+        let closeFailure = Self.mapped(error, adapter: self.adapter)
+        guard self.failure == nil, self.reconnectsLeft > 0, !closeFailure.isPermanent else {
+            self.fail(self.failure ?? closeFailure)
             return
         }
         self.reconnectsLeft -= 1

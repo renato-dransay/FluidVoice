@@ -106,6 +106,15 @@ nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedEr
 
     var errorDescription: String? { self.message(providerName: "The live provider") }
 
+    /// A rejected key, an empty account or an unsupported language fails the same way on a new
+    /// connection, so the session does not reconnect for these.
+    var isPermanent: Bool {
+        switch self {
+        case .authentication, .quotaExhausted, .unsupportedLanguage: true
+        default: false
+        }
+    }
+
     /// Short kind for logs, matching `CloudTranscriptionFailureSummary` style.
     var kind: String {
         switch self {
