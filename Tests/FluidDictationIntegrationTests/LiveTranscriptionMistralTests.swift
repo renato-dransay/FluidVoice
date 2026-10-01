@@ -80,6 +80,8 @@ final class LiveTranscriptionMistralTests: XCTestCase {
         XCTAssertFalse(info.supports(languageCode: "pl"))
         XCTAssertFalse(info.sendsLanguageChoice)
         XCTAssertTrue(LiveTranscriptionCatalog.info(for: .soniox).sendsLanguageChoice)
+        XCTAssertEqual(info.keyURL?.absoluteString, "https://console.mistral.ai/home?profile_dialog=api-keys")
+        XCTAssertEqual(info.usageURL?.absoluteString, "https://admin.mistral.ai/organization/usage")
     }
 
     func testSessionWaitsForTheHandshakeBeforeAudio() async throws {

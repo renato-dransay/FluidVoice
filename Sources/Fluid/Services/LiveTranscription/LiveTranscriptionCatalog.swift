@@ -55,8 +55,11 @@ nonisolated enum LiveTranscriptionCatalog {
             // Detects the language on its own; the realtime session takes no language or hints.
             detectsLanguageAutomatically: true,
             languageCodes: ["en", "zh", "hi", "es", "ar", "fr", "pt", "ru", "de", "ja", "ko", "it", "nl"],
-            keyURL: URL(string: "https://console.mistral.ai/api-keys"),
-            usageURL: URL(string: "https://console.mistral.ai/usage"),
+            // EVIDENCE: https://docs.mistral.ai/admin/identity-access/api-keys and
+            // https://docs.mistral.ai/admin/billing-usage/usage-limits (checked 2026-10-01): own keys live in
+            // Studio's profile dialog, usage in the Admin Panel.
+            keyURL: URL(string: "https://console.mistral.ai/home?profile_dialog=api-keys"),
+            usageURL: URL(string: "https://admin.mistral.ai/organization/usage"),
             sendsLanguageChoice: false
         ),
         LiveTranscriptionProviderInfo(
