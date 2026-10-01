@@ -22,10 +22,13 @@ enum MeetingCloudSummaryRouteResolver {
 
     /// Uses the AI provider selected in AI Settings. When that provider is missing, is Fluid
     /// Intelligence or has no key, falls back to OpenRouter with the Voice Engine key, which
-    /// authorizes OpenRouter's chat endpoint as well.
+    /// authorizes OpenRouter's chat endpoint as well. While Voice Engine is on, AI Settings hides
+    /// the OpenRouter text model, so a selected OpenRouter provider uses the Voice Engine model,
+    /// which the user picked and which their OpenRouter account is known to serve.
     static func resolve(
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool,
+        usesVoiceEngine: Bool,
         providerName: String,
         openRouterKey: String,
         openRouterModel: String?,
@@ -38,7 +41,8 @@ enum MeetingCloudSummaryRouteResolver {
         if apiKey.isEmpty, provider.providerID == self.openRouterProviderID {
             apiKey = voiceKey
         }
-        if !provider.providerID.isEmpty, !provider.usesPrivateAI, !model.isEmpty, !baseURL.isEmpty,
+        let defersToVoiceEngine = usesVoiceEngine && provider.providerID == self.openRouterProviderID
+        if !defersToVoiceEngine, !provider.providerID.isEmpty, !provider.usesPrivateAI, !model.isEmpty, !baseURL.isEmpty,
            isLocalEndpoint || !apiKey.isEmpty
         {
             return MeetingCloudSummaryRoute(
@@ -63,15 +67,15 @@ enum MeetingCloudSummaryRouteResolver {
     static func resolve(settings: SettingsStore = .shared) -> MeetingCloudSummaryRoute? {
         let provider = DictationProviderRoute.resolve(settings: settings)
         let repository = ModelRepository.shared
-        // The Voice Engine dictation model is an OpenRouter chat model that also accepts text.
-        let openRouterModel = settings.selectedModelByProvider[self.openRouterProviderID] ?? settings.cloudDictationModelID
         return self.resolve(
             provider: provider,
             isLocalEndpoint: repository.isLocalEndpoint(provider.baseURL),
+            usesVoiceEngine: settings.usesCombinedCloudDictation,
             providerName: settings.savedProviders.first(where: { $0.id == provider.providerID })?.name
                 ?? repository.displayName(for: provider.providerID),
             openRouterKey: settings.openRouterTranscriptionAPIKey,
-            openRouterModel: openRouterModel,
+            // The Voice Engine dictation model is an OpenRouter chat model that also accepts text.
+            openRouterModel: settings.cloudDictationModelID,
             openRouterBaseURL: repository.defaultBaseURL(for: self.openRouterProviderID)
         )
     }
