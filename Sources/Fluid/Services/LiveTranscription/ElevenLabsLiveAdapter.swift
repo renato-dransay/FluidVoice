@@ -2,14 +2,21 @@ import Foundation
 
 /// Protocols §4. Configuration in the query, audio as base64 in JSON chunks, manual commits. Each
 /// committed transcript is final for its stretch of audio; partials replace the pending text.
-/// ElevenLabs sends no end event, so the first commit after the finish request ends the stream.
+/// ElevenLabs sends no end event, so the reply to the final commit ends the stream.
 nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
     private enum CommitKind: Equatable {
         case plain
         case timed
     }
 
+    /// Manual mode still commits on its own after about 36 s of uncommitted audio (protocols §4).
+    private static let commitIntervalMilliseconds = 30_000
+
+    /// Commit replies received, a reply sent in both variants counting once.
     private var commitCount = 0
+    /// Commits this client sent: one per 30 s of audio, and the final one.
+    private var commitsSent = 0
+    private var uncommittedMilliseconds = 0
     private var lastCommit: (segment: LiveTranscriptSegment, kind: CommitKind, isPaired: Bool)?
     private var finishRequested = false
 
@@ -33,13 +40,24 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         return request
     }
 
-    func audioMessage(_ pcm16: Data) -> LiveTransportMessage {
+    // JUDGMENT: a server auto-commit can answer while the final commit is on its way, and nothing in either
+    // reply tells them apart, so the first commit after the stop could end the stream with text missing.
+    // Committing every 30 s keeps the uncommitted audio under the server's ~36 s, so every commit is this
+    // client's and the final one is the reply that brings the count level.
+    mutating func audioMessage(_ pcm16: Data) -> LiveTransportMessage {
+        self.uncommittedMilliseconds += pcm16.count / LivePCM16.bytesPerMillisecond
+        let commit = self.uncommittedMilliseconds >= Self.commitIntervalMilliseconds
+        if commit {
+            self.uncommittedMilliseconds = 0
+            self.commitsSent += 1
+        }
         // Base64 text needs no JSON escaping, so the chunk is written directly instead of serialized.
-        .text(#"{"audio_base_64":""# + pcm16.base64EncodedString() + #"","commit":false,"message_type":"input_audio_chunk","sample_rate":16000}"#)
+        return .text(#"{"audio_base_64":""# + pcm16.base64EncodedString() + #"","commit":\#(commit),"message_type":"input_audio_chunk","sample_rate":16000}"#)
     }
 
     mutating func finishMessages() -> [LiveTransportMessage] {
         self.finishRequested = true
+        self.commitsSent += 1
         return [.text(#"{"audio_base_64":"","commit":true,"message_type":"input_audio_chunk","sample_rate":16000}"#)]
     }
 
@@ -79,9 +97,9 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         self.commitCount += 1
         segment = .init(id: "c\(self.commitCount)", text: text, isFinal: true, audioEndMilliseconds: end)
         self.lastCommit = (segment, kind, false)
-        // Manual mode also commits on its own after about 36 s of audio; only a commit after the
-        // finish request answers it.
-        return [.segment(segment), .pending("")] + (self.finishRequested ? [.finished] : [])
+        // Commits answer in order, so the reply that matches the final commit's count answers it.
+        let isFinal = self.finishRequested && self.commitCount >= self.commitsSent
+        return [.segment(segment), .pending("")] + (isFinal ? [.finished] : [])
     }
 
     private static func failure(type: String) -> LiveTranscriptionError {

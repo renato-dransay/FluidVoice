@@ -92,6 +92,30 @@ final class LiveTranscriptionElevenLabsTests: XCTestCase {
         )
     }
 
+    func testACommitLandingBetweenTheFinishRequestAndTheFinalCommitDoesNotEndTheStream() {
+        var adapter = ElevenLabsLiveAdapter()
+        let second = Data(count: 1000 * LivePCM16.bytesPerMillisecond)
+        // 31 s of audio: the server's commit for the first stretch is still on its way when the stop comes.
+        for _ in 0 ..< 31 { _ = adapter.audioMessage(second) }
+        _ = adapter.finishMessages()
+        XCTAssertEqual(
+            adapter.parse(.text(#"{"message_type":"committed_transcript","text":"first stretch"}"#)),
+            [.segment(.init(id: "c1", text: "first stretch", isFinal: true, audioEndMilliseconds: nil)), .pending("")],
+            "Only the reply to the final commit ends the stream"
+        )
+        XCTAssertEqual(
+            adapter.parse(.text(#"{"message_type":"committed_transcript","text":"last words"}"#)),
+            [.segment(.init(id: "c2", text: "last words", isFinal: true, audioEndMilliseconds: nil)), .pending(""), .finished]
+        )
+    }
+
+    func testLongStreamsCommitEveryThirtySecondsBeforeTheServerWould() throws {
+        var adapter = ElevenLabsLiveAdapter()
+        let second = Data(count: 1000 * LivePCM16.bytesPerMillisecond)
+        let commits = try (0 ..< 65).map { _ in try XCTUnwrap(LiveJSON.object(adapter.audioMessage(second))?["commit"] as? Bool) }
+        XCTAssertEqual(commits.indices.filter { commits[$0] }, [29, 59], "The chunks that complete 30 s and 60 s carry a commit")
+    }
+
     func testErrorMessagesMap() {
         var adapter = ElevenLabsLiveAdapter()
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"auth_error","error":"PRIVATE"}"#)), [.failure(.authentication)])
