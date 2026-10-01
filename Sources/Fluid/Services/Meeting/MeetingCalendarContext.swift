@@ -23,6 +23,15 @@ protocol MeetingCalendarProviding: AnyObject {
     /// "meet.google.com/abc-defg-hij", "zoom.us/j/123456789", "teams.microsoft.com/l/meetup-join";
     /// nil when unknown.
     func match(at date: Date, conferenceFragment: String?) async -> MeetingCalendarMatch?
+    /// True when an event around `date` has this call as its conference link. Used as detection
+    /// evidence, so it is available whenever any calendar feature is on, not only recording names.
+    func isConferenceScheduled(_ conferenceFragment: String, at date: Date) async -> Bool
+}
+
+extension MeetingCalendarProviding {
+    func isConferenceScheduled(_ conferenceFragment: String, at date: Date) async -> Bool {
+        await self.match(at: date, conferenceFragment: conferenceFragment)?.matchedByConferenceLink == true
+    }
 }
 
 /// Process-wide access point. Settable so tests and previews can install a fake.
@@ -202,11 +211,18 @@ final class EventKitMeetingCalendarProvider: MeetingCalendarProviding {
     }
 
     func match(at date: Date, conferenceFragment: String?) async -> MeetingCalendarMatch? {
-        guard SettingsStore.shared.meetingCalendarNamesEnabled,
-              Self.authorizationState == .fullAccess
-        else {
-            return nil
-        }
+        guard SettingsStore.shared.meetingCalendarNamesEnabled else { return nil }
+        return self.lookup(at: date, conferenceFragment: conferenceFragment)
+    }
+
+    func isConferenceScheduled(_ conferenceFragment: String, at date: Date) async -> Bool {
+        let settings = SettingsStore.shared
+        guard settings.meetingCalendarNamesEnabled || settings.meetingCalendarRemindersEnabled else { return false }
+        return self.lookup(at: date, conferenceFragment: conferenceFragment)?.matchedByConferenceLink == true
+    }
+
+    private func lookup(at date: Date, conferenceFragment: String?) -> MeetingCalendarMatch? {
+        guard Self.authorizationState == .fullAccess else { return nil }
         let store = self.store ?? EKEventStore()
         self.store = store
         let predicate = store.predicateForEvents(

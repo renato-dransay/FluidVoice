@@ -13,6 +13,7 @@ final class MeetingAutoDetector {
     static let coincidenceWindowSeconds: TimeInterval = 30
     static let confirmDeadlineSeconds: TimeInterval = 30
     static let frontmostLeadSeconds: TimeInterval = 15
+    static let calendarRecheckSeconds: TimeInterval = 60
     static let windowLossGraceSeconds: TimeInterval = 5
     static let micReleaseEpisodeEndSeconds: TimeInterval = 60
     static let dismissalSuppressionSeconds: TimeInterval = 30 * 60
@@ -91,6 +92,11 @@ final class MeetingAutoDetector {
         /// Meeting name the app exposes for the current evidence; never logged.
         var exposedTitle: String?
         var lastMeetingNameReadAt: Date?
+        /// Browser tier only: the evidence key a calendar event scheduled now links to. It stands
+        /// in for frontmost evidence, so a call already running behind other windows confirms.
+        var calendarCorroboratedKey: String?
+        var lastCalendarCheckKey: String?
+        var lastCalendarCheckAt: Date?
     }
 
     private enum BrowserEvidenceSource: String, Hashable {
@@ -125,6 +131,7 @@ final class MeetingAutoDetector {
     private let clock: any MeetingClockProviding
     private let isNativeDetectionEnabled: () -> Bool
     private let isBrowserDetectionEnabled: () -> Bool
+    private let isScheduledInCalendar: (_ conferenceFragment: String, _ at: Date) async -> Bool
 
     private var records: [Int32: CandidateRecord] = [:] {
         didSet { self.publishAutomaticTarget() }
@@ -156,7 +163,8 @@ final class MeetingAutoDetector {
         activityGate: any DetectionActivityGate,
         clock: any MeetingClockProviding,
         isNativeDetectionEnabled: @escaping () -> Bool,
-        isBrowserDetectionEnabled: @escaping () -> Bool
+        isBrowserDetectionEnabled: @escaping () -> Bool,
+        isScheduledInCalendar: @escaping (_ conferenceFragment: String, _ at: Date) async -> Bool = { _, _ in false }
     ) {
         self.workspaceEvents = workspaceEvents
         self.micActivity = micActivity
@@ -167,6 +175,7 @@ final class MeetingAutoDetector {
         self.clock = clock
         self.isNativeDetectionEnabled = isNativeDetectionEnabled
         self.isBrowserDetectionEnabled = isBrowserDetectionEnabled
+        self.isScheduledInCalendar = isScheduledInCalendar
     }
 
     // MARK: - Lifecycle
@@ -267,7 +276,30 @@ final class MeetingAutoDetector {
             self.lastBrowserPollAt[pid] = now
             self.handleBrowserTabURL(url, pid: pid, bundleIdentifier: record.bundleIdentifier, at: self.clock.now())
             await self.readMeetingNameIfDue(pid: pid, incarnation: record.incarnation, bundleIdentifier: record.bundleIdentifier, at: now, runGeneration: runGeneration)
+            await self.corroborateWithCalendarIfDue(pid: pid, incarnation: record.incarnation, at: now, runGeneration: runGeneration)
         }
+    }
+
+    /// A browser call that was already running before the user last switched to the browser has
+    /// no frontmost evidence. When the live in-call room, with the browser's microphone open, is
+    /// the conference link of a calendar event happening now, that is strong enough instead.
+    private func corroborateWithCalendarIfDue(pid: Int32, incarnation: UInt64, at now: Date, runGeneration: UInt64?) async {
+        guard let record = self.records[pid], record.incarnation == incarnation, record.hasLiveWindow,
+              record.audioEvidenceAt != nil, record.lastFrontmostAt == nil,
+              let key = record.windowEvidenceKey, key.hasPrefix("url:"),
+              record.calendarCorroboratedKey != key,
+              record.lastCalendarCheckKey != key
+              || record.lastCalendarCheckAt.map({ now.timeIntervalSince($0) >= Self.calendarRecheckSeconds }) ?? true
+        else { return }
+        self.records[pid]?.lastCalendarCheckKey = key
+        self.records[pid]?.lastCalendarCheckAt = now
+        let scheduled = await self.isScheduledInCalendar(String(key.dropFirst(4)).lowercased(), now)
+        guard scheduled, self.isCurrentRunIfTracked(runGeneration),
+              self.records[pid]?.incarnation == incarnation, self.records[pid]?.windowEvidenceKey == key
+        else { return }
+        self.records[pid]?.calendarCorroboratedKey = key
+        DebugLogger.shared.log("calendar-corroborated bundle=\(record.bundleIdentifier)", source: "MeetingAutoDetector")
+        self.attemptConfirm(pid: pid, at: self.clock.now())
     }
 
     /// Google Meet keeps the event name in the page, not the tab title. Read it at most every 10 s
@@ -683,7 +715,9 @@ final class MeetingAutoDetector {
             self.logConfirmRejected("coincidence", bundleIdentifier: record.bundleIdentifier)
             return
         }
-        let frontmostPasses = audioEvidenceSource == .process ? record.lastFrontmostAt != nil : self.isFrontmostNearEdge(record, edge: audioEvidenceAt)
+        let calendarPasses = record.tier == .browserTier2 && record.calendarCorroboratedKey == evidenceKey
+        let frontmostPasses = calendarPasses
+            || (audioEvidenceSource == .process ? record.lastFrontmostAt != nil : self.isFrontmostNearEdge(record, edge: audioEvidenceAt))
         guard frontmostPasses else {
             self.logConfirmRejected("frontmost", bundleIdentifier: record.bundleIdentifier)
             return

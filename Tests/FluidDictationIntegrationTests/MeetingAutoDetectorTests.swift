@@ -93,6 +93,9 @@ private final class FakeActivityGate: DetectionActivityGate {
 private final class ToggleFlags {
     var nativeEnabled = true
     var browserEnabled = true
+    /// Conference fragments a calendar event scheduled right now links to.
+    var scheduledFragments: Set<String> = []
+    var calendarLookups: [String] = []
 }
 
 @MainActor
@@ -130,7 +133,11 @@ private final class DetectorHarness {
             activityGate: self.gate,
             clock: self.clock,
             isNativeDetectionEnabled: { flags.nativeEnabled },
-            isBrowserDetectionEnabled: { flags.browserEnabled }
+            isBrowserDetectionEnabled: { flags.browserEnabled },
+            isScheduledInCalendar: { fragment, _ in
+                flags.calendarLookups.append(fragment)
+                return flags.scheduledFragments.contains(fragment)
+            }
         )
         self.detector.onPromptRequested = { [weak self] request in self?.prompts.append(request) }
         self.detector.onStillRecordingNudge = { [weak self] in self?.nudges += 1 }
@@ -401,6 +408,49 @@ final class MeetingAutoDetectorTests: XCTestCase {
         background.audioProcessActivity.activeBundleIdentifiers = ["com.vivaldi.Vivaldi"]
         await background.detector.pollAudioProcessActivity(at: background.clock.now())
         XCTAssertTrue(background.prompts.isEmpty, "a background browser never confirms")
+    }
+
+    func testBackgroundBrowserCallConfirmsWhenCalendarSchedulesThatRoomNow() async {
+        let h = DetectorHarness()
+        h.workspace.frontmostProcessID = 99
+        h.flags.scheduledFragments = ["meet.google.com/abc-defg-hij"]
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 5)])
+        h.audioProcessActivity.activeBundleIdentifiers = ["com.vivaldi.Vivaldi"]
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        h.browserReader.url = .init(host: "meet.google.com", path: "/abc-defg-hij")
+        await h.detector.pollBrowserTabs(at: h.clock.now())
+        XCTAssertEqual(h.prompts.count, 1, "a calendar event linking to the live room stands in for frontmost evidence")
+        XCTAssertEqual(h.detector.automaticTarget?.bundleIdentifier, "com.vivaldi.Vivaldi")
+        XCTAssertEqual(h.detector.automaticTarget?.conferenceFragment, "meet.google.com/abc-defg-hij")
+    }
+
+    func testBackgroundBrowserCallWithoutMatchingCalendarEventDoesNotConfirm() async {
+        let h = DetectorHarness()
+        h.workspace.frontmostProcessID = 99
+        h.flags.scheduledFragments = ["meet.google.com/zzz-zzzz-zzz"]
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 5)])
+        h.audioProcessActivity.activeBundleIdentifiers = ["com.vivaldi.Vivaldi"]
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        h.browserReader.url = .init(host: "meet.google.com", path: "/abc-defg-hij")
+        await h.detector.pollBrowserTabs(at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty, "another room on the calendar never corroborates this one")
+        XCTAssertEqual(h.flags.calendarLookups, ["meet.google.com/abc-defg-hij"])
+
+        h.advance(2)
+        await h.detector.pollAudioProcessActivity(at: h.clock.now())
+        await h.detector.pollBrowserTabs(at: h.clock.now())
+        XCTAssertEqual(h.flags.calendarLookups.count, 1, "a miss is not re-queried on every poll")
+    }
+
+    func testBackgroundBrowserWithoutMicrophoneSkipsCalendarLookup() async {
+        let h = DetectorHarness()
+        h.workspace.frontmostProcessID = 99
+        h.flags.scheduledFragments = ["meet.google.com/abc-defg-hij"]
+        h.detector.handleBackfill([.init(kind: .launched, bundleIdentifier: "com.vivaldi.Vivaldi", processID: 5)])
+        h.browserReader.url = .init(host: "meet.google.com", path: "/abc-defg-hij")
+        await h.detector.pollBrowserTabs(at: h.clock.now())
+        XCTAssertTrue(h.prompts.isEmpty, "a scheduled room open without a live microphone is not a call")
+        XCTAssertTrue(h.flags.calendarLookups.isEmpty)
     }
 
     func testBrowserProcessInputEndingEndsEpisode() async {
