@@ -83,7 +83,8 @@ struct LiveCloudSettingsView: View {
         let info = LiveTranscriptionCatalog.info(for: provider)
         let isActive = self.settings.activeLiveProvider == provider
         let hasKey = !self.settings.liveTranscriptionAPIKey(for: provider).isEmpty
-        let isProblem = !hasKey || self.viewModel.liveRejectedKeys.contains(provider)
+        let needsLanguage = self.settings.liveProviderNeedsPrimaryLanguage(provider)
+        let isProblem = !hasKey || needsLanguage || self.viewModel.liveRejectedKeys.contains(provider)
         return HStack(spacing: 12) {
             LiveProviderBadge(name: info.name)
             VStack(alignment: .leading, spacing: 2) {
@@ -112,8 +113,8 @@ struct LiveCloudSettingsView: View {
                     Task { await self.viewModel.activateLiveProvider(provider) }
                 }
                 .fluidGlassAction(quiet: true)
-                .disabled(!hasKey || self.viewModel.areSpeechModelActionsBlocked || self.viewModel.liveProviderBeingChecked != nil)
-                .help(self.activateHelp(hasKey: hasKey))
+                .disabled(!hasKey || needsLanguage || self.viewModel.areSpeechModelActionsBlocked || self.viewModel.liveProviderBeingChecked != nil)
+                .help(self.activateHelp(hasKey: hasKey, needsLanguage: needsLanguage))
             }
             Button("Manage") { self.managedProvider = provider }
                 .fluidGlassAction(quiet: true)
@@ -132,14 +133,17 @@ struct LiveCloudSettingsView: View {
         .accessibilityIdentifier("live-cloud-row-\(provider.rawValue)")
     }
 
-    private func activateHelp(hasKey: Bool) -> String {
+    private func activateHelp(hasKey: Bool, needsLanguage: Bool) -> String {
         if !hasKey { return "Save an API key first." }
+        if needsLanguage { return "Choose a Primary language under Dictation language first." }
         if self.viewModel.areSpeechModelActionsBlocked { return "Finish the current recording first." }
         return "Use this provider for dictation. The key is checked first."
     }
 
     private func statusLine(for provider: LiveTranscriptionProviderID, info: LiveTranscriptionProviderInfo, hasKey: Bool) -> String {
         guard hasKey else { return "API key missing" }
+        // UX §E4: a provider without automatic detection cannot run until a Primary language is set.
+        if self.settings.liveProviderNeedsPrimaryLanguage(provider) { return "Needs a Primary language" }
         let modelID = LiveTranscriptionPreferences(defaults: .standard).modelID(for: provider)
         let model = info.models.first { $0.id == modelID }?.name ?? modelID
         if self.viewModel.liveProviderBeingChecked == provider { return "\(model) · Checking…" }

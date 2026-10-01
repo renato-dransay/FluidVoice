@@ -70,6 +70,21 @@ nonisolated enum LiveTranscriptionCatalog {
             keyURL: URL(string: "https://platform.openai.com/api-keys"),
             usageURL: URL(string: "https://platform.openai.com/usage")
         ),
+        LiveTranscriptionProviderInfo(
+            id: .speechmatics,
+            name: "Speechmatics",
+            models: [
+                .init(id: "enhanced", name: "Enhanced"),
+                .init(id: "standard", name: "Standard"),
+            ],
+            // Realtime needs one fixed language per session; `auto` is batch only.
+            detectsLanguageAutomatically: false,
+            // JUDGMENT: the protocols research verified only en and pt; an unlisted language comes back as
+            // `invalid_language`, which names itself, so the picker is not narrowed on a guess.
+            languageCodes: nil,
+            keyURL: URL(string: "https://portal.speechmatics.com"),
+            usageURL: URL(string: "https://portal.speechmatics.com")
+        ),
     ]
 
     static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {

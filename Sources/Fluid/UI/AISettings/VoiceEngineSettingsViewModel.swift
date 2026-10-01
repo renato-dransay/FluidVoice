@@ -248,6 +248,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func activateLiveProvider(_ provider: LiveTranscriptionProviderID) async {
         guard !self.areSpeechModelActionsBlocked, self.liveProviderBeingChecked == nil else { return }
         let name = LiveTranscriptionCatalog.info(for: provider).name
+        guard !self.settings.liveProviderNeedsPrimaryLanguage(provider) else {
+            self.liveActivationStatus[provider] = "Couldn't activate \(name): \(LiveTranscriptionError.languageRequired.message(providerName: name))"
+            return
+        }
         self.liveProviderBeingChecked = provider
         self.liveActivationStatus[provider] = nil
         defer { self.liveProviderBeingChecked = nil }

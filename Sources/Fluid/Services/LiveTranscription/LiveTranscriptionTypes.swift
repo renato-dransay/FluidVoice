@@ -8,6 +8,7 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
     case elevenLabs
     case mistral
     case openAI
+    case speechmatics
 
     var id: String { self.rawValue }
     /// Voice engine keys live under their own ids and are never shared with AI Providers keys.
@@ -37,6 +38,11 @@ nonisolated struct LiveTranscriptionProviderInfo: Identifiable, Sendable {
 
     func supports(languageCode: String) -> Bool {
         self.languageCodes?.contains(languageCode) ?? true
+    }
+
+    /// True when this provider cannot run until a Primary language is set.
+    func needsPrimaryLanguage(primaryLanguageCode: String?) -> Bool {
+        !self.detectsLanguageAutomatically && primaryLanguageCode == nil
     }
 }
 
@@ -94,6 +100,8 @@ nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedEr
     /// A provider error code, never a server message: those can quote audio content.
     case sessionClosed(String)
     case unsupportedLanguage(String)
+    /// The provider needs one set language per session and none was chosen or set as Primary.
+    case languageRequired
 
     func message(providerName: String) -> String {
         switch self {
@@ -106,6 +114,8 @@ nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedEr
         case .finalTimeout: "\(providerName) did not return the final text in time. Your recording is kept; retry, transcribe locally, or discard it."
         case .sessionClosed(let code): "\(providerName) ended the session early (\(code)). Your recording is kept; retry, transcribe locally, or discard it."
         case .unsupportedLanguage(let language): "\(providerName) can't transcribe \(language) with this model. Choose another language or provider."
+        case .languageRequired:
+            "\(providerName) needs one set language. Choose a Primary language under Dictation language in Voice Engine settings, or activate another provider."
         }
     }
 
@@ -115,7 +125,7 @@ nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedEr
     /// connection, so the session does not reconnect for these.
     var isPermanent: Bool {
         switch self {
-        case .authentication, .quotaExhausted, .unsupportedLanguage: true
+        case .authentication, .quotaExhausted, .unsupportedLanguage, .languageRequired: true
         default: false
         }
     }

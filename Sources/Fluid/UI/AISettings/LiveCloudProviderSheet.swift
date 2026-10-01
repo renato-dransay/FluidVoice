@@ -19,6 +19,7 @@ struct LiveCloudProviderSheet: View {
     private var isActive: Bool { self.settings.activeLiveProvider == self.provider }
     private var isChecking: Bool { self.viewModel.liveProviderBeingChecked != nil }
     private var isTestArmed: Bool { self.test.armedProvider == self.provider }
+    private var needsLanguage: Bool { self.settings.liveProviderNeedsPrimaryLanguage(self.provider) }
 
     var body: some View {
         FluidManagementSheet(
@@ -106,7 +107,7 @@ struct LiveCloudProviderSheet: View {
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if !self.info.detectsLanguageAutomatically {
                 Text("\(self.info.name) needs a set language for this model. Dictation uses your Primary language.")
-                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .font(self.theme.typography.caption).foregroundStyle(self.needsLanguage ? Color.red : self.theme.palette.secondaryText)
             }
             if !self.info.sendsLanguageChoice {
                 Text("\(self.info.name) detects the language on its own; language choices are not sent.")
@@ -130,8 +131,14 @@ struct LiveCloudProviderSheet: View {
             } else {
                 Button("Test with your dictation shortcut") { self.test.arm(self.provider) }
                     .fluidGlassAction()
-                    .disabled(!self.hasKey || self.viewModel.areSpeechModelActionsBlocked || self.isChecking)
-                    .help(!self.hasKey ? "Save an API key first." : "The next dictation uses \(self.info.name) and shows its text here.")
+                    .disabled(!self.hasKey || self.needsLanguage || self.viewModel.areSpeechModelActionsBlocked || self.isChecking)
+                    .help(
+                        !self.hasKey
+                            ? "Save an API key first."
+                            : self.needsLanguage
+                            ? "Choose a Primary language under Dictation language first."
+                            : "The next dictation uses \(self.info.name) and shows its text here."
+                    )
                     .accessibilityIdentifier("live-cloud-test-\(self.provider.rawValue)")
             }
             if self.isTestArmed, !self.test.lastTranscript.isEmpty {
@@ -179,6 +186,13 @@ struct LiveCloudProviderSheet: View {
         }
     }
 
+    private var activateHelp: String {
+        if !self.hasKey { return "Save an API key first." }
+        if self.needsLanguage { return "Choose a Primary language under Dictation language first." }
+        if self.viewModel.areSpeechModelActionsBlocked { return "Finish the current recording first." }
+        return "Use this provider for dictation. The key is checked first."
+    }
+
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -191,10 +205,8 @@ struct LiveCloudProviderSheet: View {
                         Task { await self.viewModel.activateLiveProvider(self.provider) }
                     }
                     .fluidGlassAction(prominent: true)
-                    .disabled(!self.hasKey || self.viewModel.areSpeechModelActionsBlocked || self.isChecking)
-                    .help(!self.hasKey
-                        ? "Save an API key first."
-                        : self.viewModel.areSpeechModelActionsBlocked ? "Finish the current recording first." : "Use this provider for dictation. The key is checked first.")
+                    .disabled(!self.hasKey || self.needsLanguage || self.viewModel.areSpeechModelActionsBlocked || self.isChecking)
+                    .help(self.activateHelp)
                     .accessibilityIdentifier("live-cloud-activate-\(self.provider.rawValue)")
                 }
                 Spacer()

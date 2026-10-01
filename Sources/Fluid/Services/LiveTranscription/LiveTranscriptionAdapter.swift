@@ -41,6 +41,7 @@ nonisolated enum LiveTranscriptionAdapters {
         case .elevenLabs: ElevenLabsLiveAdapter()
         case .mistral: MistralLiveAdapter()
         case .openAI: OpenAILiveAdapter()
+        case .speechmatics: SpeechmaticsLiveAdapter()
         }
     }
 }

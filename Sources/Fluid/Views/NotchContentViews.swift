@@ -518,7 +518,12 @@ struct CloudDictationLanguageSelector: View {
     @ObservedObject private var settings = SettingsStore.shared
     /// The notch keeps its compact chip; the bottom overlay passes its own size's metrics.
     var metrics: OverlayChipMetrics = .forSize(.pill)
-    private var selectedCode: String? { self.settings.cloudDictationLanguageCode }
+    /// The language this recording uses. A live provider without automatic detection uses the Primary
+    /// language when nothing is picked, so the chip shows that instead of "Auto" (UX §E4).
+    private var selectedCode: String? {
+        self.settings.cloudDictationLanguageCode
+            ?? (self.settings.activeLiveProviderNeedsSetLanguage ? self.settings.cloudTranscriptionPrimaryLanguageCode : nil)
+    }
 
     private func languageName(_ code: String) -> String {
         Locale.current.localizedString(forLanguageCode: code)?.localizedCapitalized ?? code.uppercased()
@@ -544,6 +549,11 @@ struct CloudDictationLanguageSelector: View {
         .disabled(lackingProvider != nil)
     }
 
+    private var automaticOptionTitle: String {
+        guard self.settings.activeLiveProviderNeedsSetLanguage, let provider = self.settings.activeLiveProvider else { return "Detect automatically" }
+        return "Detect automatically (not supported by \(LiveTranscriptionCatalog.info(for: provider).name))"
+    }
+
     @ViewBuilder
     private func optionLabel(_ title: String, selected: Bool) -> some View {
         if selected {
@@ -561,8 +571,9 @@ struct CloudDictationLanguageSelector: View {
                     self.languageOption("Secondary", code: secondary)
                 }
                 Button(action: { self.select(nil) }) {
-                    self.optionLabel("Detect automatically", selected: self.selectedCode == nil)
+                    self.optionLabel(self.automaticOptionTitle, selected: self.selectedCode == nil)
                 }
+                .disabled(self.settings.activeLiveProviderNeedsSetLanguage)
             } label: {
                 OverlayChipLabel(
                     metrics: self.metrics,

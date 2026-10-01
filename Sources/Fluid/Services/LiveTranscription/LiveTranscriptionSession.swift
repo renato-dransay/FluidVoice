@@ -141,8 +141,11 @@ actor LiveTranscriptionSession {
         let transport = self.makeTransport()
         self.transport = transport
         do {
+            // Built before opening, so a configuration the adapter refuses (no language for a provider
+            // that needs one) never reaches the provider.
+            let opening = try self.adapter.openingMessages(apiKey: self.apiKey, configuration: self.configuration)
             try await transport.open(self.adapter.connectionRequest(apiKey: self.apiKey, configuration: self.configuration))
-            for message in try self.adapter.openingMessages(apiKey: self.apiKey, configuration: self.configuration) {
+            for message in opening {
                 try await transport.send(message)
             }
         } catch {

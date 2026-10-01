@@ -107,6 +107,16 @@ extension SettingsStore {
         return info.supports(languageCode: code) ? nil : info.name
     }
 
+    /// True when the provider needs one set language (Speechmatics) and no Primary language is set (UX §E4).
+    func liveProviderNeedsPrimaryLanguage(_ provider: LiveTranscriptionProviderID) -> Bool {
+        LiveTranscriptionCatalog.info(for: provider).needsPrimaryLanguage(primaryLanguageCode: self.cloudTranscriptionPrimaryLanguageCode)
+    }
+
+    /// True when the active live provider cannot detect the language, so the overlay chip offers no automatic choice.
+    var activeLiveProviderNeedsSetLanguage: Bool {
+        self.activeLiveProvider.map { !LiveTranscriptionCatalog.info(for: $0).detectsLanguageAutomatically } ?? false
+    }
+
     /// The overlay's language chip: shown for OpenRouter and Live cloud once a Primary language is set.
     var showsDictationLanguageChip: Bool {
         (self.usesCloudTranscription || self.usesLiveCloudDictation) && self.cloudTranscriptionPrimaryLanguageCode != nil
