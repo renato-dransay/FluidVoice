@@ -104,6 +104,22 @@ struct RealTimeReplayScriptAdapter: LiveTranscriptionAdapter {
     mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] { self.script.parse(message) }
 }
 
+/// `ScriptAdapter` with a slow request before the socket, like Gladia's session request.
+struct SlowPreparingScriptAdapter: LiveTranscriptionAdapter {
+    private var script = ScriptAdapter()
+    var provider: LiveTranscriptionProviderID { .gladia }
+    func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
+        try self.script.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+    func prepareConnection(apiKey: String, configuration: LiveTranscriptionConfiguration) async throws -> URLRequest {
+        try await Task.sleep(for: .milliseconds(100))
+        return try self.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+    func finishMessages() -> [LiveTransportMessage] { self.script.finishMessages() }
+    func keyCheckRequest(apiKey: String) throws -> URLRequest { try self.script.keyCheckRequest(apiKey: apiKey) }
+    mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate] { self.script.parse(message) }
+}
+
 /// `ScriptAdapter` whose close codes 4001, 4002 and 4003 name a rejected key, exhausted quota and an unsupported language.
 struct CloseCodeScriptAdapter: LiveTranscriptionAdapter {
     private var script = ScriptAdapter()
@@ -402,6 +418,57 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         }
     }
 
+    func testALanguageChangeWhileTheFirstConnectionOpensKeepsTheDictation() async throws {
+        let first = OpenUntilClosedTransport()
+        let second = FakeLiveTransport()
+        second.respond = { message in
+            message == .text("finish") ? [.success(.text("final:olá:300")), .success(.text("finished"))] : []
+        }
+        let transports = LockedQueue<any LiveTranscriptionTransport>([first, second])
+        let session = self.session { transports.next() }
+        let started = Task { try await session.start() }
+        try await Task.sleep(for: .milliseconds(20))
+        // Closing the opening socket makes its open throw; that is the replaced connection, not a failure.
+        await session.reconfigure(languageCode: "pt")
+        try await started.value
+        await session.append([Float](repeating: 0.1, count: 3_200))
+        let text = try await session.finish()
+        XCTAssertEqual(text, "olá")
+        XCTAssertEqual(second.openedRequests.first?.url?.lastPathComponent, "pt")
+        XCTAssertEqual(second.closeCount, 1, "Only finish closes the current connection")
+    }
+
+    func testAConnectionReplacedDuringItsSessionRequestNeverOpens() async throws {
+        let first = FakeLiveTransport()
+        let second = FakeLiveTransport()
+        second.respond = { message in
+            message == .text("finish") ? [.success(.text("final:olá:300")), .success(.text("finished"))] : []
+        }
+        let transports = LockedQueue([first, second])
+        let session = LiveTranscriptionSession(adapter: SlowPreparingScriptAdapter(), configuration: self.configuration, apiKey: "test-key") { transports.next() }
+        let started = Task { try await session.start() }
+        try await Task.sleep(for: .milliseconds(20))
+        await session.reconfigure(languageCode: "pt")
+        try await started.value
+        XCTAssertEqual(first.openedRequests.count, 0, "The replaced connection's socket is never opened")
+        XCTAssertGreaterThan(first.closeCount, 0)
+        await session.append([Float](repeating: 0.1, count: 3_200))
+        let text = try await session.finish()
+        XCTAssertEqual(text, "olá")
+        XCTAssertEqual(second.sentAudioBytes, 3_200 * 2)
+    }
+
+    func testACancelDuringTheSessionRequestOpensNoSocket() async throws {
+        let transport = FakeLiveTransport()
+        let session = LiveTranscriptionSession(adapter: SlowPreparingScriptAdapter(), configuration: self.configuration, apiKey: "test-key") { transport }
+        let started = Task { try await session.start() }
+        try await Task.sleep(for: .milliseconds(20))
+        await session.cancel()
+        try await started.value
+        XCTAssertEqual(transport.openedRequests.count, 0, "A cancelled session opens no socket")
+        XCTAssertEqual(transport.sent, [], "A cancelled session sends nothing")
+    }
+
     func testOverlappingFlushesSendEveryByteOnceAndInOrder() async throws {
         let inner = FakeLiveTransport()
         inner.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
@@ -490,4 +557,35 @@ final class SlowSendingTransport: LiveTranscriptionTransport, @unchecked Sendabl
 
     func receive() async throws -> LiveTransportMessage { try await self.inner.receive() }
     func close() { self.inner.close() }
+}
+
+/// A socket whose open waits until it is closed, then throws as a cancelled WebSocket open does.
+final class OpenUntilClosedTransport: LiveTranscriptionTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pendingOpen: CheckedContinuation<Void, Error>?
+    private var isClosed = false
+    private(set) var closeCount = 0
+
+    func open(_ request: URLRequest) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let closed = self.lock.withLock { () -> Bool in
+                if !self.isClosed { self.pendingOpen = continuation }
+                return self.isClosed
+            }
+            if closed { continuation.resume(throwing: LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil)) }
+        }
+    }
+
+    func send(_ message: LiveTransportMessage) async throws { throw LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil) }
+    func receive() async throws -> LiveTransportMessage { throw LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil) }
+
+    func close() {
+        let pending = self.lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            self.isClosed = true
+            self.closeCount += 1
+            defer { self.pendingOpen = nil }
+            return self.pendingOpen
+        }
+        pending?.resume(throwing: LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil))
+    }
 }

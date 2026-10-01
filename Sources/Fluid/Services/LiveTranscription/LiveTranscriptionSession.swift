@@ -150,6 +150,9 @@ actor LiveTranscriptionSession {
 
     // MARK: - Connection
 
+    /// Returns without throwing when, after any of its awaits, this connection was replaced or the session
+    /// was cancelled or failed: its socket is closed and nothing else changes. Only the current
+    /// connection's failure is thrown.
     private func connect(replayingFrom milliseconds: Int) async throws {
         self.connection += 1
         let connection = self.connection
@@ -166,11 +169,18 @@ actor LiveTranscriptionSession {
             let opening = try self.adapter.openingMessages(apiKey: self.apiKey, configuration: self.configuration)
             let adapter = self.adapter
             let request = try await adapter.prepareConnection(apiKey: self.apiKey, configuration: self.configuration)
+            // JUDGMENT: a close during Gladia's session request found no socket to close, so the replaced
+            // connection would open anyway; each await is followed by this check instead.
+            guard self.isCurrent(connection) else { return transport.close() }
             try await transport.open(request)
+            guard self.isCurrent(connection) else { return transport.close() }
             for message in opening {
                 try await transport.send(message)
             }
+            guard self.isCurrent(connection) else { return transport.close() }
         } catch {
+            // A replaced connection's open throws once its socket is closed; that is not this session's failure.
+            guard self.isCurrent(connection) else { return transport.close() }
             throw Self.mapped(error, adapter: self.adapter)
         }
         Task { [weak self] in await self?.receiveLoop(transport, connection: connection) }
@@ -181,14 +191,18 @@ actor LiveTranscriptionSession {
         }
     }
 
+    private func isCurrent(_ connection: Int) -> Bool {
+        connection == self.connection && !self.isCancelled && self.failure == nil
+    }
+
     private func receiveLoop(_ transport: any LiveTranscriptionTransport, connection: Int) async {
         while true {
             do {
                 let message = try await transport.receive()
-                guard connection == self.connection else { return }
+                guard connection == self.connection else { return transport.close() }
                 await self.handle(message)
             } catch {
-                guard connection == self.connection else { return }
+                guard connection == self.connection else { return transport.close() }
                 await self.connectionEnded(error)
                 return
             }
