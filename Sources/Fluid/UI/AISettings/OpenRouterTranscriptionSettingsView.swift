@@ -154,7 +154,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
-            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or used as a Gemini instruction in Transcribe + style.")
+            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or given to the dictation model as an instruction.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -244,7 +244,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             // Validation reports what OpenRouter lists now, so refresh the cached catalog first.
             await self.refreshCatalog(force: true)
             do {
-                let client = OpenRouterTranscriptionClient()
+                let client = OpenRouterTranscriptionClient.shared
                 let dictationModels = try await client.validateAudioDictation(apiKey: apiKey)
                 self.availableDictationModelIDs = Set(dictationModels.map(\.id))
                 self.hasValidatedDictationCatalog = true
@@ -261,7 +261,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     private func refreshCatalog(force: Bool) async {
         guard !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
         do {
-            try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient(), force: force)
+            try await CloudTranscriptionCatalogStore.shared.refresh(using: .shared, force: force)
             self.models = CloudTranscriptionModel.catalog
             self.audioModels = CloudAudioDictationModel.catalog
         } catch is CancellationError {

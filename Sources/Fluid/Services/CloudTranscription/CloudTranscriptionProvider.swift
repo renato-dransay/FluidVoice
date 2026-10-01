@@ -8,7 +8,7 @@ final class CloudTranscriptionProvider: TranscriptionProvider {
     private let client: OpenRouterTranscriptionClient
     private let engine: CloudTranscriptionEngine
 
-    init(configuration: CloudTranscriptionConfiguration, apiKey: String, cacheDirectory: URL? = nil, persistChunks: Bool = true, client: OpenRouterTranscriptionClient = .init()) {
+    init(configuration: CloudTranscriptionConfiguration, apiKey: String, cacheDirectory: URL? = nil, persistChunks: Bool = true, client: OpenRouterTranscriptionClient = .shared) {
         self.configuration = configuration
         self.apiKey = apiKey
         self.client = client

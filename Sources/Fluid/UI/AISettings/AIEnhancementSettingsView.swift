@@ -61,7 +61,10 @@ struct AIEnhancementSettingsView: View {
                     Label("OpenRouter handles dictation", systemImage: "waveform")
                         .font(.fluidSystem(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
-                    Text("Transcribe + style sends audio and your Cleanup Style to the voice model in Voice Engine in one request. The providers below are for Edit, Write, and other text AI actions while this mode is on.")
+                    Text(
+                        "OpenRouter dictation sends the audio and the selected Cleanup Style in one request, so the per-style AI provider is not used for dictation. "
+                            + "The providers below are for Edit, Write, and other text AI actions while this mode is on."
+                    )
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)

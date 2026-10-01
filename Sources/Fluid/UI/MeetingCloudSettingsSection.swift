@@ -94,7 +94,7 @@ struct MeetingCloudSettingsSection: View {
     private func refreshCatalog() async {
         guard self.usesCloud, !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
         do {
-            try await CloudTranscriptionCatalogStore.shared.refresh(using: OpenRouterTranscriptionClient())
+            try await CloudTranscriptionCatalogStore.shared.refresh(using: .shared)
             self.models = CloudTranscriptionModel.catalog
         } catch is CancellationError {
             return
@@ -125,7 +125,7 @@ struct MeetingCloudSettingsSection: View {
             var failures: [String] = []
             do {
                 let speech = try await CloudWordTimingCheckSpeech.samples()
-                let client = OpenRouterTranscriptionClient()
+                let client = OpenRouterTranscriptionClient.shared
                 for (index, model) in candidates.enumerated() {
                     self.checkProgress = (index + 1, candidates.count, model.name)
                     do {

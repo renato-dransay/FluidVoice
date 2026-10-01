@@ -1016,9 +1016,11 @@ struct ContentView: View {
         return (provider: providerOut, model: modelOut)
     }
 
-    private func currentTranscriptionModelInfo() -> (provider: String, model: String) {
+    private func currentTranscriptionModelInfo(forDictation: Bool) -> (provider: String, model: String) {
         if self.settings.usesCloudTranscription {
-            return (provider: "openrouter", model: self.settings.cloudTranscriptionModelID)
+            // Dictation runs on the dictation model; command and rewrite use the transcription endpoint.
+            let model = forDictation ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID
+            return (provider: "openrouter", model: model)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
@@ -2946,7 +2948,6 @@ struct ContentView: View {
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         let pipelineStartedAt = ProcessInfo.processInfo.systemUptime
-        var transcriptionModelInfo = self.currentTranscriptionModelInfo()
         let expectedOverlayLifecycleID = self.overlayLifecycleID
         self.appBench("pipeline_begin id=\(pipelineID) route=\(route.rawValue) toggleStopRequestedAt=\(toggleStopRequestedAt.map { String($0) } ?? "nil") loadAvg1m=\(self.benchmarkLoadAverage())")
         defer {
@@ -2960,6 +2961,7 @@ struct ContentView: View {
         let modeAtStop = self.activeRecordingMode
         let wasRewriteMode = modeAtStop == .edit || self.isRecordingForRewrite
         let wasCommandMode = modeAtStop == .command || self.isRecordingForCommand
+        var transcriptionModelInfo = self.currentTranscriptionModelInfo(forDictation: !wasRewriteMode && !wasCommandMode)
         let activeDictationSlot = self.currentDictationShortcutSlot(for: modeAtStop)
         let promptOverride = self.promptModeOverrideText
         let promptTest = DictationPromptTestCoordinator.shared

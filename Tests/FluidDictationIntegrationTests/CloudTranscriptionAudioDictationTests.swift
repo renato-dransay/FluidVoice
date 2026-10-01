@@ -48,6 +48,7 @@ final class CloudTranscriptionAudioDictationTests: XCTestCase {
         XCTAssertTrue(system.contains("de"))
         let userContent = try XCTUnwrap(messages.last?["content"] as? [[String: Any]])
         let audio = try XCTUnwrap(userContent.first { $0["type"] as? String == "input_audio" }?["input_audio"] as? [String: String])
+        // The chat endpoint's input_audio contract lists WAV and MP3, not FLAC.
         XCTAssertEqual(audio["format"], "wav")
         let wav = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(audio["data"])))
         XCTAssertEqual(String(data: wav.prefix(4), encoding: .utf8), "RIFF")

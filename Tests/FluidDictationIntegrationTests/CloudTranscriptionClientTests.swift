@@ -30,7 +30,14 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertNotNil(body.range(of: Data("name=\"timestamp_granularities[]\"\r\n\r\nword".utf8)))
         XCTAssertNotNil(body.range(of: Data("name=\"response_format\"\r\n\r\nverbose_json".utf8)))
         XCTAssertNotNil(body.range(of: Data("name=\"language\"\r\n\r\nde".utf8)))
-        XCTAssertNotNil(body.range(of: Data("RIFF".utf8)))
+        XCTAssertNotNil(body.range(of: Data("fLaC".utf8)))
+        XCTAssertNotNil(body.range(of: Data("filename=\"recording.flac\"\r\nContent-Type: audio/flac".utf8)))
+    }
+
+    func testRequestTimingLineCarriesSizesAndDurationsOnly() {
+        let audio = CloudEncodedAudio(data: Data(count: 12_345), format: "flac", mimeType: "audio/flac", fileName: "recording.flac", encodeDuration: 0.0123)
+        let line = OpenRouterTranscriptionClient.requestTimingLine(endpoint: "chat", audio: audio, audioSamples: 32_000, requestDuration: 1.5, status: "200")
+        XCTAssertEqual(line, "CLOUD_REQUEST endpoint=chat format=flac audioMs=2000 uploadBytes=12345 encodeMs=12 requestMs=1500 status=200")
     }
 
     func testPlainTextDoesNotRequestUnsupportedTiming() async throws {
@@ -92,9 +99,9 @@ final class CloudTranscriptionClientTests: XCTestCase {
                 XCTAssertTrue(hint["prompt"]?.contains("Other languages") == true)
             }
             let audio = try XCTUnwrap(body["input_audio"] as? [String: String])
-            XCTAssertEqual(audio["format"], "wav")
-            let wav = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(audio["data"])))
-            XCTAssertEqual(String(data: wav.prefix(4), encoding: .utf8), "RIFF")
+            XCTAssertEqual(audio["format"], "flac")
+            let flac = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(audio["data"])))
+            XCTAssertEqual(String(data: flac.prefix(4), encoding: .utf8), "fLaC")
             XCTAssertEqual(body["response_format"] as? String, model.supportsWordTimings ? "verbose_json" : "json")
             XCTAssertEqual(body["timestamp_granularities"] as? [String], model.supportsWordTimings ? ["word"] : nil)
         }
@@ -598,6 +605,36 @@ final class CloudTranscriptionClientTests: XCTestCase {
         XCTAssertTrue(line.contains("Leaky"), "Unknown errors are named by type")
         XCTAssertFalse(line.contains("PRIVATE"), "An error description can carry transcript text and must never be logged")
         XCTAssertFalse(line.contains("test-key"))
+    }
+
+    func testPrewarmSendsOneKeyRequestThenStaysQuietWhileTheConnectionIsFresh() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"data":{}}"#.utf8))
+        }
+        let client = self.client()
+        await client.prewarmIfIdle(apiKey: "test-key", now: 100)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 130)
+        XCTAssertEqual(recorder.requests.count, 1, "A request within 60 seconds keeps the connection warm")
+        XCTAssertEqual(recorder.requests.first?.url?.absoluteString, "https://openrouter.ai/api/v1/key")
+        XCTAssertEqual(recorder.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        await client.prewarmIfIdle(apiKey: "test-key", now: 161)
+        XCTAssertEqual(recorder.requests.count, 2)
+    }
+
+    func testPrewarmIgnoresFailuresAndEmptyKeys() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (500, [:], Data())
+        }
+        let client = self.client()
+        await client.prewarmIfIdle(apiKey: "  ", now: 100)
+        XCTAssertEqual(recorder.requests.count, 0)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 100)
+        await client.prewarmIfIdle(apiKey: "test-key", now: 101)
+        XCTAssertEqual(recorder.requests.count, 2, "A failed prewarm does not count as a warm connection")
     }
 
     private func client() -> OpenRouterTranscriptionClient {
