@@ -150,6 +150,9 @@ final class AppServices: ObservableObject {
         return coordinator
     }
 
+    /// Started with the detector; reads Mac Calendar only once calendar access is granted.
+    let meetingCalendarReminders = MeetingCalendarReminderScheduler()
+
     /// Standalone — activated once, independently of `meetingSessionCoordinator`'s lazy getter.
     private var _meetingAutoDetector: MeetingAutoDetector?
     var meetingAutoDetector: MeetingAutoDetector {

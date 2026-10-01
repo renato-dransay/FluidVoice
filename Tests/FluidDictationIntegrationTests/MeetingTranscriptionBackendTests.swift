@@ -1389,3 +1389,74 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 }
+
+final class MeetingCalendarReminderPolicyTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func candidate(
+        id: String = "event",
+        startOffset: TimeInterval,
+        duration: TimeInterval = 30 * 60,
+        isAllDay: Bool = false,
+        declined: Bool = false,
+        links: [String] = ["https://meet.google.com/abc-defg-hij"]
+    ) -> MeetingCalendarReminderCandidate {
+        MeetingCalendarReminderCandidate(
+            eventIdentifier: id,
+            title: "Daily",
+            start: self.now.addingTimeInterval(startOffset),
+            end: self.now.addingTimeInterval(startOffset + duration),
+            isAllDay: isAllDay,
+            currentUserDeclined: declined,
+            linkSources: links,
+            attendees: []
+        )
+    }
+
+    func testOffersACallStartingWithinTheLeadTimeOrRecentlyStarted() throws {
+        let soon = try XCTUnwrap(MeetingCalendarReminderPolicy.dueReminder(among: [self.candidate(startOffset: 45)], at: self.now, alreadyOffered: []))
+        XCTAssertEqual(soon.conferenceURL.absoluteString, "https://meet.google.com/abc-defg-hij")
+        XCTAssertEqual(soon.serviceName, "Google Meet")
+        XCTAssertTrue(soon.calendarMatch.matchedByConferenceLink)
+        XCTAssertNotNil(MeetingCalendarReminderPolicy.dueReminder(among: [self.candidate(startOffset: -4 * 60)], at: self.now, alreadyOffered: []))
+    }
+
+    func testIgnoresCallsOutsideTheOfferWindow() {
+        XCTAssertNil(MeetingCalendarReminderPolicy.dueReminder(among: [self.candidate(startOffset: 5 * 60)], at: self.now, alreadyOffered: []))
+        XCTAssertNil(MeetingCalendarReminderPolicy.dueReminder(among: [self.candidate(startOffset: -6 * 60)], at: self.now, alreadyOffered: []))
+        XCTAssertNil(
+            MeetingCalendarReminderPolicy.dueReminder(among: [self.candidate(startOffset: -3 * 60, duration: 2 * 60)], at: self.now, alreadyOffered: []),
+            "An event that already ended is never offered"
+        )
+    }
+
+    func testIgnoresAllDayDeclinedAndLinklessEvents() {
+        let events = [
+            self.candidate(id: "all-day", startOffset: 30, isAllDay: true),
+            self.candidate(id: "declined", startOffset: 30, declined: true),
+            self.candidate(id: "no-link", startOffset: 30, links: ["Room 4", "https://calendar.google.com/event?eid=1"]),
+        ]
+        XCTAssertNil(MeetingCalendarReminderPolicy.dueReminder(among: events, at: self.now, alreadyOffered: []))
+    }
+
+    func testOffersEachOccurrenceOnceAndPrefersTheEarliest() throws {
+        let early = self.candidate(id: "early", startOffset: -60)
+        let later = self.candidate(id: "later", startOffset: 50)
+        let first = try XCTUnwrap(MeetingCalendarReminderPolicy.dueReminder(among: [later, early], at: self.now, alreadyOffered: []))
+        XCTAssertEqual(first.eventIdentifier, "early")
+        let second = try XCTUnwrap(MeetingCalendarReminderPolicy.dueReminder(among: [later, early], at: self.now, alreadyOffered: [first.id]))
+        XCTAssertEqual(second.eventIdentifier, "later")
+    }
+
+    func testFindsTheCallLinkInNotesAmongOtherLinks() {
+        let notes = "Agenda: https://docs.google.com/document/d/1\nJoin Zoom Meeting\nhttps://us02web.zoom.us/j/123456789?pwd=abc\nDial in: +1 555"
+        XCTAssertEqual(MeetingCalendarReminderPolicy.conferenceURL(in: ["", notes])?.host, "us02web.zoom.us")
+        XCTAssertNil(MeetingCalendarReminderPolicy.conferenceURL(in: ["https://meet.google.com/landing"]))
+    }
+
+    func testDescribesTheStartRelativeToNow() {
+        XCTAssertEqual(MeetingCalendarReminderPolicy.startDescription(start: self.now.addingTimeInterval(60), now: self.now), "Starts in 1 min")
+        XCTAssertEqual(MeetingCalendarReminderPolicy.startDescription(start: self.now.addingTimeInterval(-180), now: self.now), "Started 3 min ago")
+        XCTAssertEqual(MeetingCalendarReminderPolicy.startDescription(start: self.now.addingTimeInterval(10), now: self.now), "Starting now")
+    }
+}

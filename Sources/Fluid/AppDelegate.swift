@@ -336,6 +336,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             Task { @MainActor in
                 _ = AppServices.shared.meetingAutoDetector
+                AppServices.shared.meetingCalendarReminders.start()
             }
         }
     }

@@ -2290,6 +2290,23 @@ private extension SettingsView {
                     }
                 )
             )
+            self.optionToggleRow(
+                title: "Remind me before calendar meetings",
+                description: "A minute before an event with a Google Meet, Zoom, Teams, Whereby or Jitsi link, offer Open and Open & Transcribe. Recording starts only when you choose it.",
+                isOn: Binding(
+                    get: { self.settings.meetingCalendarRemindersEnabled },
+                    set: { enabled in
+                        self.settings.meetingCalendarRemindersEnabled = enabled
+                        guard enabled else { return }
+                        Task { @MainActor in
+                            let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                            if !granted {
+                                self.settings.meetingCalendarRemindersEnabled = false
+                            }
+                        }
+                    }
+                )
+            )
             Text("Reads Mac Calendar. Add your Google account under System Settings > Internet Accounts with Calendars enabled to include Google Calendar.")
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.settingsSecondaryText)

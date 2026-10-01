@@ -2100,6 +2100,19 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Reminder before a calendar event with a call link starts, offering Open and Open & Transcribe
+    /// (default: ON — inert until calendar access is granted).
+    var meetingCalendarRemindersEnabled: Bool {
+        get {
+            if self.defaults.object(forKey: Keys.meetingCalendarRemindersEnabled) == nil { return true }
+            return self.defaults.bool(forKey: Keys.meetingCalendarRemindersEnabled)
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.meetingCalendarRemindersEnabled)
+        }
+    }
+
     /// Calendar-derived meeting titles and attendee suggestions (default: OFF — needs EventKit access).
     var meetingCalendarNamesEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingCalendarNamesEnabled) }
@@ -3570,6 +3583,7 @@ final class SettingsStore: ObservableObject {
             meetingAutoDetectEnabled: self.meetingAutoDetectEnabled,
             meetingAutoDetectBrowserEnabled: self.meetingAutoDetectBrowserEnabled,
             meetingCalendarNamesEnabled: self.meetingCalendarNamesEnabled,
+            meetingCalendarRemindersEnabled: self.meetingCalendarRemindersEnabled,
             hotkeyShortcut: self.hotkeyShortcut,
             primaryDictationShortcuts: self.primaryDictationShortcuts,
             promptModeHotkeyShortcut: self.promptModeHotkeyShortcut,
@@ -3722,6 +3736,9 @@ final class SettingsStore: ObservableObject {
         }
         if let meetingCalendarNamesEnabled = payload.meetingCalendarNamesEnabled {
             self.meetingCalendarNamesEnabled = meetingCalendarNamesEnabled
+        }
+        if let meetingCalendarRemindersEnabled = payload.meetingCalendarRemindersEnabled {
+            self.meetingCalendarRemindersEnabled = meetingCalendarRemindersEnabled
         }
         self.primaryDictationShortcuts = payload.primaryDictationShortcuts ?? [payload.hotkeyShortcut]
         self.promptModeHotkeyShortcut = payload.promptModeHotkeyShortcut
@@ -5822,6 +5839,7 @@ private extension SettingsStore {
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
         static let meetingCalendarNamesEnabled = "MeetingCalendarNamesEnabled"
+        static let meetingCalendarRemindersEnabled = "MeetingCalendarRemindersEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"

@@ -29,7 +29,7 @@ final class MeetingAutoDetector {
         var serviceName: String? = nil
     }
 
-    static func serviceName(forEvidenceKey key: String) -> String? {
+    nonisolated static func serviceName(forEvidenceKey key: String) -> String? {
         guard key.hasPrefix("url:") else { return nil }
         let host = key.dropFirst(4).split(separator: "/").first.map(String.init)?.lowercased() ?? ""
         if host == "meet.google.com" { return "Google Meet" }

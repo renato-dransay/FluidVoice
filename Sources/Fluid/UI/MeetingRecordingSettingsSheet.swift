@@ -421,6 +421,34 @@ struct MeetingRecordingSettingsSheet: View {
                         .meetingHoverFeedback()
                         .accessibilityLabel("Use calendar for meeting names")
                     }
+
+                    Divider()
+                    MeetingAdaptiveSetupRow(
+                        title: "Remind me before calendar meetings",
+                        detail: "A minute before an event with a Google Meet, Zoom, Teams, Whereby or Jitsi link, offer Open and Open & Transcribe. Recording starts only when you choose it.",
+                        trailingSwitch: true
+                    ) {
+                        Toggle(
+                            "Remind me before calendar meetings",
+                            isOn: Binding(
+                                get: { self.draft.calendarRemindersEnabled },
+                                set: { enabled in
+                                    self.draft.calendarRemindersEnabled = enabled
+                                    guard enabled else { return }
+                                    Task { @MainActor in
+                                        let granted = await EventKitMeetingCalendarProvider.requestAccess()
+                                        if !granted {
+                                            self.draft.calendarRemindersEnabled = false
+                                        }
+                                    }
+                                }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .meetingHoverFeedback()
+                        .accessibilityLabel("Remind me before calendar meetings")
+                    }
                 }
             }
 

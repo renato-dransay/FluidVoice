@@ -225,6 +225,8 @@ final class MeetingDetectionPromptController: ObservableObject {
             }
         }
         DebugLogger.shared.log("prompt-shown bundle=\(request.bundleIdentifier)", source: "MeetingAutoDetector")
+        // The call is already running, so this prompt supersedes a calendar reminder in the same spot.
+        MeetingCalendarReminderController.shared.dismissIfIdle()
         AccessibilityNotification.Announcement(
             "Record this meeting? \(self.appDisplayName). Nothing is recording yet."
         ).post()
@@ -515,7 +517,7 @@ final class MeetingDetectionPromptController: ObservableObject {
 /// Meeting prompts float over other apps like the dictation overlay, so they share its surface:
 /// the configured overlay material, tint, opacity and highlight, on a dark palette with the
 /// current accent color. Both are read live, so changes apply without recreating the panel.
-private struct MeetingOverlayThemed<Content: View>: View {
+struct MeetingOverlayThemed<Content: View>: View {
     @ObservedObject private var settings = SettingsStore.shared
     let content: Content
 
@@ -535,7 +537,7 @@ private struct MeetingOverlayAppearanceKey: EnvironmentKey {
     static let defaultValue = BottomOverlayAppearance.smokedGlass
 }
 
-private extension EnvironmentValues {
+extension EnvironmentValues {
     var meetingOverlayAppearance: BottomOverlayAppearance {
         get { self[MeetingOverlayAppearanceKey.self] }
         set { self[MeetingOverlayAppearanceKey.self] = newValue }

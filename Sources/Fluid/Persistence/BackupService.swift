@@ -27,6 +27,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let meetingAutoDetectEnabled: Bool?
     let meetingAutoDetectBrowserEnabled: Bool?
     let meetingCalendarNamesEnabled: Bool?
+    let meetingCalendarRemindersEnabled: Bool?
     let hotkeyShortcut: HotkeyShortcut
     // Older backup files only contain hotkeyShortcut; nil restores that legacy single shortcut.
     // swiftlint:disable:next discouraged_optional_collection

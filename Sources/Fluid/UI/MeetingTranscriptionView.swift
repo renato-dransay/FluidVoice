@@ -35,12 +35,14 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var autoDetectEnabled: Bool
     var browserDetectionEnabled: Bool
     var calendarNamesEnabled: Bool
+    var calendarRemindersEnabled: Bool
 
     init(settings: SettingsStore = .shared) {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
         self.calendarNamesEnabled = settings.meetingCalendarNamesEnabled
+        self.calendarRemindersEnabled = settings.meetingCalendarRemindersEnabled
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
@@ -1117,6 +1119,7 @@ struct MeetingTranscriptionView: View {
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
         self.setupDraft.calendarNamesEnabled = SettingsStore.shared.meetingCalendarNamesEnabled
+        self.setupDraft.calendarRemindersEnabled = SettingsStore.shared.meetingCalendarRemindersEnabled
         self.setupDraftBeforeEditing = self.setupDraft
         self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         self.isShowingMeetingSettings = true
@@ -1169,6 +1172,7 @@ struct MeetingTranscriptionView: View {
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
         settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
         settings.meetingCalendarNamesEnabled = self.setupDraft.calendarNamesEnabled
+        settings.meetingCalendarRemindersEnabled = self.setupDraft.calendarRemindersEnabled
         settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
         if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {
             Task { await self.coordinator.sweepExpiredAudio() }
