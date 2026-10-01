@@ -216,6 +216,7 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         let text = try await session.finish()
         XCTAssertEqual(text, "part one part two")
         XCTAssertEqual(second.sentAudioBytes, 500 * 32, "Only the 500 ms after the last final are replayed")
+        XCTAssertEqual(first.closeCount, 1, "The dropped socket is closed, which releases its URL session")
     }
 
     func testSecondDropFailsWithConnectionLost() async throws {

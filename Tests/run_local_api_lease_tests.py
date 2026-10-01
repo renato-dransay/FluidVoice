@@ -336,6 +336,13 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(service.frozenTranscriptionProvider == nil && service.asrReadyBeforeLiveLease == nil, "Release clears live state")
             passes += 1
 
+            let loaded = ASRService()
+            loaded.isAsrReady = true
+            let afterLoad = try loaded.acquireExclusiveActivity(.dictation)
+            loaded.releaseExclusiveActivity(afterLoad)
+            check(loaded.isAsrReady, "Releasing a live lease restores the local model's readiness from before the lease")
+            passes += 1
+
             service.isAsrReady = true
             let training = try service.acquireExclusiveActivity(.dictation)
             service.freezeLocalProviderForDictionaryTrainingCapture(true)

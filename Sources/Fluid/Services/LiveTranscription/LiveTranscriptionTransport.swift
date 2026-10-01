@@ -20,6 +20,7 @@ final nonisolated class URLSessionWebSocketTransport: NSObject, LiveTranscriptio
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var openContinuation: CheckedContinuation<Void, Error>?
+    private var isClosed = false
 
     func open(_ request: URLRequest) async throws {
         let configuration = URLSessionConfiguration.ephemeral
@@ -31,13 +32,28 @@ final nonisolated class URLSessionWebSocketTransport: NSObject, LiveTranscriptio
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 4 * 1024 * 1024
-        self.lock.withLock {
+        // A socket closed before it opened (a replaced or cancelled connection) never connects.
+        let wasClosed = self.lock.withLock { () -> Bool in
+            guard !self.isClosed else { return true }
             self.session = session
             self.task = task
+            return false
+        }
+        if wasClosed {
+            session.invalidateAndCancel()
+            throw LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: nil)
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            self.lock.withLock { self.openContinuation = continuation }
-            task.resume()
+            // A close that lands here cancelled the task before its delegate had a continuation to resume.
+            let closed = self.lock.withLock { () -> Bool in
+                if !self.isClosed { self.openContinuation = continuation }
+                return self.isClosed
+            }
+            if closed {
+                continuation.resume(throwing: LiveTransportClosed(closeCode: 0, reason: nil, upgradeStatus: nil))
+            } else {
+                task.resume()
+            }
         }
     }
 
@@ -62,8 +78,12 @@ final nonisolated class URLSessionWebSocketTransport: NSObject, LiveTranscriptio
         }
     }
 
+    /// Cancels the socket and invalidates its URL session, which otherwise keeps this delegate alive.
     func close() {
-        let (task, session) = self.lock.withLock { (self.task, self.session) }
+        let (task, session) = self.lock.withLock { () -> (URLSessionWebSocketTask?, URLSession?) in
+            self.isClosed = true
+            return (self.task, self.session)
+        }
         task?.cancel(with: .normalClosure, reason: nil)
         session?.finishTasksAndInvalidate()
     }

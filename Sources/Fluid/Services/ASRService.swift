@@ -763,8 +763,9 @@ final class ASRService: ObservableObject {
         if self.frozenTranscriptionProvider is LiveCloudTranscriptionProvider {
             // Every exit of a live dictation, including skipped silence, failures and a failed start, closes the stream.
             self.endLiveCloudStream()
-            // The flag described the live stream; the local model's readiness is unknown again.
-            self.isAsrReady = false
+            // The flag described the live stream. The local model is as ready as before the lease, which
+            // the meeting residency snapshot reads; a model reset pending below clears it again.
+            self.isAsrReady = self.asrReadyBeforeLiveLease ?? false
         }
         self.asrReadyBeforeLiveLease = nil
         self.frozenTranscriptionProvider = nil

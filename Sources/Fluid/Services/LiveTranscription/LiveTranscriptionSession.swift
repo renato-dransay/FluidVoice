@@ -206,7 +206,9 @@ actor LiveTranscriptionSession {
                 guard connection == self.connection else { return transport.close() }
                 await self.handle(message)
             } catch {
-                guard connection == self.connection else { return transport.close() }
+                // The socket is dead either way; closing it releases its URL session.
+                transport.close()
+                guard connection == self.connection else { return }
                 await self.connectionEnded(error)
                 return
             }
