@@ -39,6 +39,7 @@ nonisolated enum LiveTranscriptionAdapters {
         case .deepgram: DeepgramLiveAdapter()
         case .assemblyAI: AssemblyAILiveAdapter()
         case .elevenLabs: ElevenLabsLiveAdapter()
+        case .mistral: MistralLiveAdapter()
         }
     }
 }

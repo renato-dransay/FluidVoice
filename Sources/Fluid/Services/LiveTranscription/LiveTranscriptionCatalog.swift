@@ -46,6 +46,17 @@ nonisolated enum LiveTranscriptionCatalog {
             keyURL: URL(string: "https://elevenlabs.io/app/settings/api-keys"),
             usageURL: URL(string: "https://elevenlabs.io/app/usage")
         ),
+        LiveTranscriptionProviderInfo(
+            id: .mistral,
+            name: "Mistral",
+            models: [.init(id: "voxtral-mini-transcribe-realtime-2602", name: "Voxtral Mini Transcribe Realtime")],
+            // Detects the language on its own; the realtime session takes no language or hints.
+            detectsLanguageAutomatically: true,
+            languageCodes: ["en", "zh", "hi", "es", "ar", "fr", "pt", "ru", "de", "ja", "ko", "it", "nl"],
+            keyURL: URL(string: "https://console.mistral.ai/api-keys"),
+            usageURL: URL(string: "https://console.mistral.ai/usage"),
+            sendsLanguageChoice: false
+        ),
     ]
 
     static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {

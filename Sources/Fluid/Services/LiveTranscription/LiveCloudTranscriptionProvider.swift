@@ -67,6 +67,9 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
     }
 
     func reconfigure(languageCode: String?) async {
+        // JUDGMENT: a provider that takes no language would reconnect and replay the whole recording
+        // for an identical stream, so the choice is ignored for it.
+        guard LiveTranscriptionCatalog.info(for: self.configuration.provider).sendsLanguageChoice else { return }
         await self.session?.reconfigure(languageCode: languageCode)
     }
 

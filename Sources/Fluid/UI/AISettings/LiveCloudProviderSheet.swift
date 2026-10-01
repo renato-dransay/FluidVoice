@@ -108,6 +108,10 @@ struct LiveCloudProviderSheet: View {
                 Text("\(self.info.name) needs a set language for this model. Dictation uses your Primary language.")
                     .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             }
+            if !self.info.sendsLanguageChoice {
+                Text("\(self.info.name) detects the language on its own; language choices are not sent.")
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+            }
             ForEach(self.unlistedLanguageWarnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle")
                     .font(self.theme.typography.caption).foregroundStyle(.orange)

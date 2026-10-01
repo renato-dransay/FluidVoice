@@ -6,6 +6,7 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
     case deepgram
     case assemblyAI
     case elevenLabs
+    case mistral
 
     var id: String { self.rawValue }
     /// Voice engine keys live under their own ids and are never shared with AI Providers keys.
@@ -28,6 +29,8 @@ nonisolated struct LiveTranscriptionProviderInfo: Identifiable, Sendable {
     let languageCodes: Set<String>? // swiftlint:disable:this discouraged_optional_collection
     let keyURL: URL?
     let usageURL: URL?
+    /// False when the realtime API takes no language at all, so a language choice changes nothing.
+    var sendsLanguageChoice = true
 
     var defaultModelID: String { self.models.first?.id ?? "" }
 
