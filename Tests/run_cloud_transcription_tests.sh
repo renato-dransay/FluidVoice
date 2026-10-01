@@ -15,6 +15,7 @@ SWIFT
 cp "$ROOT"/Sources/Fluid/Services/CloudTranscription/*.swift "$HARNESS/Sources/CloudTranscriptionHarness/"
 cp "$ROOT/Sources/Fluid/Services/TranscriptionProvider.swift" "$HARNESS/Sources/CloudTranscriptionHarness/"
 cp "$ROOT/Sources/Fluid/Persistence/SettingsStore+CloudTranscription.swift" "$HARNESS/Sources/CloudTranscriptionHarness/"
+cp "$ROOT/Sources/Fluid/Services/LiveTranscription/LiveTranscriptionTypes.swift" "$HARNESS/Sources/CloudTranscriptionHarness/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionChunkTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudTranscriptionAudioDictationTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
@@ -28,6 +29,8 @@ enum ForkIdentity {
     static func applicationSupportURL() -> URL? { nil }
 }
 final class SettingsStore: ObservableObject {
+    /// Live cloud lives outside this harness, so the source getter sees no usable live provider.
+    var activeLiveProvider: LiveTranscriptionProviderID? { nil }
     static func whisperLanguageCode(fromStoredValue value: String?) -> String? {
         guard let value, CloudTranscriptionConfiguration.supportedLanguageCodes.contains(value) else { return nil }
         return value

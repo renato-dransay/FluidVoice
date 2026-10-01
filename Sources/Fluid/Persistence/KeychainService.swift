@@ -103,8 +103,23 @@ final class KeychainService {
         _ = try self.loadStoredKeys(forceRefresh: true)
     }
 
+    /// Voice Engine keys are written one at a time by their own screens. AI Providers saves a snapshot
+    /// it loaded earlier, which may be stale, so a bulk save never takes a voice key from the caller:
+    /// it keeps the current stored value, or none if the key was removed.
+    static func isVoiceEngineKey(_ id: String) -> Bool {
+        id == "openrouter-transcription" || id.hasPrefix("live-transcription.")
+    }
+
     func storeAllKeys(_ values: [String: String]) throws {
-        try self.saveStoredKeys(values)
+        self.ioLock.lock()
+        defer { self.ioLock.unlock() }
+        // Read the latest aggregate, as `storeKey` does, so keys changed elsewhere are not overwritten.
+        let current = try self.loadStoredKeys(forceRefresh: true)
+        var merged = values.filter { !Self.isVoiceEngineKey($0.key) }
+        for (id, value) in current where Self.isVoiceEngineKey(id) {
+            merged[id] = value
+        }
+        try self.saveStoredKeys(merged)
     }
 
     func legacyProviderEntries() throws -> [String: String] {
