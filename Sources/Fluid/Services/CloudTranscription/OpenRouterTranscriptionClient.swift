@@ -243,7 +243,8 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     private func transcribeAndStyle(samples: [Float], configuration: CloudTranscriptionConfiguration, instructions: CloudAudioDictationInstructions, apiKey: String) async throws -> CloudTranscriptionResult {
         guard samples.count <= CloudAudioDictationModel.maximumSamples else { throw CloudTranscriptionError.dictationTooLong }
         guard !samples.isEmpty else { throw CloudTranscriptionError.invalidAudio }
-        let audio = try CloudEncodedAudio.best(samples: samples)
+        // The chat endpoint's input_audio accepts WAV and MP3; FLAC is only for the transcription endpoint.
+        let audio = try CloudEncodedAudio.wav(samples: samples)
         var request = try self.request(path: "chat/completions", apiKey: apiKey)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
