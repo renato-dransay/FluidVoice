@@ -26,6 +26,7 @@ final class LiveTranscriptionSpeechmaticsTests: XCTestCase {
         let config = try XCTUnwrap(start["transcription_config"] as? [String: Any])
         XCTAssertEqual(config["language"] as? String, "pt")
         XCTAssertEqual(config["model"] as? String, "enhanced")
+        XCTAssertNil(config["operating_point"], "operating_point is deprecated in favour of model")
         XCTAssertEqual(config["enable_partials"] as? Bool, true)
         XCTAssertEqual(config["max_delay"] as? Double, 0.7)
         XCTAssertEqual(config["max_delay_mode"] as? String, "flexible")
@@ -115,6 +116,7 @@ final class LiveTranscriptionSpeechmaticsTests: XCTestCase {
         XCTAssertTrue(info.needsPrimaryLanguage(primaryLanguageCode: nil))
         XCTAssertFalse(info.needsPrimaryLanguage(primaryLanguageCode: "pt"))
         XCTAssertFalse(LiveTranscriptionCatalog.info(for: .soniox).needsPrimaryLanguage(primaryLanguageCode: nil))
+        XCTAssertEqual(info.keyURL?.absoluteString, "https://portal.speechmatics.com/settings/api-keys")
     }
 
     func testSessionFinishesAfterEndOfStreamWithTheFrameCount() async throws {

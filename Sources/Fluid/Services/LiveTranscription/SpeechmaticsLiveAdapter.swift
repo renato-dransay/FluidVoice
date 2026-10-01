@@ -23,7 +23,9 @@ nonisolated struct SpeechmaticsLiveAdapter: LiveTranscriptionAdapter {
         let start: [String: Any] = [
             "message": "StartRecognition",
             "audio_format": ["type": "raw", "encoding": "pcm_s16le", "sample_rate": 16_000],
-            // EVIDENCE: Protocols §7.3 names the field `model` (`standard` or `enhanced`).
+            // EVIDENCE: Protocols §7.3 names the field `model` (`standard` or `enhanced`); the realtime reference
+            // marks `operating_point` deprecated in its favour, and realtime takes only these two models.
+            // EVIDENCE: https://docs.speechmatics.com/api-ref/realtime-transcription-websocket (checked 2026-10-01)
             "transcription_config": [
                 "language": language,
                 "model": configuration.modelID,

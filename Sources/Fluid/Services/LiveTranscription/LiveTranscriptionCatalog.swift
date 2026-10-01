@@ -84,7 +84,8 @@ nonisolated enum LiveTranscriptionCatalog {
             // JUDGMENT: the protocols research verified only en and pt; an unlisted language comes back as
             // `invalid_language`, which names itself, so the picker is not narrowed on a guess.
             languageCodes: nil,
-            keyURL: URL(string: "https://portal.speechmatics.com"),
+            // EVIDENCE: https://docs.speechmatics.com/get-started/authentication (checked 2026-10-01) links keys here.
+            keyURL: URL(string: "https://portal.speechmatics.com/settings/api-keys"),
             usageURL: URL(string: "https://portal.speechmatics.com")
         ),
         LiveTranscriptionProviderInfo(
