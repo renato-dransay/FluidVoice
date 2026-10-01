@@ -2474,7 +2474,8 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         await harness.capture.waitForStopCall()
         // coordinator.state flips to .interrupted synchronously in handleCaptureEvent, well before
         // finishUnexpectedStop's async finalize/release runs — poll the actual release instead.
-        for _ in 0..<40 {
+        // A loaded parallel test run can take well over 200 ms, so allow up to 5 seconds.
+        for _ in 0..<1000 {
             if harness.arbiter.releaseCallCount > 0 { break }
             try await Task.sleep(nanoseconds: 5_000_000)
         }

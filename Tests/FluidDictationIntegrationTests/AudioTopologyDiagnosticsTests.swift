@@ -28,15 +28,18 @@ final class AudioTopologyDiagnosticsTests: XCTestCase {
     }
 
     func testRingPublishesMonotonicEventsInOrder() {
-        let first = Self.record(.listenerRemoveBegin, objectID: 71)
-        let second = Self.record(.listenerRemoveEnd, objectID: 71, status: noErr)
+        // The ring is process-wide, and the host app's own audio listeners can publish into it
+        // while this test runs. Only this test's events have exact expectations.
+        let objectID: AudioObjectID = 0xF1D0_0071
+        let first = Self.record(.listenerRemoveBegin, objectID: objectID)
+        let second = Self.record(.listenerRemoveEnd, objectID: objectID, status: noErr)
 
         let snapshot = Self.snapshot()
-        XCTAssertEqual(first, 1)
-        XCTAssertEqual(second, 2)
-        XCTAssertEqual(snapshot.latest, 2)
-        XCTAssertEqual(snapshot.events.map(\.sequence), [1, 2])
-        XCTAssertEqual(snapshot.events.map(\.objectID), [71, 71])
+        XCTAssertGreaterThan(first, 0)
+        XCTAssertGreaterThan(second, first)
+        XCTAssertGreaterThanOrEqual(snapshot.latest, second)
+        XCTAssertEqual(snapshot.events.filter { $0.objectID == objectID }.map(\.sequence), [first, second])
+        XCTAssertEqual(snapshot.events.map(\.sequence), snapshot.events.map(\.sequence).sorted())
     }
 
     func testRingWrapRetainsNewestCapacityWithoutReordering() {

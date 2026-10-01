@@ -1241,7 +1241,17 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         }
     }
 
+    /// The test host shares the installed personal app's preferences, where OpenRouter may be the
+    /// active engine. These cases exercise local dictation resources.
+    private func pinLocalSpeechSource() {
+        let settings = SettingsStore.shared
+        let stored = CloudTranscriptionPreferences(defaults: .standard).source
+        settings.speechExecutionSource = .local
+        self.addTeardownBlock { @MainActor in settings.speechExecutionSource = stored }
+    }
+
     private func makeHarness() -> Harness {
+        self.pinLocalSpeechSource()
         let harness = Harness()
         self.addTeardownBlock { @MainActor in
             harness.openAllGates()
@@ -1577,6 +1587,7 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
     }
 
     func testRetireDictationResourcesRequiresExactLeaseAndDropsCachedProviders() async throws {
+        self.pinLocalSpeechSource()
         let service = ASRService()
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
