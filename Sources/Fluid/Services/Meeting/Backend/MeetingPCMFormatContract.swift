@@ -146,7 +146,7 @@ nonisolated enum MeetingPCMFormatContractError: LocalizedError, Equatable, Senda
 
     var errorDescription: String? {
         switch self {
-        case let .unsupported(reason): return reason
+        case let .unsupported(reason): return "Unsupported PCM format: \(reason)."
         }
     }
 }

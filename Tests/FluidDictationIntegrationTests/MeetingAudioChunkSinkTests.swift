@@ -20,9 +20,85 @@ private final class MeetingPCMFailureDetails: @unchecked Sendable {
     func values() -> [String] { self.lock.lock(); defer { lock.unlock() }; return self.details }
 }
 
+private final class MeetingWriterEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [MeetingCaptureEvent] = []
+
+    func record(_ event: MeetingCaptureEvent) {
+        self.lock.withLock { self.events.append(event) }
+    }
+
+    func snapshot() -> [MeetingCaptureEvent] {
+        self.lock.withLock { self.events }
+    }
+}
+
 /// P1a's sink fixtures intentionally use real ready CMSampleBuffers.  These tests stay in the
 /// integration target because the sink is an internal harness type, not a package product.
 final class MeetingAudioChunkSinkTests: XCTestCase {
+    func testUnsupportedMicrophoneBuffersReportOneFailureAndRecover() async throws {
+        let root = try self.makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let track = MeetingAudioTrack(
+            id: UUID(),
+            kind: .microphone,
+            sourceIdentifier: "test",
+            sourceDisplayName: "Test",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting,
+            chunks: []
+        )
+        let events = MeetingWriterEventRecorder()
+        let writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: root, chunkDuration: 60) {
+            events.record($0)
+        }
+        let integerFormat = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48_000, channels: 1, interleaved: true))
+        let integerBytes = [Int16](repeating: 100, count: 480).withUnsafeBytes { Data($0) }
+        for index in 0..<1_000 {
+            let sample = try self.makeSampleBuffer(format: integerFormat, bytes: integerBytes, frameCount: 480, pts: Double(index) * 0.01)
+            XCTAssertTrue(writer.enqueue(sample))
+            // Drain each callback to test format rejection, rather than producer backpressure.
+            _ = await writer.snapshot()
+        }
+        let rejected = await writer.snapshot()
+        XCTAssertEqual(rejected.health.status, .degraded)
+        XCTAssertTrue(rejected.chunks.isEmpty)
+        XCTAssertEqual(rejected.health.detail, "Unsupported PCM format: native Float32 LPCM required.")
+        XCTAssertEqual(events.snapshot().count, 2, "One interruption and one degraded health update for the whole failure episode")
+        if case let .trackHealth(trackID, health) = events.snapshot().last {
+            XCTAssertEqual(trackID, track.id)
+            XCTAssertEqual(health.status, .degraded)
+        } else {
+            XCTFail("The coordinator must receive degraded track health")
+        }
+
+        writer.enqueue(try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 10))
+        let recovered = await writer.snapshot()
+        XCTAssertEqual(recovered.health.status, .healthy)
+        XCTAssertNil(recovered.health.detail)
+        if case let .trackHealth(_, health) = events.snapshot().last {
+            XCTAssertEqual(health.status, .healthy)
+        } else {
+            XCTFail("Recovery must publish healthy track status immediately")
+        }
+
+        // The first rejection retires the active sink; later ones fail before a sink exists.
+        // Both paths belong to one new failure episode, even though their error strings differ.
+        for index in 1_001..<1_101 {
+            writer.enqueue(try self.makeSampleBuffer(format: integerFormat, bytes: integerBytes, frameCount: 480, pts: Double(index) * 0.01))
+            _ = await writer.snapshot()
+        }
+        let failures = events.snapshot().filter {
+            if case .interrupted(.writerFailure, _, _) = $0 { return true }
+            return false
+        }
+        XCTAssertEqual(failures.count, 2, "Recovery re-arms reporting exactly once")
+        writer.enqueue(try self.makeRawSampleBuffer(channelCount: 1, layoutTag: nil, frameCount: 480, pts: 11.01))
+        let stopped = await writer.stop()
+        XCTAssertEqual(stopped.chunks.filter { $0.finalizationState == .finalized }.count, 1)
+    }
+
     func testLayoutlessThreeChannelMicrophoneResolvesCopiesConvertsAndWrites() async throws {
         let root = try self.makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -367,13 +443,13 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
 
     func testPCMFormatContractErrorDescriptionRoundTrips() throws {
         let error = MeetingPCMFormatContractError.unsupported("native Float32 LPCM required")
-        XCTAssertEqual(error.errorDescription, "native Float32 LPCM required")
-        XCTAssertEqual(error.localizedDescription, "native Float32 LPCM required")
+        XCTAssertEqual(error.errorDescription, "Unsupported PCM format: native Float32 LPCM required.")
+        XCTAssertEqual(error.localizedDescription, "Unsupported PCM format: native Float32 LPCM required.")
 
         let int16 = try self.makeInt16SampleBuffer(frameCount: 320, pts: 0.5)
         let description = try XCTUnwrap(CMSampleBufferGetFormatDescription(int16))
         XCTAssertThrowsError(try MeetingPCMFormatContract(formatDescription: description)) { thrown in
-            XCTAssertEqual(thrown.localizedDescription, "native Float32 LPCM required")
+            XCTAssertEqual(thrown.localizedDescription, "Unsupported PCM format: native Float32 LPCM required.")
         }
     }
 
@@ -446,9 +522,9 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
         XCTAssertEqual(result.chunks, [])
         // `stop()` reports a chunk-less track as unavailable; the failure detail survives it.
         XCTAssertEqual(result.health.status, .unavailable)
-        XCTAssertEqual(result.health.detail, "native Float32 LPCM required")
+        XCTAssertEqual(result.health.detail, "Unsupported PCM format: native Float32 LPCM required.")
         XCTAssertEqual(failures.value(), 1)
-        XCTAssertEqual(details.values(), ["native Float32 LPCM required"])
+        XCTAssertEqual(details.values(), ["Unsupported PCM format: native Float32 LPCM required."])
     }
 
     func testWriterAcceptsNormalizedInt16Microphone() async throws {
@@ -636,7 +712,12 @@ final class MeetingAudioChunkSinkTests: XCTestCase {
     }
 
     private func makeSampleBuffer(format: AVAudioFormat, interleavedSamples: [Float], frameCount: Int, pts: Double) throws -> CMSampleBuffer {
-        let bytes = interleavedSamples.withUnsafeBytes { Data($0) }
+        try self.makeSampleBuffer(
+            format: format, bytes: interleavedSamples.withUnsafeBytes { Data($0) }, frameCount: frameCount, pts: pts
+        )
+    }
+
+    private func makeSampleBuffer(format: AVAudioFormat, bytes: Data, frameCount: Int, pts: Double) throws -> CMSampleBuffer {
         var block: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault,
