@@ -36,10 +36,21 @@ final class LiveTranscriptionOpenAITests: XCTestCase {
         let chosen = try OpenAILiveAdapter().openingMessages(apiKey: "k", configuration: self.automatic.with(languageCode: "pt"))
         let chosenTranscription = try XCTUnwrap(Self.transcription(chosen))
         XCTAssertEqual(chosenTranscription["languages"] as? [String], ["pt"])
-        let none = LiveTranscriptionConfiguration(provider: .openAI, modelID: "gpt-realtime-whisper", languageCode: nil, languageHints: [])
+        let none = LiveTranscriptionConfiguration(provider: .openAI, modelID: "gpt-live-transcribe", languageCode: nil, languageHints: [])
         let noneTranscription = try XCTUnwrap(Self.transcription(try OpenAILiveAdapter().openingMessages(apiKey: "k", configuration: none)))
         XCTAssertNil(noneTranscription["languages"])
-        XCTAssertEqual(noneTranscription["model"] as? String, "gpt-realtime-whisper")
+        XCTAssertNil(noneTranscription["language"])
+    }
+
+    func testRealtimeWhisperTakesOnlyAPickedLanguageAsTheSingularField() throws {
+        let whisper = LiveTranscriptionConfiguration(provider: .openAI, modelID: "gpt-realtime-whisper", languageCode: nil, languageHints: ["en", "pt"])
+        let hinted = try XCTUnwrap(Self.transcription(try OpenAILiveAdapter().openingMessages(apiKey: "k", configuration: whisper)))
+        XCTAssertEqual(hinted["model"] as? String, "gpt-realtime-whisper")
+        XCTAssertNil(hinted["languages"], "gpt-realtime-whisper does not take `languages`")
+        XCTAssertNil(hinted["language"], "Hints are not a single language")
+        let picked = try XCTUnwrap(Self.transcription(try OpenAILiveAdapter().openingMessages(apiKey: "k", configuration: whisper.with(languageCode: "pt"))))
+        XCTAssertEqual(picked["language"] as? String, "pt")
+        XCTAssertNil(picked["languages"], "Never `language` together with `languages`")
     }
 
     func testAudioIsResampledTo24kHzBase64JSON() throws {

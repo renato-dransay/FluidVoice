@@ -14,7 +14,9 @@ nonisolated struct OpenAILiveAdapter: LiveTranscriptionAdapter {
 
     func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
         // EVIDENCE: Protocols §6.1 marks `intent=transcription` unverified; the plan keeps it until a
-        // manual test shows the connection works without it.
+        // manual test shows the connection works without it. The current transcription guide names no
+        // WebSocket URL and no `intent` parameter at all.
+        // EVIDENCE: https://developers.openai.com/api/docs/guides/realtime-transcription (checked 2026-10-01)
         var request = try LiveHTTPStatus.request("wss://api.openai.com/v1/realtime?intent=transcription", headers: [:])
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         return request
@@ -25,8 +27,16 @@ nonisolated struct OpenAILiveAdapter: LiveTranscriptionAdapter {
     // arrives as an `error` event, which fails the session, so no audio is transcribed unconfigured.
     func openingMessages(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> [LiveTransportMessage] {
         var transcription: [String: Any] = ["model": configuration.modelID]
-        let languages = configuration.languageCode.map { [$0] } ?? configuration.languageHints
-        if !languages.isEmpty { transcription["languages"] = languages }
+        // EVIDENCE: https://developers.openai.com/api/reference/resources/realtime/client-events (checked 2026-10-01):
+        // `languages` is "Supported by `gpt-transcribe` and `gpt-live-transcribe`"; gpt-realtime-whisper takes
+        // the single `language`, as the Whisper migration cookbook's "before" session shows, and never both.
+        if configuration.modelID == "gpt-realtime-whisper" {
+            // One language only, so only a language picked for this recording is sent; hints are not.
+            if let language = configuration.languageCode { transcription["language"] = language }
+        } else {
+            let languages = configuration.languageCode.map { [$0] } ?? configuration.languageHints
+            if !languages.isEmpty { transcription["languages"] = languages }
+        }
         let input: [String: Any] = [
             "format": ["type": "audio/pcm", "rate": 24_000],
             "noise_reduction": ["type": "near_field"],
