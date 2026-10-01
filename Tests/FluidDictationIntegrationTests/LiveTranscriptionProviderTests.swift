@@ -75,6 +75,27 @@ final class LiveTranscriptionProviderTests: XCTestCase {
         XCTAssertEqual(outcome, .failure(.finalTimeout), "Sending the tail counts against the finish deadline")
     }
 
+    func testAnEmptyKeyFailsWithoutContactingTheProvider() async {
+        let transports = LockedBox(0)
+        let provider = LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: " ", localProvider: nil, makeTransport: {
+            transports.value += 1
+            return FakeLiveTransport()
+        })
+        await provider.begin()
+        await provider.append([Float](repeating: 0.1, count: 16_000))
+        for attempt in ["final pass", "retry"] {
+            do {
+                _ = attempt == "retry"
+                    ? try await provider.transcribe([Float](repeating: 0.1, count: 16_000))
+                    : try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+                XCTFail("Expected a missing key for the \(attempt)")
+            } catch {
+                XCTAssertEqual(error as? LiveTranscriptionError, .missingAPIKey, attempt)
+            }
+        }
+        XCTAssertEqual(transports.value, 0, "No socket is made without a key")
+    }
+
     func testReadinessIsLocal() {
         XCTAssertTrue(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "k", localProvider: nil).isReady)
         XCTAssertFalse(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "  ", localProvider: nil).isReady)

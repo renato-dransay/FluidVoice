@@ -52,11 +52,17 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
 
     /// Opens the stream for a new recording. A failure is kept and thrown by `transcribeFinal`.
     func begin() async {
-        let session = self.makeSession()
-        self.session = session
         self.startFailure = nil
         self.appendedSamples = 0
         self.isCancelled = false
+        // Without a key the provider is never contacted; the final pass reports the missing key.
+        guard self.isReady else {
+            self.session = nil
+            self.startFailure = LiveTranscriptionError.missingAPIKey
+            return
+        }
+        let session = self.makeSession()
+        self.session = session
         do { try await session.start() } catch { self.startFailure = error }
     }
 
@@ -101,6 +107,7 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
 
     /// Retry of a saved recording: a new connection, replayed at the provider's accepted speed.
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        guard self.isReady else { throw LiveTranscriptionError.missingAPIKey }
         let text = try await self.makeSession().replay(samples)
         return ASRTranscriptionResult(text: text)
     }
