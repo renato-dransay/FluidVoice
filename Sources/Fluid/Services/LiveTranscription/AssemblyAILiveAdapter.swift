@@ -8,6 +8,14 @@ nonisolated struct AssemblyAILiveAdapter: LiveTranscriptionAdapter {
     // AssemblyAI throttles at 1.25x real time.
     var maximumReplaySpeed: Double? { 1.2 }
 
+    // EVIDENCE: https://www.assemblyai.com/docs/streaming/api-spec/streaming-websocket (checked 2026-10-01):
+    // `language_codes` is "Universal-3.6 Pro and Universal-3.5 Pro Streaming only" and accepts these codes;
+    // Universal-3.5 Pro takes the same set minus af, yue, et, gl, ko, mr, nn, fa, ro, ru, ur, xh and zu.
+    static let steerableLanguageCodes: Set<String> = [
+        "af", "ar", "yue", "ca", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "he", "hi", "it", "ja",
+        "ko", "zh", "mr", "no", "nn", "fa", "pt", "ro", "ru", "es", "sv", "tr", "ur", "vi", "xh", "zu",
+    ]
+
     func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
         let languages = configuration.languageCode.map { [$0] } ?? configuration.languageHints
         var items = [
@@ -15,7 +23,10 @@ nonisolated struct AssemblyAILiveAdapter: LiveTranscriptionAdapter {
             URLQueryItem(name: "encoding", value: "pcm_s16le"),
             URLQueryItem(name: "sample_rate", value: "16000"),
         ]
-        if !languages.isEmpty, let json = try? JSONSerialization.data(withJSONObject: languages), let list = String(bytes: json, encoding: .utf8) {
+        // JUDGMENT: steering toward part of the user's languages would bias against the rest, so a list with
+        // any code the model does not take is left out whole and the model code-switches on its own.
+        if configuration.modelID.hasPrefix("universal-3"), !languages.isEmpty, languages.allSatisfy(Self.steerableLanguageCodes.contains),
+           let json = try? JSONSerialization.data(withJSONObject: languages), let list = String(bytes: json, encoding: .utf8) {
             items.append(URLQueryItem(name: "language_codes", value: list))
         }
         if configuration.languageCode == nil { items.append(URLQueryItem(name: "language_detection", value: "true")) }
@@ -57,8 +68,13 @@ nonisolated struct AssemblyAILiveAdapter: LiveTranscriptionAdapter {
     }
 
     func failure(closeCode: Int, reason: String?) -> LiveTranscriptionError {
-        // The docs name 1008 for both a bad key and too many sessions; only the reason tells them apart.
-        if closeCode == 1008 { return reason?.localizedCaseInsensitiveContains("concurrent") == true ? .rateLimited : .authentication }
+        // The docs name 1008 for a bad key, too many sessions and account issues such as an insufficient
+        // balance; only the reason tells them apart.
+        // EVIDENCE: https://www.assemblyai.com/docs/streaming/common-session-errors-and-closures (checked 2026-10-01)
+        if closeCode == 1008 {
+            if reason?.localizedCaseInsensitiveContains("concurrent") == true { return .rateLimited }
+            return reason?.localizedCaseInsensitiveContains("balance") == true ? .quotaExhausted : .authentication
+        }
         return Self.failure(code: closeCode)
     }
 

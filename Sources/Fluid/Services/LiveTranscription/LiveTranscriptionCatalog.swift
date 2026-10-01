@@ -32,7 +32,9 @@ nonisolated enum LiveTranscriptionCatalog {
                 .init(id: "universal-streaming-multilingual", name: "Universal-Streaming Multilingual"),
             ],
             detectsLanguageAutomatically: true,
-            languageCodes: nil,
+            // The languages Universal-3.6 Pro can be steered toward; Universal-Streaming Multilingual takes no
+            // language and detects one per turn.
+            languageCodes: AssemblyAILiveAdapter.steerableLanguageCodes,
             keyURL: URL(string: "https://www.assemblyai.com/dashboard"),
             usageURL: URL(string: "https://www.assemblyai.com/dashboard")
         ),

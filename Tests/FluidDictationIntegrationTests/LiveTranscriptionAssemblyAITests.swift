@@ -22,11 +22,24 @@ final class LiveTranscriptionAssemblyAITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "k")
     }
 
-    func testUniversalStreamingAsksForFormattedTurns() throws {
+    func testUniversalStreamingAsksForFormattedTurnsAndTakesNoLanguageList() throws {
         let configuration = LiveTranscriptionConfiguration(provider: .assemblyAI, modelID: "universal-streaming-multilingual", languageCode: "pt", languageHints: [])
         let query = try AssemblyAILiveAdapter().connectionRequest(apiKey: "k", configuration: configuration).url?.query ?? ""
         XCTAssertTrue(query.contains("format_turns=true"))
-        XCTAssertTrue(query.contains("language_codes=%5B%22pt%22%5D"))
+        XCTAssertFalse(query.contains("language_codes"), "language_codes is Universal-3 Pro only")
+    }
+
+    func testAChosenLanguageSteersAndAnUnacceptedHintDropsTheList() throws {
+        let chosen = try AssemblyAILiveAdapter().connectionRequest(apiKey: "k", configuration: self.automatic.with(languageCode: "pt")).url?.query ?? ""
+        XCTAssertTrue(chosen.contains("language_codes=%5B%22pt%22%5D"))
+        XCTAssertFalse(chosen.contains("language_detection"))
+        let polish = LiveTranscriptionConfiguration(provider: .assemblyAI, modelID: "universal-3-6-pro", languageCode: nil, languageHints: ["pl", "en"])
+        let hinted = try AssemblyAILiveAdapter().connectionRequest(apiKey: "k", configuration: polish).url?.query ?? ""
+        XCTAssertFalse(hinted.contains("language_codes"), "Steering toward English alone would bias against Polish")
+    }
+
+    func testTheCatalogListsTheLanguagesTheModelSteersToward() {
+        XCTAssertEqual(LiveTranscriptionCatalog.info(for: .assemblyAI).languageCodes, AssemblyAILiveAdapter.steerableLanguageCodes)
     }
 
     func testBeginIsReadyAndTurnsAreReplacedUntilFormattedEnd() {
@@ -49,6 +62,7 @@ final class LiveTranscriptionAssemblyAITests: XCTestCase {
         XCTAssertEqual(adapter.parse(.text(#"{"type":"Error","error_code":3009,"error":"PRIVATE"}"#)), [.failure(.rateLimited)])
         XCTAssertEqual(adapter.failure(closeCode: 1008, reason: "Too many concurrent sessions"), .rateLimited)
         XCTAssertEqual(adapter.failure(closeCode: 1008, reason: "Unauthorized Connection"), .authentication)
+        XCTAssertEqual(adapter.failure(closeCode: 1008, reason: "Unauthorized Connection: insufficient account balance"), .quotaExhausted)
     }
 
     func testFinishForcesTheEndpointThenTerminates() {
