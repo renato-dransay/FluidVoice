@@ -56,6 +56,13 @@ struct LiveTranscriptionConfiguration: Equatable {
     var liveDictationConfiguration: LiveTranscriptionConfiguration?
     var usesLiveCloudDictation: Bool { liveDictationConfiguration != nil }
     func liveTranscriptionAPIKey(for provider: String) -> String { "live-fixture-credential" }
+    static func dictationEngineBadge(usesOpenRouter: Bool, liveProvider: String?) -> String {
+        if usesOpenRouter { return "OPENROUTER" }
+        return liveProvider.map { "\($0.uppercased()) · LIVE" } ?? "ON-DEVICE"
+    }
+    var dictationEngineBadge: String {
+        Self.dictationEngineBadge(usesOpenRouter: usesCloudTranscription, liveProvider: liveDictationConfiguration?.provider)
+    }
 }
 struct LiveProviderTestRun {
     let provider: String
@@ -380,7 +387,9 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(live.configuration.provider == "deepgram" && live.apiKey == "live-fixture-credential", "The test uses the armed provider and its key")
             check(service.frozenSpeechExecutionSource == .liveCloud && service.frozenCloudConfiguration == nil, "A test lease is not an OpenRouter lease")
             check(service.liveProviderTestRun?.provider == "deepgram", "The lease records the provider test")
+            check(service.dictationEngineBadge == "DEEPGRAM · LIVE", "The overlay names the tested provider, never the engine in settings")
             service.releaseExclusiveActivity(dictation)
+            check(service.dictationEngineBadge == "OPENROUTER", "With no recording the overlay names the engine in settings")
             check(service.liveProviderTestRun?.provider == "deepgram", "The test run outlives the lease for the stop path")
             passes += 1
 

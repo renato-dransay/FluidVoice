@@ -794,6 +794,16 @@ final class ASRService: ObservableObject {
         self.asrReadyBeforeLiveLease = nil
     }
 
+    /// The overlay style menu's engine header: the engine the recording in progress streams to, such as
+    /// an armed provider test, or the engine in settings when nothing is recording.
+    var dictationEngineBadge: String {
+        guard self.activeActivityLease != nil else { return SettingsStore.shared.dictationEngineBadge }
+        return SettingsStore.dictationEngineBadge(
+            usesOpenRouter: self.isUsingCloudTranscription,
+            liveProvider: (self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider)?.configuration.provider
+        )
+    }
+
     /// Apply an overlay language choice to the recording already in progress.
     /// Other frozen request settings remain tied to the original activity lease.
     func refreshActiveCloudDictationLanguage() {

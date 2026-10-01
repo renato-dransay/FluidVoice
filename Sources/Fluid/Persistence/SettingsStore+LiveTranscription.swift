@@ -122,10 +122,16 @@ extension SettingsStore {
         (self.usesCloudTranscription || self.usesLiveCloudDictation) && self.cloudTranscriptionPrimaryLanguageCode != nil
     }
 
-    /// The overlay style menu's engine header. Never "ON-DEVICE" while audio leaves the Mac.
+    /// The overlay style menu's engine header for the next dictation. During a recording the header
+    /// comes from `ASRService.dictationEngineBadge`, which names the engine that receives its audio.
     var dictationEngineBadge: String {
-        if self.usesCloudTranscription { return "OPENROUTER" }
-        if let provider = self.activeLiveProvider { return "\(LiveTranscriptionCatalog.info(for: provider).name.uppercased()) · LIVE" }
+        Self.dictationEngineBadge(usesOpenRouter: self.usesCloudTranscription, liveProvider: self.activeLiveProvider)
+    }
+
+    /// Never "ON-DEVICE" while audio leaves the Mac.
+    static func dictationEngineBadge(usesOpenRouter: Bool, liveProvider: LiveTranscriptionProviderID?) -> String {
+        if usesOpenRouter { return "OPENROUTER" }
+        if let liveProvider { return "\(LiveTranscriptionCatalog.info(for: liveProvider).name.uppercased()) · LIVE" }
         return "ON-DEVICE"
     }
 

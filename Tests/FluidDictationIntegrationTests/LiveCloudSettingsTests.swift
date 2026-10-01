@@ -101,6 +101,12 @@ final class LiveCloudSettingsTests: XCTestCase {
         ))
     }
 
+    func testTheEngineBadgeNamesTheEngineThatReceivesTheAudio() {
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: false, liveProvider: nil), "ON-DEVICE")
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: true, liveProvider: nil), "OPENROUTER")
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: false, liveProvider: .deepgram), "DEEPGRAM · LIVE")
+    }
+
     private func usableProvider(
         stored: SpeechExecutionSource,
         activeProvider: LiveTranscriptionProviderID?,

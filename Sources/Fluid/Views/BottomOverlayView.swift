@@ -1965,7 +1965,7 @@ private struct BottomOverlayPromptMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             if self.promptMode.normalized == .dictate {
                 if !self.isCompact {
-                    Text(self.settings.dictationEngineBadge)
+                    Text(AppServices.shared.asr.dictationEngineBadge)
                         .font(.fluidSystem(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.4))
                         .padding(.horizontal, 8)
