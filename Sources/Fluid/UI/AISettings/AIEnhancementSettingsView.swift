@@ -50,8 +50,6 @@ struct AIEnhancementSettingsView: View {
     @State var showsAppSpecificStyles = false
     @State var promptEditorPrimarySelectionDraft: SettingsStore.DictationPromptSelection? = nil
     @State var promptEditorShortcutDraft: HotkeyShortcut? = nil
-    @State var promptEditorProviderIDDraft: String = ""
-    @State var promptEditorModelDraft: String = ""
     @State var promptEditorOriginalConfiguration: SettingsStore.DictationPromptConfiguration? = nil
 
     var body: some View {

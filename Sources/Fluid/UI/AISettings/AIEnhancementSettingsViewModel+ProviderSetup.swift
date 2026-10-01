@@ -5,15 +5,6 @@ extension AIEnhancementSettingsViewModel {
 
     /// Preserve prompt text and hotkeys; only disconnect routes using the removed provider.
     func clearProviderAssignments(for providerID: String) {
-        var configurations = self.settings.dictationPromptConfigurations
-        for (id, var configuration) in configurations where configuration.providerID == providerID {
-            configuration.providerID = ""
-            configuration.modelName = ""
-            configurations[id] = configuration
-        }
-        if configurations != self.settings.dictationPromptConfigurations {
-            self.settings.dictationPromptConfigurations = configurations
-        }
         if self.settings.rewriteModeSelectedProviderID == providerID {
             self.settings.rewriteModeSelectedProviderID = ""
             self.settings.rewriteModeSelectedModel = nil
@@ -27,11 +18,10 @@ extension AIEnhancementSettingsViewModel {
     /// Keep legacy connections discoverable even when their verification or credentials expire.
     func addedProviderItems(from items: [ProviderItemData]) -> [ProviderItemData] {
         let explicit = Set(UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
-        let referenced = Set(self.settings.dictationPromptConfigurations.values.map(\.providerID))
         return items.filter { item in
             guard item.id != PrivateAIProviderFeature.shared.providerID else { return false }
             let key = self.providerKey(for: item.id)
-            return !item.isBuiltIn || explicit.contains(item.id) || referenced.contains(item.id)
+            return !item.isBuiltIn || explicit.contains(item.id)
                 || self.settings.selectedProviderID == item.id
                 || !self.providerAPIKey(for: item.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || self.settings.verifiedProviderFingerprints[key] != nil

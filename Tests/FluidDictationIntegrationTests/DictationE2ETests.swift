@@ -1939,11 +1939,7 @@ extension DictationE2ETests {
             settings.rewriteModeSelectedProviderID = "apple-intelligence"
             settings.rewriteModeSelectedModel = "System Model"
             settings.dictationPromptConfigurations = [
-                "__default__": SettingsStore.DictationPromptConfiguration(
-                    shortcut: shortcut,
-                    providerID: "apple-intelligence",
-                    modelName: "System Model"
-                ),
+                "__default__": SettingsStore.DictationPromptConfiguration(shortcut: shortcut),
             ]
 
             settings.purgeRetiredAppleIntelligenceState()
@@ -1959,15 +1955,14 @@ extension DictationE2ETests {
             XCTAssertNil(settings.selectedModelByProvider["apple-intelligence"])
             XCTAssertNil(settings.verifiedProviderFingerprints["apple-intelligence"])
             XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.shortcut, shortcut)
-            XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.providerID, "")
-            XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.modelName, "")
             XCTAssertFalse(DictationAIPostProcessingGate.isProviderConfigured())
         }
     }
 
-    func testDictationProviderRouteUsesPromptConfigurationWithoutMutatingGlobalSelection() {
+    func testEveryStyleUsesTheSelectedProviderAndModelAndIgnoresLegacyStyleModels() {
         self.withRestoredDefaults(
             keys: [
+                self.dictationPromptProfilesKey,
                 self.selectedProviderIDKey,
                 self.selectedModelByProviderKey,
                 self.verifiedProviderFingerprintsKey,
@@ -1977,33 +1972,35 @@ extension DictationE2ETests {
             ]
         ) {
             let settings = SettingsStore.shared
-            settings.selectedProviderID = "openai"
-            settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "test-local-model"]
+            let profile = SettingsStore.DictationPromptProfile(name: "Casual", prompt: "Keep it casual.", mode: .dictate)
+            settings.dictationPromptProfiles = [profile]
+            settings.selectedProviderID = "ollama"
+            settings.selectedModelByProvider = ["ollama": "card-model", "openai": "gpt-4.1"]
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
                     baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
                     apiKey: settings.providerAPIKeys["ollama"] ?? ""
                 ) ?? "",
             ]
-            settings.setDictationPromptSelection(.default, for: .primary)
-            settings.setDictationPromptConfiguration(
-                SettingsStore.DictationPromptConfiguration(
-                    providerID: "ollama",
-                    modelName: "test-local-model"
-                ),
-                for: .default
-            )
+            // Builds before styles followed the AI Providers card saved a provider and model per style.
+            let legacyConfigurations = """
+            {"__default__":{"providerID":"openai","modelName":"gpt-4.1"},
+             "profile:\(profile.id)":{"providerID":"openai","modelName":"gpt-4.1"}}
+            """
+            UserDefaults.standard.set(Data(legacyConfigurations.utf8), forKey: self.dictationPromptConfigurationsKey)
 
-            let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary)
+            for selection in [SettingsStore.DictationPromptSelection.default, .profile(profile.id)] {
+                settings.setDictationPromptSelection(selection, for: .primary)
+                let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary)
 
-            XCTAssertEqual(route.providerID, "ollama")
-            XCTAssertEqual(route.providerKey, "ollama")
-            XCTAssertEqual(route.model, "test-local-model")
-            XCTAssertEqual(settings.selectedProviderID, "openai")
-            XCTAssertEqual(settings.selectedModelByProvider["openai"], "gpt-4.1")
+                XCTAssertEqual(route.providerID, "ollama")
+                XCTAssertEqual(route.model, "card-model")
+                XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
+            }
 
-            XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
-            XCTAssertEqual(settings.selectedProviderID, "openai")
+            settings.selectedModelByProvider["ollama"] = "new-card-model"
+            XCTAssertEqual(DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary).model, "new-card-model")
+            XCTAssertEqual(settings.dictationPromptConfiguration(for: .profile(profile.id)), SettingsStore.DictationPromptConfiguration())
         }
     }
 
@@ -2034,17 +2031,6 @@ extension DictationE2ETests {
         }
     }
 
-    func testActivePromptTestTracksDraftProviderChanges() {
-        let coordinator = DictationPromptTestCoordinator.shared
-        defer { coordinator.deactivate() }
-        coordinator.activate(draftPromptText: "Polish", providerID: "ollama", model: "first")
-
-        coordinator.updateDraftConfiguration(providerID: "openai", model: "second")
-
-        XCTAssertEqual(coordinator.draftProviderID, "openai")
-        XCTAssertEqual(coordinator.draftModel, "second")
-    }
-
     func testLMStudioCleanupRouteIsIndependentOfFluidIntelligenceProviderState() {
         self.withRestoredDefaults(
             keys: [
@@ -2058,24 +2044,12 @@ extension DictationE2ETests {
         ) {
             let settings = SettingsStore.shared
             let lmStudioModel = "local-cleanup-model"
-            let globalProviderID = PrivateFeatures.privateAIProvider
-                ? PrivateAIProviderFeature.shared.providerID
-                : "openai"
-            settings.selectedProviderID = globalProviderID
+            settings.selectedProviderID = "lmstudio"
             settings.selectedModelByProvider = [
-                globalProviderID: PrivateFeatures.privateAIProvider
-                    ? PrivateAIIntegrationService.configuredModelID
-                    : "gpt-4.1",
+                PrivateAIProviderFeature.shared.providerID: PrivateAIIntegrationService.configuredModelID,
                 "lmstudio": lmStudioModel,
             ]
             settings.setDictationPromptSelection(.default, for: .primary)
-            settings.setDictationPromptConfiguration(
-                SettingsStore.DictationPromptConfiguration(
-                    providerID: "lmstudio",
-                    modelName: lmStudioModel
-                ),
-                for: .default
-            )
             settings.verifiedProviderFingerprints = [:]
 
             let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary)
@@ -2093,7 +2067,7 @@ extension DictationE2ETests {
             ]
 
             XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
-            XCTAssertEqual(settings.selectedProviderID, globalProviderID)
+            XCTAssertEqual(settings.selectedProviderID, "lmstudio")
         }
     }
 
@@ -2110,15 +2084,11 @@ extension DictationE2ETests {
         )
     }
 
-    func testResettingDefaultCleanupConfigurationRemovesStaleProviderAndModel() {
+    func testResettingDefaultCleanupConfigurationRemovesItsShortcut() {
         self.withRestoredDefaults(keys: [self.dictationPromptConfigurationsKey]) {
             let settings = SettingsStore.shared
             settings.setDictationPromptConfiguration(
-                SettingsStore.DictationPromptConfiguration(
-                    shortcut: HotkeyShortcut(keyCode: 3, modifierFlags: [.option]),
-                    providerID: "lmstudio",
-                    modelName: "removed-model"
-                ),
+                SettingsStore.DictationPromptConfiguration(shortcut: HotkeyShortcut(keyCode: 3, modifierFlags: [.option])),
                 for: .default
             )
 
@@ -2177,7 +2147,7 @@ extension DictationE2ETests {
                 ),
             ]
             settings.dictationPromptRoutingScope = .allApps
-            settings.selectedProviderID = "openai"
+            settings.selectedProviderID = "ollama"
             settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "editor-model"]
             settings.verifiedProviderFingerprints = [
                 "ollama": DictationAIPostProcessingGate.providerFingerprint(
@@ -2186,20 +2156,6 @@ extension DictationE2ETests {
                 ) ?? "",
             ]
             settings.setDictationPromptSelection(.default, for: .primary)
-            settings.setDictationPromptConfiguration(
-                SettingsStore.DictationPromptConfiguration(
-                    providerID: "openai",
-                    modelName: "gpt-4.1"
-                ),
-                for: .default
-            )
-            settings.setDictationPromptConfiguration(
-                SettingsStore.DictationPromptConfiguration(
-                    providerID: "ollama",
-                    modelName: "editor-model"
-                ),
-                for: .profile(profile.id)
-            )
 
             let route = DictationProviderRoute.resolve(
                 settings: settings,
@@ -2209,7 +2165,7 @@ extension DictationE2ETests {
 
             XCTAssertEqual(route.providerID, "ollama")
             XCTAssertEqual(route.model, "editor-model")
-            XCTAssertEqual(settings.selectedProviderID, "openai")
+            XCTAssertEqual(settings.selectedProviderID, "ollama")
             XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appBundleID))
         }
     }
@@ -2403,7 +2359,6 @@ extension DictationE2ETests {
 
             XCTAssertEqual(viewModel.selectedProviderID, "lmstudio")
             XCTAssertEqual(settings.selectedProviderID, "openai")
-            XCTAssertEqual(viewModel.defaultVerifiedPromptProviderID(), "openai")
 
             viewModel.finishConfiguringProvider()
             XCTAssertEqual(viewModel.selectedProviderID, "openai")
@@ -2411,23 +2366,9 @@ extension DictationE2ETests {
         }
     }
 
-    func testLegacyFluidIntelligenceDefaultUsesPrivateRouteOnlyWithoutExplicitConfiguration() {
+    func testLegacyFluidIntelligenceProviderIsAllowedOnlyForTheDefaultStyle() {
         let providerID = PrivateAIProviderFeature.shared.providerID
 
-        XCTAssertTrue(
-            DictationProviderRoute.shouldUseLegacyPrivateAIRoute(
-                selectedProviderID: providerID,
-                configuredProviderID: "",
-                configuredModel: ""
-            )
-        )
-        XCTAssertFalse(
-            DictationProviderRoute.shouldUseLegacyPrivateAIRoute(
-                selectedProviderID: providerID,
-                configuredProviderID: "lmstudio",
-                configuredModel: "local-model"
-            )
-        )
         XCTAssertTrue(
             DictationProviderRoute.allowsPrivateAIRoute(
                 selection: .default,

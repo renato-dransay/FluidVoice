@@ -2,7 +2,7 @@
 
 **Live cloud** is a third voice engine, next to **Local** and **OpenRouter**. It streams your dictation audio to a speech provider of your choice while you speak, using your own API key for that provider. Words appear in the overlay as you talk, the same way they do with a local model, and the final text arrives a few hundred milliseconds after you press the stop key.
 
-OpenRouter works differently: it has no streaming speech endpoint, so the app uploads the whole recording after you stop and waits for one response that carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the text provider configured in **AI Settings > AI Providers**.
+OpenRouter works differently: it has no streaming speech endpoint, so the app uploads the whole recording after you stop and waits for one response that carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the text provider and model chosen in **AI Settings > AI Providers**. Styles have no provider or model of their own.
 
 ## Providers
 

@@ -16,13 +16,12 @@ private struct PromptCardAssignments {
     let onMakeDefault: () -> Void
 }
 
+/// The provider and model a style card shows. Styles cannot pick their own; they show the
+/// selection from the AI Providers card, or the Voice Engine or Fluid Intelligence model.
 private struct PromptCardModelPicker {
     let summary: String
     let selectedModel: String
-    let models: [String]
     let providerName: String
-    let onSelectModel: (String) -> Void
-    let onOpenProviders: () -> Void
 }
 
 private struct PromptAdvancedDisclosureStyle: DisclosureGroupStyle {
@@ -433,33 +432,28 @@ extension AIEnhancementSettingsView {
         let configuration = self.settings.dictationPromptConfiguration(for: selection)
         return PromptCardAssignments(
             isDefault: self.viewModel.isDictationPromptSelection(selection, for: .primary),
-            isReady: self.isPromptConfigurationReady(selection: selection, isPrivateAI: isPrivateAI),
+            isReady: self.isPromptConfigurationReady(isPrivateAI: isPrivateAI),
             shortcutDisplay: configuration.shortcut?.displayString,
-            modelPicker: self.promptModelPicker(selection: selection, isPrivateAI: isPrivateAI),
+            modelPicker: self.promptModelPicker(isPrivateAI: isPrivateAI),
             onMakeDefault: {
                 self.viewModel.setDictationPromptSelection(selection, for: .primary)
             }
         )
     }
 
-    private func isPromptConfigurationReady(
-        selection: SettingsStore.DictationPromptSelection,
-        isPrivateAI: Bool
-    ) -> Bool {
+    private func isPromptConfigurationReady(isPrivateAI: Bool) -> Bool {
         if self.settings.usesCombinedCloudDictation {
             return self.isCloudDictationConfigured
         }
         if isPrivateAI {
             return self.viewModel.isPrivateAIPromptAvailable()
         }
+        return self.isSelectedExternalProviderReady
+    }
 
-        let configuration = self.settings.dictationPromptConfiguration(for: selection)
-        let configuredProviderID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerID = configuredProviderID.isEmpty
-            ? self.defaultExternalPromptProviderID
-            : configuredProviderID
-        let configuredModel = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = configuredModel.isEmpty ? self.viewModel.selectedModel(for: providerID) : configuredModel
+    private var isSelectedExternalProviderReady: Bool {
+        let providerID = self.defaultExternalPromptProviderID
+        let model = self.viewModel.selectedModel(for: providerID)
         return !providerID.isEmpty && !model.isEmpty && self.viewModel.connectionStatus(for: providerID) == .success
     }
 
@@ -482,10 +476,7 @@ extension AIEnhancementSettingsView {
         PromptCardModelPicker(
             summary: "OpenRouter · \(ModelDisplayName.forID(self.settings.cloudDictationModelID))",
             selectedModel: self.settings.cloudDictationModelID,
-            models: [],
-            providerName: "OpenRouter (Voice Engine)",
-            onSelectModel: { _ in },
-            onOpenProviders: {}
+            providerName: "OpenRouter (Voice Engine)"
         )
     }
 
@@ -508,17 +499,8 @@ extension AIEnhancementSettingsView {
         self.promptEditorPrimarySelectionDraft = self.viewModel.dictationPromptSelection(for: .primary)
 
         if case .newPrompt = mode {
-            let pending = self.viewModel.pendingNewPromptConfiguration
             self.promptEditorOriginalConfiguration = nil
-            self.promptEditorShortcutDraft = pending?.shortcut
-            let providerID = pending?.providerID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            self.promptEditorProviderIDDraft = providerID.isEmpty && !self.isCombinedCloudPromptEditor
-                ? self.viewModel.defaultVerifiedPromptProviderID()
-                : providerID
-            self.promptEditorModelDraft = pending?.modelName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if self.promptEditorModelDraft.isEmpty, !self.promptEditorProviderIDDraft.isEmpty {
-                self.promptEditorModelDraft = self.viewModel.selectedModel(for: self.promptEditorProviderIDDraft)
-            }
+            self.promptEditorShortcutDraft = self.viewModel.pendingNewPromptConfiguration?.shortcut
             return
         }
 
@@ -527,19 +509,6 @@ extension AIEnhancementSettingsView {
         self.promptEditorOriginalConfiguration = configuration
         self.promptEditorShortcutDraft = configuration?.shortcut
 
-        let providerID = configuration?.providerID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        self.promptEditorProviderIDDraft = providerID.isEmpty && !self.isCombinedCloudPromptEditor
-            ? self.viewModel.defaultVerifiedPromptProviderID() : providerID
-        self.promptEditorModelDraft = configuration?.modelName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if self.promptEditorModelDraft.isEmpty, !self.promptEditorProviderIDDraft.isEmpty {
-            self.promptEditorModelDraft = self.viewModel.selectedModel(for: self.promptEditorProviderIDDraft)
-        }
-
-        if mode.isPrivateAI {
-            self.promptEditorProviderIDDraft = PrivateAIProviderFeature.shared.providerID
-            self.promptEditorModelDraft = PrivateAIIntegrationService.configuredModelID
-        }
-
         if mode.isDefault, let promptMode = mode.mode {
             self.viewModel.draftPromptMode = promptMode.normalized
         }
@@ -547,12 +516,8 @@ extension AIEnhancementSettingsView {
 
     private func applyPromptEditorConfigurationDraft(mode: PromptEditorMode) {
         if case .newPrompt = mode {
-            let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            let modelName = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             self.viewModel.pendingNewPromptConfiguration = SettingsStore.DictationPromptConfiguration(
-                shortcut: self.promptEditorShortcutDraft,
-                providerID: providerID,
-                modelName: modelName
+                shortcut: self.promptEditorShortcutDraft
             )
             return
         }
@@ -561,13 +526,7 @@ extension AIEnhancementSettingsView {
             if self.promptEditorPrimarySelectionDraft == selection {
                 self.viewModel.setDictationPromptSelection(selection, for: .primary)
             }
-            let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            let modelName = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-            let configuration = SettingsStore.DictationPromptConfiguration(
-                shortcut: self.promptEditorShortcutDraft,
-                providerID: providerID,
-                modelName: modelName
-            )
+            let configuration = SettingsStore.DictationPromptConfiguration(shortcut: self.promptEditorShortcutDraft)
             self.settings.setDictationPromptConfiguration(configuration, for: selection)
             NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
         }
@@ -588,10 +547,7 @@ extension AIEnhancementSettingsView {
             return true
         }
         guard mode.normalized == .dictate else { return false }
-        let configuration = self.settings.dictationPromptConfiguration(for: .default)
-        return configuration.shortcut != nil ||
-            !configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            !configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return self.settings.dictationPromptConfiguration(for: .default).shortcut != nil
     }
 
     private func resetDefaultPrompt(for mode: SettingsStore.PromptMode) {
@@ -600,8 +556,6 @@ extension AIEnhancementSettingsView {
             self.settings.removeDictationPromptConfiguration(for: .default)
             self.promptEditorOriginalConfiguration = nil
             self.promptEditorShortcutDraft = nil
-            self.promptEditorProviderIDDraft = ""
-            self.promptEditorModelDraft = ""
             NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
         }
         self.viewModel.openDefaultPromptViewer(for: mode)
@@ -613,7 +567,7 @@ extension AIEnhancementSettingsView {
                 isDefault: false,
                 isReady: self.isPromptEditorConfigurationReady(),
                 shortcutDisplay: self.promptEditorShortcutDraft?.displayString,
-                modelPicker: self.promptEditorModelPicker(),
+                modelPicker: self.promptModelPicker(isPrivateAI: false),
                 onMakeDefault: {
                     // New prompts can't be the default key until saved
                 }
@@ -628,7 +582,7 @@ extension AIEnhancementSettingsView {
                 ? self.viewModel.isPrivateAIPromptAvailable()
                 : self.isPromptEditorConfigurationReady(),
             shortcutDisplay: self.promptEditorShortcutDraft?.displayString,
-            modelPicker: self.promptEditorModelPicker(),
+            modelPicker: self.promptModelPicker(isPrivateAI: mode.isPrivateAI),
             onMakeDefault: {
                 self.promptEditorPrimarySelectionDraft = selection
             }
@@ -639,57 +593,7 @@ extension AIEnhancementSettingsView {
         if self.isCombinedCloudPromptEditor {
             return self.isCloudDictationConfigured
         }
-        let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !providerID.isEmpty && !model.isEmpty && self.viewModel.connectionStatus(for: providerID) == .success
-    }
-
-    private func promptEditorModelPicker() -> PromptCardModelPicker? {
-        if self.isCombinedCloudPromptEditor {
-            return self.cloudDictationModelPicker
-        }
-        let providerID = self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !providerID.isEmpty else {
-            return PromptCardModelPicker(
-                summary: "Choose provider first",
-                selectedModel: "",
-                models: [],
-                providerName: "",
-                onSelectModel: { _ in },
-                onOpenProviders: {
-                    self.selectedConfigurationSection = .providers
-                    self.expandedProviderID = nil
-                }
-            )
-        }
-
-        let providerName = self.viewModel.providerDisplayName(for: providerID)
-        let selectedModel = self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(ModelDisplayName.forID(selectedModel))"
-
-        return PromptCardModelPicker(
-            summary: summary,
-            selectedModel: selectedModel,
-            models: self.viewModel.models(for: providerID),
-            providerName: providerName,
-            onSelectModel: { modelName in
-                self.promptEditorModelDraft = modelName
-                self.syncDraftToPendingConfig()
-            },
-            onOpenProviders: {
-                self.selectedConfigurationSection = .providers
-                self.expandedProviderID = providerID
-            }
-        )
-    }
-
-    private func syncDraftToPendingConfig() {
-        guard self.viewModel.promptEditorMode?.isNewPrompt == true else { return }
-        self.viewModel.pendingNewPromptConfiguration = SettingsStore.DictationPromptConfiguration(
-            shortcut: self.promptEditorShortcutDraft,
-            providerID: self.promptEditorProviderIDDraft.trimmingCharacters(in: .whitespacesAndNewlines),
-            modelName: self.promptEditorModelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        return self.isSelectedExternalProviderReady
     }
 
     private func shouldShowPromptEditorConfigurationPanel(for mode: PromptEditorMode) -> Bool {
@@ -734,8 +638,7 @@ extension AIEnhancementSettingsView {
                         }
                     }
                 } else {
-                    self.promptEditorProviderRow
-                    self.promptEditorModelRow
+                    self.promptEditorSelectedProviderRow
                     self.promptEditorProviderGuidance
                 }
             }
@@ -844,32 +747,23 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var promptEditorProviderRow: some View {
-        self.promptEditorConfigRow(title: "AI provider", description: "Verified providers only.") {
-            Menu {
-                let providers = self.viewModel.verifiedPromptProviders()
-                if providers.isEmpty {
-                    Text("No verified providers")
-                } else {
-                    ForEach(providers) { provider in
-                        Button {
-                            self.promptEditorProviderIDDraft = provider.id
-                            let models = self.viewModel.models(for: provider.id)
-                            if !models.contains(self.promptEditorModelDraft) {
-                                self.promptEditorModelDraft = self.viewModel.selectedModel(for: provider.id)
-                            }
-                            self.syncDraftToPendingConfig()
-                        } label: {
-                            Label(provider.name, systemImage: provider.id == self.promptEditorProviderIDDraft ? "checkmark" : "")
-                        }
-                    }
-                }
-            } label: { Text(self.viewModel.providerDisplayName(for: self.promptEditorProviderIDDraft)) }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fluidDropdownStyle()
-                .frame(width: AISettingsLayout.promptEditorControlColumnWidth)
-                .buttonStyle(.plain)
+    private var promptEditorSelectedProviderRow: some View {
+        self.promptEditorConfigRow(title: "AI model", description: "Set in AI Providers.") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(self.selectedProviderDescription(self.promptModelPicker(isPrivateAI: false)))
+                    .font(self.theme.typography.bodySmallStrong)
+                Text("Every style uses the provider and model chosen on the AI Providers card.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    private func selectedProviderDescription(_ picker: PromptCardModelPicker) -> String {
+        guard !picker.providerName.isEmpty else { return "No AI provider selected" }
+        guard !picker.selectedModel.isEmpty else { return "\(picker.providerName) · No model selected" }
+        return "\(picker.providerName) · \(ModelDisplayName.forID(picker.selectedModel))"
     }
 
     private var promptEditorProviderGuidance: some View {
@@ -880,7 +774,7 @@ extension AIEnhancementSettingsView {
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                if self.viewModel.verifiedPromptProviders().isEmpty {
+                if !self.isSelectedExternalProviderReady {
                     Button("Set up AI provider") { self.showingPromptProviderSetup = true }
                         .buttonStyle(.plain)
                         .foregroundStyle(self.theme.palette.accent)
@@ -902,43 +796,6 @@ extension AIEnhancementSettingsView {
             .frame(width: 640, height: 520)
             .appTheme(self.theme)
         }
-    }
-
-    private var promptEditorModelRow: some View {
-        self.promptEditorConfigRow(title: "Model", description: "") {
-            HStack(spacing: 8) {
-                SearchableModelPicker(
-                    models: self.viewModel.models(for: self.promptEditorProviderIDDraft),
-                    selectedModel: self.promptEditorModelBinding,
-                    onRefresh: nil,
-                    selectionEnabled: !self.viewModel.models(for: self.promptEditorProviderIDDraft).isEmpty,
-                    // The searchable control adds its horizontal padding outside its content width.
-                    controlWidth: AISettingsLayout.promptEditorControlColumnWidth
-                        - AISettingsLayout.providerRowControlHeight - 8
-                        - 2 * SearchablePickerControlChrome.horizontalPadding,
-                    controlHeight: AISettingsLayout.controlHeight
-                )
-
-                self.companionIconButton(
-                    isRefreshing: self.viewModel.refreshingProviderID == self.promptEditorProviderIDDraft,
-                    disabled: !self.canFetchModels(for: self.promptEditorProviderIDDraft),
-                    opacity: self.canFetchModels(for: self.promptEditorProviderIDDraft) ? 1 : 0.45,
-                    help: "Refresh model list"
-                ) {
-                    Task { await self.viewModel.fetchModels(for: self.promptEditorProviderIDDraft) }
-                }
-            }
-        }
-    }
-
-    private var promptEditorModelBinding: Binding<String> {
-        Binding(
-            get: { self.promptEditorModelDraft },
-            set: { newValue in
-                self.promptEditorModelDraft = newValue
-                self.syncDraftToPendingConfig()
-            }
-        )
     }
 
     private func promptEditorConfigRow<Content: View>(
@@ -968,10 +825,7 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private func promptModelPicker(
-        selection: SettingsStore.DictationPromptSelection,
-        isPrivateAI: Bool
-    ) -> PromptCardModelPicker? {
+    private func promptModelPicker(isPrivateAI: Bool) -> PromptCardModelPicker {
         if self.settings.usesCombinedCloudDictation {
             return self.cloudDictationModelPicker
         }
@@ -979,59 +833,19 @@ extension AIEnhancementSettingsView {
             return PromptCardModelPicker(
                 summary: ModelDisplayName.forID(PrivateAIIntegrationService.configuredModelID),
                 selectedModel: PrivateAIIntegrationService.configuredModelID,
-                models: PrivateAIModelRegistry.modelIDs(),
-                providerName: PrivateAIProviderFeature.displayName,
-                onSelectModel: { _ in
-                    self.selectedConfigurationSection = .providers
-                    self.expandedProviderID = PrivateAIProviderFeature.shared.providerID
-                },
-                onOpenProviders: {
-                    self.selectedConfigurationSection = .providers
-                    self.expandedProviderID = PrivateAIProviderFeature.shared.providerID
-                }
+                providerName: PrivateAIProviderFeature.displayName
             )
         }
 
-        let configuration = self.settings.dictationPromptConfiguration(for: selection)
-        let configuredProviderID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerID = configuredProviderID.isEmpty
-            ? self.defaultExternalPromptProviderID
-            : configuredProviderID
+        let providerID = self.defaultExternalPromptProviderID
         guard !providerID.isEmpty else {
-            return PromptCardModelPicker(
-                summary: "Choose provider first",
-                selectedModel: "",
-                models: [],
-                providerName: "",
-                onSelectModel: { _ in },
-                onOpenProviders: {
-                    self.selectedConfigurationSection = .providers
-                    self.expandedProviderID = nil
-                }
-            )
+            return PromptCardModelPicker(summary: "Choose provider first", selectedModel: "", providerName: "")
         }
 
         let providerName = self.viewModel.providerDisplayName(for: providerID)
-        let configuredModel = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let selectedModel = configuredModel.isEmpty ? self.viewModel.selectedModel(for: providerID) : configuredModel
+        let selectedModel = self.viewModel.selectedModel(for: providerID)
         let summary = selectedModel.isEmpty ? providerName : "\(providerName) - \(ModelDisplayName.forID(selectedModel))"
-
-        return PromptCardModelPicker(
-            summary: summary,
-            selectedModel: selectedModel,
-            models: self.viewModel.models(for: providerID),
-            providerName: providerName,
-            onSelectModel: { modelName in
-                var updated = self.settings.dictationPromptConfiguration(for: selection)
-                updated.providerID = providerID
-                updated.modelName = modelName
-                self.settings.setDictationPromptConfiguration(updated, for: selection)
-            },
-            onOpenProviders: {
-                self.selectedConfigurationSection = .providers
-                self.expandedProviderID = providerID
-            }
-        )
+        return PromptCardModelPicker(summary: summary, selectedModel: selectedModel, providerName: providerName)
     }
 
     private var promptModeTabSelector: some View {
@@ -1106,7 +920,7 @@ extension AIEnhancementSettingsView {
                     .foregroundStyle(self.theme.palette.accent)
                 Text(self.settings.usesCombinedCloudDictation
                     ? "Your chosen style is sent with audio to the model in Voice Engine. No separate AI cleanup runs. Off transcribes without styling."
-                    : "Manage instructions, models, and shortcuts here.")
+                    : "Manage instructions and shortcuts here. Every style uses the AI provider and model chosen in AI Providers.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -1918,11 +1732,12 @@ extension AIEnhancementSettingsView {
                     if self.viewModel.draftPromptMode == .dictate && !mode.isPrivateAI {
                         VStack(alignment: .leading, spacing: 8) {
                             let hotkeyDisplay = self.settings.primaryDictationShortcutDisplayString
+                            let selectedRoute = DictationProviderRoute.selectedExternalProviderRoute(settings: self.settings)
                             let canTest = self.isCombinedCloudPromptEditor
                                 ? self.isCloudDictationConfigured
                                 : DictationAIPostProcessingGate.isProviderConfigured(
-                                    providerID: self.promptEditorProviderIDDraft,
-                                    model: self.promptEditorModelDraft
+                                    providerID: selectedRoute.providerID,
+                                    model: selectedRoute.model
                                 )
 
                             Toggle(isOn: Binding(
@@ -1932,8 +1747,8 @@ extension AIEnhancementSettingsView {
                                         let combined = self.viewModel.combinedDraftPrompt(self.viewModel.draftPromptText, mode: self.viewModel.draftPromptMode)
                                         self.promptTest.activate(
                                             draftPromptText: combined,
-                                            providerID: self.isCombinedCloudPromptEditor ? "openrouter" : self.promptEditorProviderIDDraft,
-                                            model: self.isCombinedCloudPromptEditor ? self.settings.cloudDictationModelID : self.promptEditorModelDraft
+                                            providerID: self.isCombinedCloudPromptEditor ? "openrouter" : selectedRoute.providerID,
+                                            model: self.isCombinedCloudPromptEditor ? self.settings.cloudDictationModelID : selectedRoute.model
                                         )
                                     } else {
                                         self.promptTest.deactivate()
@@ -2091,14 +1906,6 @@ extension AIEnhancementSettingsView {
         }
         .onChange(of: self.viewModel.promptEditorSessionID) { _, _ in
             self.preparePromptEditorConfigurationDraft(mode: mode)
-        }
-        .onChange(of: self.promptEditorProviderIDDraft) { _, providerID in
-            guard !self.isCombinedCloudPromptEditor else { return }
-            self.promptTest.updateDraftConfiguration(providerID: providerID, model: self.promptEditorModelDraft)
-        }
-        .onChange(of: self.promptEditorModelDraft) { _, model in
-            guard !self.isCombinedCloudPromptEditor else { return }
-            self.promptTest.updateDraftConfiguration(providerID: self.promptEditorProviderIDDraft, model: model)
         }
         .onChange(of: self.settings.speechExecutionSource) { _, _ in self.promptTest.deactivate() }
         .onChange(of: self.settings.cloudDictationModelID) { _, _ in self.promptTest.deactivate() }

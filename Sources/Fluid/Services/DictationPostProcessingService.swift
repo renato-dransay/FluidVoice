@@ -13,50 +13,36 @@ struct DictationProviderRoute: Equatable {
             self.providerKey == "custom:\(PrivateAIProviderFeature.shared.providerID)"
     }
 
+    /// Every style uses the provider selected on the AI Providers card with the model chosen there.
+    /// A slot only decides whether cleanup runs and whether it goes to Fluid Intelligence.
     static func resolve(
         settings: SettingsStore,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         appBundleID: String? = nil
     ) -> Self {
-        let selectedProviderID: String
-        let configuredModel: String?
-
-        if let dictationSlot {
-            let selection = settings.resolvedDictationPromptSelection(for: dictationSlot, appBundleID: appBundleID)
-            if selection == .off {
-                return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
-            }
-            if selection == .privateAI {
-                return self.privateAIRoute(settings: settings)
-            }
-
-            let configuration = settings.dictationPromptConfiguration(for: selection)
-            let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !providerID.isEmpty, !model.isEmpty {
-                selectedProviderID = providerID
-                configuredModel = model
-            } else {
-                let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
-                if selection == .default, !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
-                    selectedProviderID: settings.selectedProviderID,
-                    configuredProviderID: providerID,
-                    configuredModel: model
-                ) {
-                    return self.privateAIRoute(settings: settings)
-                }
-                selectedProviderID = self.externalFallbackProviderID(from: settings.selectedProviderID)
-                configuredModel = nil
-            }
-        } else {
-            selectedProviderID = settings.selectedProviderID
-            configuredModel = nil
+        guard let dictationSlot else {
+            return self.build(settings: settings, selectedProviderID: settings.selectedProviderID)
         }
-
-        return self.build(settings: settings, selectedProviderID: selectedProviderID, configuredModel: configuredModel)
+        let selection = settings.resolvedDictationPromptSelection(for: dictationSlot, appBundleID: appBundleID)
+        if selection == .off {
+            return Self(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
+        }
+        if selection == .privateAI {
+            return self.privateAIRoute(settings: settings)
+        }
+        if selection == .default, self.usesLegacyPrivateAIDefault(settings: settings, appBundleID: appBundleID) {
+            return self.privateAIRoute(settings: settings)
+        }
+        return self.selectedExternalProviderRoute(settings: settings)
     }
 
-    private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?) -> Self {
+    /// The external provider and model chosen on the AI Providers card. Empty while Fluid
+    /// Intelligence is the selected provider, because custom styles need an external provider.
+    static func selectedExternalProviderRoute(settings: SettingsStore) -> Self {
+        self.build(settings: settings, selectedProviderID: self.externalFallbackProviderID(from: settings.selectedProviderID))
+    }
+
+    private static func build(settings: SettingsStore, selectedProviderID: String) -> Self {
         let selectedModels = settings.selectedModelByProvider
         let providerKeys = settings.providerAPIKeys
 
@@ -66,7 +52,7 @@ struct DictationProviderRoute: Equatable {
                 providerID: selectedProviderID,
                 providerKey: key,
                 baseURL: saved.baseURL,
-                model: configuredModel ?? selectedModels[key] ?? saved.models.first ?? "",
+                model: selectedModels[key] ?? saved.models.first ?? "",
                 apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? ""
             )
         }
@@ -76,7 +62,7 @@ struct DictationProviderRoute: Equatable {
                 providerID: selectedProviderID,
                 providerKey: selectedProviderID,
                 baseURL: ModelRepository.shared.defaultBaseURL(for: selectedProviderID),
-                model: configuredModel ?? selectedModels[selectedProviderID] ?? ModelRepository.shared.defaultModels(for: selectedProviderID).first ?? "",
+                model: selectedModels[selectedProviderID] ?? ModelRepository.shared.defaultModels(for: selectedProviderID).first ?? "",
                 apiKey: providerKeys[selectedProviderID] ?? ""
             )
         }
@@ -85,7 +71,7 @@ struct DictationProviderRoute: Equatable {
             providerID: selectedProviderID,
             providerKey: selectedProviderID,
             baseURL: "",
-            model: configuredModel ?? selectedModels[selectedProviderID] ?? "",
+            model: selectedModels[selectedProviderID] ?? "",
             apiKey: providerKeys[selectedProviderID] ?? ""
         )
     }
@@ -94,25 +80,17 @@ struct DictationProviderRoute: Equatable {
     /// Mirrors the `.default` branch of `resolve` so the picker can drop an option that
     /// would otherwise render as "Default · Unavailable".
     static func resolveDictationDefault(settings: SettingsStore, appBundleID: String? = nil) -> Self {
-        let configuration = settings.dictationPromptConfiguration(for: .default)
-        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !providerID.isEmpty, !model.isEmpty {
-            return self.build(settings: settings, selectedProviderID: providerID, configuredModel: model)
-        }
-        let hasAppBinding = settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) != nil
-        if !hasAppBinding, self.shouldUseLegacyPrivateAIRoute(
-            selectedProviderID: settings.selectedProviderID,
-            configuredProviderID: providerID,
-            configuredModel: model
-        ) {
+        if self.usesLegacyPrivateAIDefault(settings: settings, appBundleID: appBundleID) {
             return self.privateAIRoute(settings: settings)
         }
-        return self.build(
-            settings: settings,
-            selectedProviderID: self.externalFallbackProviderID(from: settings.selectedProviderID),
-            configuredModel: nil
-        )
+        return self.selectedExternalProviderRoute(settings: settings)
+    }
+
+    /// Builds that predate the explicit Fluid Intelligence selection stored it as the selected
+    /// provider. The default style still reaches it unless an app binding overrides the default.
+    private static func usesLegacyPrivateAIDefault(settings: SettingsStore, appBundleID: String?) -> Bool {
+        settings.selectedProviderID == PrivateAIProviderFeature.shared.providerID &&
+            settings.appPromptBinding(for: .dictate, appBundleID: appBundleID) == nil
     }
 
     /// True when picking "Default" would actually reach a configured, verified provider.
@@ -165,15 +143,6 @@ struct DictationProviderRoute: Equatable {
     static func externalFallbackProviderID(from providerID: String) -> String {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed == PrivateAIProviderFeature.shared.providerID ? "" : trimmed
-    }
-
-    static func shouldUseLegacyPrivateAIRoute(
-        selectedProviderID: String,
-        configuredProviderID: String,
-        configuredModel: String
-    ) -> Bool {
-        selectedProviderID == PrivateAIProviderFeature.shared.providerID &&
-            configuredProviderID.isEmpty && configuredModel.isEmpty
     }
 
     static func allowsPrivateAIRoute(

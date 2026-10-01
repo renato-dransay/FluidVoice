@@ -1816,7 +1816,6 @@ extension AIEnhancementSettingsView {
         let selection = self.viewModel.dictationPromptSelection(for: .primary)
         return DictationDefaultProvider.providerID(
             selection: selection,
-            configuration: self.settings.dictationPromptConfiguration(for: selection),
             selectedProviderID: self.settings.selectedProviderID,
             privateProviderID: PrivateAIProviderFeature.shared.providerID
         )
@@ -1842,11 +1841,6 @@ extension AIEnhancementSettingsView {
         guard self.viewModel.canUseProviderWithoutVerification(providerID),
               self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
         self.activateProvider(providerID)
-
-        var defaultConfiguration = self.settings.dictationPromptConfiguration(for: .default)
-        defaultConfiguration.providerID = ""
-        defaultConfiguration.modelName = ""
-        self.settings.setDictationPromptConfiguration(defaultConfiguration, for: .default)
         self.viewModel.setDictationPromptSelection(.default, for: .primary)
     }
 

@@ -1709,14 +1709,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.draftIncludeContext = (self.draftPromptMode == .edit)
         self.draftPromptName = ""
         self.draftPromptText = ""
-        let defaultProviderID = self.settings.usesCombinedCloudDictation && self.draftPromptMode == .dictate
-            ? "" : self.defaultVerifiedPromptProviderID()
-        let defaultModel = defaultProviderID.isEmpty ? "" : self.selectedModel(for: defaultProviderID)
-        self.pendingNewPromptConfiguration = SettingsStore.DictationPromptConfiguration(
-            shortcut: nil,
-            providerID: defaultProviderID,
-            modelName: defaultModel
-        )
+        self.pendingNewPromptConfiguration = SettingsStore.DictationPromptConfiguration()
         self.promptEditorSessionID = UUID()
         self.promptEditorMode = .newPrompt(prefillMode: self.draftPromptMode)
     }
@@ -2011,21 +2004,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func secondaryDictationShortcutDisplay() -> String {
         self.settings.promptModeHotkeyShortcut.displayString
-    }
-
-    func verifiedPromptProviders() -> [ProviderItemData] {
-        self.cachedVerifiedProviderItems.filter { provider in
-            provider.id != PrivateAIProviderFeature.shared.providerID
-        }
-    }
-
-    func defaultVerifiedPromptProviderID() -> String {
-        let verified = self.verifiedPromptProviders()
-        let persistedProviderID = self.settings.selectedProviderID
-        if verified.contains(where: { $0.id == persistedProviderID }) {
-            return persistedProviderID
-        }
-        return verified.first?.id ?? ""
     }
 
     func activeDictationModelSummary(isPrivateAI: Bool = false) -> String {

@@ -12,17 +12,12 @@ enum DictationDefaultProvider {
 
     static func providerID(
         selection: SettingsStore.DictationPromptSelection,
-        configuration: SettingsStore.DictationPromptConfiguration,
         selectedProviderID: String,
         privateProviderID: String
     ) -> String {
         if selection == .off { return "" }
         if selection == .privateAI { return privateProviderID }
-        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !providerID.isEmpty, !model.isEmpty { return providerID }
-        if selection == .default, selectedProviderID == privateProviderID,
-           providerID.isEmpty, model.isEmpty { return privateProviderID }
+        if selection == .default, selectedProviderID == privateProviderID { return privateProviderID }
         let fallback = selectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback == privateProviderID ? "" : fallback
     }

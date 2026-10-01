@@ -373,18 +373,21 @@ final class LLMClientRequestBodyTests: XCTestCase {
         self.withPromptSettingsRestored {
             let settings = SettingsStore.shared
             self.resetPromptSettings(settings)
-            let configurations = settings.dictationPromptConfigurations
+            let selectedProviderID = settings.selectedProviderID
+            let selectedModels = settings.selectedModelByProvider
             let fingerprints = settings.verifiedProviderFingerprints
             let session = DictationAppSession.shared
             let previousApp = session.appID
             defer {
-                settings.dictationPromptConfigurations = configurations
+                settings.selectedProviderID = selectedProviderID
+                settings.selectedModelByProvider = selectedModels
                 settings.verifiedProviderFingerprints = fingerprints
                 session.activate(previousApp ?? "test.finished")
             }
             let profile = SettingsStore.DictationPromptProfile(name: "Stop rule", prompt: "Use the stop-time prompt.")
             settings.dictationPromptProfiles = [profile]
-            settings.setDictationPromptConfiguration(.init(providerID: "ollama", modelName: "stop-model"), for: .profile(profile.id))
+            settings.selectedProviderID = "ollama"
+            settings.selectedModelByProvider = ["ollama": "stop-model"]
             settings.verifiedProviderFingerprints["ollama"] = DictationAIPostProcessingGate.providerFingerprint(
                 baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"), apiKey: settings.providerAPIKeys["ollama"] ?? ""
             )
@@ -397,7 +400,8 @@ final class LLMClientRequestBodyTests: XCTestCase {
             session.select(.off, slot: .primary, appID: "test.stop")
             let basic = DictationStopSnapshot.capture(target: target, appInfo: info, slot: .primary, precedingText: "")
             session.activate("test.next")
-            settings.setDictationPromptConfiguration(.init(providerID: "openai", modelName: "different-cloud-model"), for: .profile(profile.id))
+            settings.selectedProviderID = "openai"
+            settings.selectedModelByProvider = ["openai": "different-cloud-model"]
             settings.dictationPromptProfiles = []
             XCTAssertEqual(snapshot.route.providerID, "ollama")
             XCTAssertEqual(snapshot.route.model, "stop-model")

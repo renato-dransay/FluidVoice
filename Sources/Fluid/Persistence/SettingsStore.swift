@@ -375,15 +375,13 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Per-style settings beyond the prompt text. Every style uses the AI provider and model chosen
+    /// on the AI Providers card; provider and model keys saved by older builds are ignored on decode.
     struct DictationPromptConfiguration: Codable, Equatable {
         var shortcut: HotkeyShortcut?
-        var providerID: String
-        var modelName: String
 
-        init(shortcut: HotkeyShortcut? = nil, providerID: String = "", modelName: String = "") {
+        init(shortcut: HotkeyShortcut? = nil) {
             self.shortcut = shortcut
-            self.providerID = providerID
-            self.modelName = modelName
         }
     }
 
@@ -571,17 +569,11 @@ final class SettingsStore: ObservableObject {
 
     func setDictationPromptConfiguration(_ configuration: DictationPromptConfiguration, for selection: DictationPromptSelection) {
         guard let key = self.dictationPromptConfigurationKey(for: selection) else { return }
-        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modelName = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         var configurations = self.dictationPromptConfigurations
-        if configuration.shortcut == nil, providerID.isEmpty, modelName.isEmpty {
+        if configuration.shortcut == nil {
             configurations.removeValue(forKey: key)
         } else {
-            configurations[key] = DictationPromptConfiguration(
-                shortcut: configuration.shortcut,
-                providerID: providerID,
-                modelName: modelName
-            )
+            configurations[key] = configuration
         }
         self.dictationPromptConfigurations = configurations
     }
@@ -1664,16 +1656,6 @@ final class SettingsStore: ObservableObject {
         }
         if selectedModels != self.selectedModelByProvider {
             self.selectedModelByProvider = selectedModels
-        }
-
-        let configurations = self.dictationPromptConfigurations.compactMapValues { configuration in
-            let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard retiredProviderIDs.contains(providerID) else { return configuration }
-            guard configuration.shortcut != nil else { return nil }
-            return DictationPromptConfiguration(shortcut: configuration.shortcut)
-        }
-        if configurations != self.dictationPromptConfigurations {
-            self.dictationPromptConfigurations = configurations
         }
     }
 
@@ -4209,12 +4191,7 @@ final class SettingsStore: ObservableObject {
         var configurations = self.dictationPromptConfigurations
         let originalCount = configurations.count
         configurations = configurations.filter { key, configuration in
-            validKeys.contains(key) &&
-                (
-                    configuration.shortcut != nil ||
-                        !configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        !configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+            validKeys.contains(key) && configuration.shortcut != nil
         }
         if configurations.count != originalCount {
             self.dictationPromptConfigurations = configurations
