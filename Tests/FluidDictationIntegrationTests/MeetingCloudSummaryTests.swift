@@ -25,6 +25,27 @@ final class MeetingCloudSummaryTests: XCTestCase {
         XCTAssertEqual(route?.apiKey, "voice-key")
     }
 
+    func testVoiceEngineReplacesTheHiddenOpenRouterTextModel() {
+        let route = self.resolve(
+            provider: DictationProviderRoute(providerID: "openrouter", providerKey: "openrouter", baseURL: self.openRouterURL, model: "openai/gpt-oss-20b", apiKey: ""),
+            usesVoiceEngine: true,
+            openRouterKey: "voice-key",
+            openRouterModel: "google/gemini-3.8-flash"
+        )
+        XCTAssertEqual(route, MeetingCloudSummaryRoute(
+            providerKey: "openrouter", providerName: "OpenRouter", baseURL: self.openRouterURL, model: "google/gemini-3.8-flash", apiKey: "voice-key"
+        ))
+    }
+
+    func testVoiceEngineKeepsAnotherSelectedProvider() {
+        let route = self.resolve(
+            provider: DictationProviderRoute(providerID: "groq", providerKey: "groq", baseURL: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b", apiKey: "groq-key"),
+            usesVoiceEngine: true,
+            openRouterKey: "voice-key"
+        )
+        XCTAssertEqual(route?.providerKey, "groq")
+    }
+
     func testMissingProviderFallsBackToOpenRouterVoiceEngine() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: ""),
@@ -122,12 +143,14 @@ final class MeetingCloudSummaryTests: XCTestCase {
     private func resolve(
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool = false,
+        usesVoiceEngine: Bool = false,
         openRouterKey: String,
         openRouterModel: String? = "google/gemini-3.8-flash"
     ) -> MeetingCloudSummaryRoute? {
         MeetingCloudSummaryRouteResolver.resolve(
             provider: provider,
             isLocalEndpoint: isLocalEndpoint,
+            usesVoiceEngine: usesVoiceEngine,
             providerName: ModelRepository.shared.displayName(for: provider.providerID),
             openRouterKey: openRouterKey,
             openRouterModel: openRouterModel,
