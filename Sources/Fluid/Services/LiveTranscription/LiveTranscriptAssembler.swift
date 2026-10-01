@@ -89,11 +89,35 @@ nonisolated struct LiveTranscriptAssembler: Equatable, Sendable {
         var result = ""
         for part in parts where !part.isEmpty {
             if let last = result.last, let first = part.first,
-               !last.isWhitespace, !first.isWhitespace, !first.isPunctuation {
+               !last.isWhitespace, !first.isWhitespace, !first.isPunctuation,
+               !Self.isUnspacedScript(last), !Self.isUnspacedScript(first) {
                 result.append(" ")
             }
             result.append(part)
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Scripts written without spaces between words (Chinese, Japanese, Thai, Lao, Khmer, Myanmar)
+    /// and their full-width punctuation. A segment boundary next to one of these is not a word gap.
+    private static func isUnspacedScript(_ character: Character) -> Bool {
+        character.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x3000 ... 0x303F, // CJK symbols and punctuation
+                 0x3040 ... 0x30FF, // Hiragana, Katakana
+                 0x31F0 ... 0x31FF, // Katakana phonetic extensions
+                 0x3400 ... 0x4DBF, // CJK extension A
+                 0x4E00 ... 0x9FFF, // CJK unified ideographs
+                 0xF900 ... 0xFAFF, // CJK compatibility ideographs
+                 0xFF00 ... 0xFFEF, // Half-width and full-width forms
+                 0x20000 ... 0x2FA1F, // CJK extensions B and later
+                 0x0E00 ... 0x0EFF, // Thai, Lao
+                 0x1000 ... 0x109F, // Myanmar
+                 0x1780 ... 0x17FF: // Khmer
+                true
+            default:
+                false
+            }
+        }
     }
 }

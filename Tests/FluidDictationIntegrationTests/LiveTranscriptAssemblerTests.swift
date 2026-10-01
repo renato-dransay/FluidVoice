@@ -25,6 +25,14 @@ final class LiveTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(assembler.finalText, "hello world how are you?")
     }
 
+    func testSegmentsInScriptsWithoutSpacesAreJoinedWithoutASpace() {
+        XCTAssertEqual(LiveTranscriptAssembler.join(["こんにちは", "世界"]), "こんにちは世界")
+        XCTAssertEqual(LiveTranscriptAssembler.join(["今天", "天气很好", "。"]), "今天天气很好。")
+        XCTAssertEqual(LiveTranscriptAssembler.join(["สวัสดี", "ครับ"]), "สวัสดีครับ")
+        XCTAssertEqual(LiveTranscriptAssembler.join(["東京", "in Japan"]), "東京in Japan", "A boundary next to an unspaced script is never a word gap")
+        XCTAssertEqual(LiveTranscriptAssembler.join(["안녕하세요", "세계"]), "안녕하세요 세계", "Korean separates words with spaces")
+    }
+
     func testKeyedSegmentsAreReplacedInPlace() {
         var assembler = LiveTranscriptAssembler()
         assembler.apply(.segment(.init(id: "turn-0", text: "My name", isFinal: false, audioEndMilliseconds: nil)))
