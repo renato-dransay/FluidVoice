@@ -56,6 +56,25 @@ final class LiveTranscriptionProviderTests: XCTestCase {
         XCTAssertEqual(transport.openedRequests.count, 1, "A discarded dictation is never replayed on a new connection")
     }
 
+    func testTheFinishDeadlineCoversTheTailOnAStalledSocket() async throws {
+        let transport = StallingTransport()
+        let provider = LiveCloudTranscriptionProvider(
+            configuration: self.configuration,
+            apiKey: "k",
+            localProvider: nil,
+            makeTransport: { transport },
+            finishTimeout: .milliseconds(200)
+        )
+        await provider.begin()
+        let recording = [Float](repeating: 0.1, count: 16_000)
+        let outcome = try await LiveTranscriptionSessionTests.outcome(
+            within: .seconds(2),
+            of: { try await provider.transcribeFinal(recording).text },
+            else: { transport.close() }
+        )
+        XCTAssertEqual(outcome, .failure(.finalTimeout), "Sending the tail counts against the finish deadline")
+    }
+
     func testReadinessIsLocal() {
         XCTAssertTrue(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "k", localProvider: nil).isReady)
         XCTAssertFalse(LiveCloudTranscriptionProvider(configuration: self.configuration, apiKey: "  ", localProvider: nil).isReady)

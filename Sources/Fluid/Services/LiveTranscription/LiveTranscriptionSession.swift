@@ -85,22 +85,26 @@ actor LiveTranscriptionSession {
         do { try await self.connect(replayingFrom: resume) } catch { self.fail(Self.mapped(error, adapter: self.adapter)) }
     }
 
+    /// Sends `tail`, the samples the stream has not received yet, and waits for the final text.
     /// Throws `CancellationError` once the session was cancelled, even with text already received.
-    func finish() async throws -> String {
+    func finish(appending tail: [Float] = []) async throws -> String {
         guard !self.isCancelled else { throw CancellationError() }
+        // JUDGMENT: the deadline starts before the tail and the finish messages are sent. A stalled socket
+        // can hold a send until the 30 s request timeout; timing out closes the socket and ends that send.
+        let timeout = self.finishTimeout
+        let timer = Task { [weak self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            await self?.timeOut()
+        }
+        defer { timer.cancel() }
+        if !tail.isEmpty, !self.isFinishing { self.audio.append(LivePCM16.encode(tail)) }
         self.isFinishing = true
         let silence = self.adapter.trailingSilenceMilliseconds * LivePCM16.bytesPerMillisecond
         if silence > 0 { self.audio.append(Data(count: silence)) }
         // Not ready yet: the connection that becomes ready sends the tail and the finish messages.
         if self.failure == nil { await self.flush() }
-        if self.failure == nil, !self.didFinish {
-            let timeout = self.finishTimeout
-            let timer = Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                await self?.timeOut()
-            }
+        if self.failure == nil, !self.didFinish, !self.isCancelled {
             await withCheckedContinuation { self.finishWaiter = $0 }
-            timer.cancel()
         }
         self.transport?.close()
         self.partialsContinuation.finish()
@@ -346,7 +350,7 @@ actor LiveTranscriptionSession {
     }
 
     private func timeOut() {
-        guard !self.didFinish, self.failure == nil else { return }
+        guard !self.didFinish, !self.isCancelled, self.failure == nil else { return }
         self.fail(.finalTimeout)
     }
 

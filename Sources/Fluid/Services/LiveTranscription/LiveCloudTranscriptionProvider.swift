@@ -92,11 +92,10 @@ final class LiveCloudTranscriptionProvider: TranscriptionProvider {
         if self.isCancelled { throw CancellationError() }
         if let startFailure { throw startFailure }
         guard let session else { return try await self.transcribe(samples) }
-        if samples.count > self.appendedSamples {
-            await session.append(Array(samples[self.appendedSamples...]))
-            self.appendedSamples = samples.count
-        }
-        let text = try await session.finish()
+        let tail = samples.count > self.appendedSamples ? Array(samples[self.appendedSamples...]) : []
+        self.appendedSamples = max(self.appendedSamples, samples.count)
+        // The tail goes out inside `finish`, so the finish deadline covers sending it.
+        let text = try await session.finish(appending: tail)
         return ASRTranscriptionResult(text: text)
     }
 

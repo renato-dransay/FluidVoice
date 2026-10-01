@@ -469,6 +469,47 @@ final class LiveTranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(transport.sent, [], "A cancelled session sends nothing")
     }
 
+    func testTheFinishDeadlineCoversAStalledSocket() async throws {
+        let transport = StallingTransport()
+        let session = self.session(timeout: .milliseconds(200)) { transport }
+        try await session.start()
+        // The socket accepts nothing: this append's chunk never completes.
+        Task { await session.append([Float](repeating: 0.1, count: 16_000)) }
+        try await Task.sleep(for: .milliseconds(20))
+        let outcome = try await Self.outcome(within: .seconds(2), of: { try await session.finish() }, else: { await session.cancel() })
+        XCTAssertEqual(outcome, .failure(.finalTimeout), "Stop ends within the finish deadline, not the socket's request timeout")
+    }
+
+    enum Outcome: Equatable {
+        case text(String)
+        case failure(LiveTranscriptionError)
+        case otherError
+        case stillWaiting
+    }
+
+    /// Runs `body`, giving up after `limit` so a hang fails the test instead of stalling the suite.
+    static func outcome(
+        within limit: Duration,
+        of body: @escaping @Sendable () async throws -> String,
+        else giveUp: @escaping @Sendable () async -> Void
+    ) async throws -> Outcome {
+        let result = LockedBox<Outcome?>(nil)
+        let task = Task {
+            let outcome: Outcome
+            do { outcome = .text(try await body()) } catch let error as LiveTranscriptionError { outcome = .failure(error) } catch { outcome = .otherError }
+            result.value = outcome
+        }
+        let clock = ContinuousClock()
+        let deadline = clock.now + limit
+        while clock.now < deadline {
+            if let outcome = result.value { return outcome }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        await giveUp()
+        await task.value
+        return .stillWaiting
+    }
+
     func testOverlappingFlushesSendEveryByteOnceAndInOrder() async throws {
         let inner = FakeLiveTransport()
         inner.respond = { message in message == .text("finish") ? [.success(.text("finished"))] : [] }
@@ -587,5 +628,56 @@ final class OpenUntilClosedTransport: LiveTranscriptionTransport, @unchecked Sen
             return self.pendingOpen
         }
         pending?.resume(throwing: LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil))
+    }
+}
+
+/// A socket that opens but never completes a send until it is closed, like a stalled connection.
+final class StallingTransport: LiveTranscriptionTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var pendingSends: [CheckedContinuation<Void, Error>] = []
+    private var pendingReceive: CheckedContinuation<LiveTransportMessage, Error>?
+    private var isClosed = false
+
+    func open(_ request: URLRequest) async throws {}
+
+    func send(_ message: LiveTransportMessage) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let closed = self.lock.withLock { () -> Bool in
+                if !self.isClosed { self.pendingSends.append(continuation) }
+                return self.isClosed
+            }
+            if closed { continuation.resume(throwing: LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil)) }
+        }
+    }
+
+    func receive() async throws -> LiveTransportMessage {
+        try await withCheckedThrowingContinuation { continuation in
+            let closed = self.lock.withLock { () -> Bool in
+                if !self.isClosed { self.pendingReceive = continuation }
+                return self.isClosed
+            }
+            if closed { continuation.resume(throwing: LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil)) }
+        }
+    }
+
+    func close() {
+        let (sends, receive) = self.lock.withLock { () -> ([CheckedContinuation<Void, Error>], CheckedContinuation<LiveTransportMessage, Error>?) in
+            self.isClosed = true
+            defer { self.pendingSends = []; self.pendingReceive = nil }
+            return (self.pendingSends, self.pendingReceive)
+        }
+        let closed = LiveTransportClosed(closeCode: 1000, reason: nil, upgradeStatus: nil)
+        sends.forEach { $0.resume(throwing: closed) }
+        receive?.resume(throwing: closed)
+    }
+}
+
+final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { self.stored = value }
+    var value: Value {
+        get { self.lock.withLock { self.stored } }
+        set { self.lock.withLock { self.stored = newValue } }
     }
 }
