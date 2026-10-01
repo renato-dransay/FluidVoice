@@ -82,28 +82,54 @@ nonisolated enum MeetingUpcomingEventsPolicy {
         return events.first { self.isJoinable($0, at: now) && $0.searchableText.contains(fragment) }
     }
 
-    /// "11:00 – 11:30 AM" today, "Tomorrow 9:30 AM", or "Fri 9:30 AM" later in the week.
-    static func timeLabel(for event: MeetingUpcomingEvent, at now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        if calendar.isDate(event.start, inSameDayAs: now) {
-            let formatter = DateIntervalFormatter()
-            formatter.calendar = calendar
-            formatter.locale = locale
-            formatter.timeZone = calendar.timeZone
-            formatter.dateStyle = .none
-            formatter.timeStyle = .short
-            return formatter.string(from: event.start, to: event.end)
-        }
-        let time = DateFormatter()
-        time.calendar = calendar
-        time.locale = locale
-        time.timeZone = calendar.timeZone
+    /// "Today", "Tomorrow", or the short weekday ("Mon") later in the week.
+    static func dayLabel(for event: MeetingUpcomingEvent, at now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        if calendar.isDate(event.start, inSameDayAs: now) { return "Today" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(event.start, inSameDayAs: tomorrow) {
-            time.dateStyle = .none
-            time.timeStyle = .short
-            return "Tomorrow \(time.string(from: event.start))"
+            return "Tomorrow"
         }
-        time.setLocalizedDateFormatFromTemplate("EEEjmm")
-        return time.string(from: event.start)
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate("EEE")
+        return formatter.string(from: event.start)
+    }
+
+    /// The start time in the user's clock style, e.g. "9:30 AM" or "09:30".
+    static func startTime(for event: MeetingUpcomingEvent, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: event.start)
+    }
+
+    /// "30 min", "1 h" or "1 h 15 min".
+    static func durationLabel(for event: MeetingUpcomingEvent) -> String {
+        let minutes = max(1, Int((event.end.timeIntervalSince(event.start) / 60).rounded()))
+        if minutes < 60 { return "\(minutes) min" }
+        return minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min"
+    }
+
+    /// "Now" once the event has started, otherwise "In 4 min"; only meaningful while joinable.
+    static func joinStatus(for event: MeetingUpcomingEvent, at now: Date) -> String {
+        guard now < event.start else { return "Now" }
+        return "In \(max(1, Int((event.start.timeIntervalSince(now) / 60).rounded(.up)))) min"
+    }
+
+    /// The row's second line: duration, the call service and how many other people are invited.
+    static func detailParts(for event: MeetingUpcomingEvent) -> [String] {
+        var parts = [self.durationLabel(for: event)]
+        if let reminder = event.reminder {
+            parts.append(reminder.serviceName ?? "Video call")
+            let people = reminder.attendees.count
+            if people > 0 { parts.append(people == 1 ? "1 person" : "\(people) people") }
+        }
+        if event.isTentative { parts.append("Not accepted yet") }
+        return parts
     }
 }
 

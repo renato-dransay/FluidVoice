@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// FluidMeet's "Upcoming events": the next calendar events, with Join and Transcribe on a call
-/// that is about to start or running. Hidden until calendar access is granted.
+/// FluidMeet's "Coming up": the next calendar events, with Join and Transcribe on a call that is
+/// about to start or running. Hidden until calendar access is granted.
 struct MeetingUpcomingEventsList: View {
     @ObservedObject var model: MeetingUpcomingEventsModel
     /// The event whose call auto-detection already found; Transcribe records that call in place.
@@ -18,39 +18,41 @@ struct MeetingUpcomingEventsList: View {
 
     var body: some View {
         if self.model.isAvailable {
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text("Upcoming events")
-                    .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .padding(.horizontal, self.theme.metrics.spacing.md)
-                    .padding(.bottom, self.theme.metrics.spacing.xs)
-                    .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Coming up")
+                        .font(self.theme.typography.sectionTitle)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    if self.model.events.count > MeetingUpcomingEventsPolicy.collapsedLimit {
+                        Button(self.showsAll ? "Show fewer" : "View all") { self.showsAll.toggle() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(self.theme.palette.accent)
+                            .accessibilityLabel(self.showsAll ? "Show fewer upcoming events" : "View all upcoming events")
+                    }
+                }
 
-                if self.model.events.isEmpty {
-                    Text("Nothing on your calendar for the next seven days.")
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.horizontal, self.theme.metrics.spacing.md)
-                } else {
-                    ForEach(self.visibleEvents) { event in
-                        MeetingUpcomingEventRow(
-                            event: event,
-                            now: self.model.now,
-                            isLive: event.id == self.liveEventID,
-                            isStarting: self.model.startingEventID == event.id,
-                            isEnabled: self.isEnabled && self.model.startingEventID == nil,
-                            onJoin: { self.model.join(event) },
-                            onTranscribe: {
-                                if event.id == self.liveEventID {
-                                    self.onTranscribeLive()
-                                } else {
-                                    self.model.openAndTranscribe(event)
+                ThemedCard(style: .subtle, padding: 0) {
+                    if self.model.events.isEmpty {
+                        HStack(spacing: self.theme.metrics.spacing.md) {
+                            Image(systemName: "calendar")
+                                .foregroundStyle(self.theme.palette.accent)
+                            Text("Nothing on your calendar for the next seven days.")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(18)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(self.visibleEvents) { event in
+                                self.row(for: event)
+                                if event.id != self.visibleEvents.last?.id {
+                                    Divider().opacity(0.4).padding(.horizontal, 18)
                                 }
                             }
-                        )
-                    }
-                    if self.model.events.count > MeetingUpcomingEventsPolicy.collapsedLimit {
-                        self.viewAllButton
+                        }
                     }
                 }
 
@@ -59,32 +61,28 @@ struct MeetingUpcomingEventsList: View {
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.warning)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, self.theme.metrics.spacing.md)
+                        .accessibilityLabel("Could not start recording. \(errorMessage)")
                 }
             }
-            .frame(maxWidth: 560, alignment: .leading)
         }
     }
 
-    private var viewAllButton: some View {
-        Button {
-            self.showsAll.toggle()
-        } label: {
-            HStack(spacing: self.theme.metrics.spacing.md) {
-                Image(systemName: self.showsAll ? "chevron.up" : "ellipsis")
-                    .frame(width: 12)
-                Text(self.showsAll ? "Show fewer" : "View all")
-                Spacer(minLength: 0)
+    private func row(for event: MeetingUpcomingEvent) -> some View {
+        MeetingUpcomingEventRow(
+            event: event,
+            now: self.model.now,
+            isLive: event.id == self.liveEventID,
+            isStarting: self.model.startingEventID == event.id,
+            isEnabled: self.isEnabled && self.model.startingEventID == nil,
+            onJoin: { self.model.join(event) },
+            onTranscribe: {
+                if event.id == self.liveEventID {
+                    self.onTranscribeLive()
+                } else {
+                    self.model.openAndTranscribe(event)
+                }
             }
-            .font(self.theme.typography.body)
-            .foregroundStyle(self.theme.palette.secondaryText)
-            .padding(.horizontal, self.theme.metrics.spacing.md)
-            .padding(.vertical, self.theme.metrics.spacing.sm)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .meetingHoverFeedback(cornerRadius: 10)
-        .accessibilityLabel(self.showsAll ? "Show fewer upcoming events" : "View all upcoming events")
+        )
     }
 }
 
@@ -98,78 +96,145 @@ private struct MeetingUpcomingEventRow: View {
     let onTranscribe: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovered = false
 
     private var isJoinable: Bool {
         self.isLive || MeetingUpcomingEventsPolicy.isJoinable(self.event, at: self.now)
     }
 
-    private var swatch: Color {
-        guard let color = self.event.calendarColor else { return self.theme.palette.secondaryText }
+    private var calendarColor: Color {
+        guard let color = self.event.calendarColor else { return self.theme.palette.accent }
         return Color(.sRGB, red: color.red, green: color.green, blue: color.blue)
     }
 
     var body: some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Group {
-                if self.event.isTentative {
-                    RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(self.swatch, style: StrokeStyle(lineWidth: 1.5, dash: [2.5, 2]))
-                } else {
-                    RoundedRectangle(cornerRadius: 3).fill(self.swatch)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
+                self.when
+                self.colorBar
+                self.summary
+                Spacer(minLength: self.theme.metrics.spacing.sm)
+                if self.isJoinable {
+                    self.status
                 }
             }
-            .frame(width: 12, height: 12)
-            .accessibilityHidden(true)
-
-            Text(self.event.title)
-                .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
-
-            Spacer(minLength: self.theme.metrics.spacing.md)
-
             if self.isJoinable {
-                Button("Join", action: self.onJoin)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .disabled(!self.isEnabled)
-                    .help("Open the call link")
-                Button(action: self.onTranscribe) {
-                    Text(self.isStarting ? "Starting…" : "Transcribe")
-                        .padding(.horizontal, self.theme.metrics.spacing.sm)
-                        .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
-                        .foregroundStyle(Color.accentColor)
+                FluidGlassControlGroup {
+                    HStack(spacing: self.theme.metrics.spacing.sm) {
+                        self.transcribeAction
+                        self.joinAction
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled(!self.isEnabled)
-                .help(self.isLive ? "Record this call" : "Open the call and record it")
-            } else {
-                Text(MeetingUpcomingEventsPolicy.timeLabel(for: self.event, at: self.now))
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .lineLimit(1)
-                    .fixedSize()
+                .padding(.leading, Self.timeColumnWidth + 3 + self.theme.metrics.spacing.md * 2)
             }
         }
-        .font(self.theme.typography.body)
-        .padding(.horizontal, self.theme.metrics.spacing.md)
-        .padding(.vertical, self.theme.metrics.spacing.sm)
-        .background {
-            if self.isJoinable {
-                RoundedRectangle(cornerRadius: 10).fill(self.theme.palette.secondaryText.opacity(0.08))
-            }
-        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(self.theme.palette.accent.opacity(self.isJoinable ? 0.05 : (self.isHovered ? 0.03 : 0)))
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: self.isHovered)
+        .contentShape(Rectangle())
+        .onHover { self.isHovered = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(self.accessibilityLabel)
     }
 
+    private static let timeColumnWidth: CGFloat = 64
+
+    private var when: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(MeetingUpcomingEventsPolicy.startTime(for: self.event))
+                .font(self.theme.typography.bodyStrong)
+                .monospacedDigit()
+                .foregroundStyle(self.theme.palette.primaryText)
+            Text(MeetingUpcomingEventsPolicy.dayLabel(for: self.event, at: self.now))
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(width: Self.timeColumnWidth, alignment: .trailing)
+        .accessibilityHidden(true)
+    }
+
+    /// The calendar's color as a slim bar; hollow while the invitation is not accepted yet.
+    private var colorBar: some View {
+        Capsule()
+            .fill(self.calendarColor.opacity(self.event.isTentative ? 0.25 : 1))
+            .overlay {
+                if self.event.isTentative {
+                    Capsule().strokeBorder(self.calendarColor, lineWidth: 1)
+                }
+            }
+            .frame(width: 3, height: 34)
+            .accessibilityHidden(true)
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(self.event.title)
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            HStack(spacing: self.theme.metrics.spacing.xs) {
+                ForEach(Array(MeetingUpcomingEventsPolicy.detailParts(for: self.event).enumerated()), id: \.offset) { index, part in
+                    if index > 0 {
+                        Text("·").foregroundStyle(self.theme.palette.tertiaryText)
+                    }
+                    Text(part)
+                }
+            }
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .lineLimit(1)
+        }
+        .layoutPriority(1)
+        .accessibilityHidden(true)
+    }
+
+    private var status: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(self.theme.palette.accent)
+                .frame(width: 6, height: 6)
+            Text(MeetingUpcomingEventsPolicy.joinStatus(for: self.event, at: self.now))
+        }
+        .font(self.theme.typography.captionStrong)
+        .foregroundStyle(self.theme.palette.accent)
+        .padding(.horizontal, self.theme.metrics.spacing.sm)
+        .padding(.vertical, 3)
+        .background(self.theme.palette.accent.opacity(0.12), in: Capsule())
+        .fixedSize()
+        .accessibilityHidden(true)
+    }
+
+    private var transcribeAction: some View {
+        Button(action: self.onTranscribe) {
+            Label(self.isStarting ? "Starting…" : "Transcribe", systemImage: self.isStarting ? "hourglass" : "record.circle")
+        }
+        .meetingGlassAction(prominent: true)
+        .disabled(!self.isEnabled)
+        .help(self.isLive ? "Record this call" : "Open the call and record it")
+        .accessibilityLabel(self.isLive ? "Transcribe \(self.event.title)" : "Open and transcribe \(self.event.title)")
+    }
+
+    private var joinAction: some View {
+        Button(action: self.onJoin) {
+            Label("Join", systemImage: "arrow.up.right")
+        }
+        .meetingGlassAction()
+        .disabled(!self.isEnabled)
+        .help("Open the call link")
+        .accessibilityLabel("Join \(self.event.title)")
+    }
+
     private var accessibilityLabel: String {
-        let tentative = self.event.isTentative ? ", not yet accepted" : ""
-        return self.isJoinable
-            ? "\(self.event.title)\(tentative), \(self.now < self.event.start ? "starting soon" : "happening now")"
-            : "\(self.event.title)\(tentative), \(MeetingUpcomingEventsPolicy.timeLabel(for: self.event, at: self.now))"
+        let details = MeetingUpcomingEventsPolicy.detailParts(for: self.event).joined(separator: ", ")
+        let when = self.isJoinable
+            ? MeetingUpcomingEventsPolicy.joinStatus(for: self.event, at: self.now)
+            : "\(MeetingUpcomingEventsPolicy.dayLabel(for: self.event, at: self.now)) at \(MeetingUpcomingEventsPolicy.startTime(for: self.event))"
+        return "\(self.event.title), \(when), \(details)"
     }
 }
