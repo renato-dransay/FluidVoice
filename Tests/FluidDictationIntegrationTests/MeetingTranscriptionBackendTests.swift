@@ -1538,21 +1538,57 @@ final class MeetingUpcomingEventsPolicyTests: XCTestCase {
         XCTAssertNil(MeetingUpcomingEventsPolicy.event(matchingConferenceFragment: "meet.google.com/qqq-qqqq-qqq", among: events, at: self.now))
     }
 
-    func testTimeLabelsSayTomorrowAndTheWeekday() throws {
+    func testRowLabelsNameTheDayTimeDurationAndCall() throws {
         let locale = Locale(identifier: "en_US")
         let startOfToday = self.calendar.startOfDay(for: self.now)
-        func event(at date: Date) -> MeetingUpcomingEvent {
-            MeetingUpcomingEvent(id: "e", title: "E", start: date, end: date.addingTimeInterval(1800), isTentative: false, calendarColor: nil, reminder: nil, searchableText: "")
+        func event(at date: Date, minutes: Double = 30, reminder: MeetingCalendarReminder? = nil, tentative: Bool = false) -> MeetingUpcomingEvent {
+            MeetingUpcomingEvent(
+                id: "e",
+                title: "E",
+                start: date,
+                end: date.addingTimeInterval(minutes * 60),
+                isTentative: tentative,
+                calendarColor: nil,
+                reminder: reminder,
+                searchableText: ""
+            )
         }
+        let laterToday = self.now.addingTimeInterval(3600)
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.dayLabel(for: event(at: laterToday), at: self.now, calendar: self.calendar, locale: locale), "Today")
         let tomorrow = try XCTUnwrap(self.calendar.date(byAdding: .day, value: 1, to: startOfToday)).addingTimeInterval(9.5 * 3600)
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.dayLabel(for: event(at: tomorrow), at: self.now, calendar: self.calendar, locale: locale), "Tomorrow")
         XCTAssertEqual(
-            MeetingUpcomingEventsPolicy.timeLabel(for: event(at: tomorrow), at: self.now, calendar: self.calendar, locale: locale)
+            MeetingUpcomingEventsPolicy.startTime(for: event(at: tomorrow), calendar: self.calendar, locale: locale)
                 .replacingOccurrences(of: "\u{202F}", with: " "),
-            "Tomorrow 9:30 AM"
+            "9:30 AM"
         )
         let inThreeDays = try XCTUnwrap(self.calendar.date(byAdding: .day, value: 3, to: startOfToday)).addingTimeInterval(14 * 3600)
-        let weekday = MeetingUpcomingEventsPolicy.timeLabel(for: event(at: inThreeDays), at: self.now, calendar: self.calendar, locale: locale)
-        XCTAssertTrue(weekday.hasPrefix("Mon"), weekday)
-        XCTAssertTrue(weekday.contains("2:00"), weekday)
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.dayLabel(for: event(at: inThreeDays), at: self.now, calendar: self.calendar, locale: locale), "Mon")
+
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.durationLabel(for: event(at: laterToday, minutes: 30)), "30 min")
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.durationLabel(for: event(at: laterToday, minutes: 60)), "1 h")
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.durationLabel(for: event(at: laterToday, minutes: 75)), "1 h 15 min")
+
+        let call = MeetingCalendarReminder(
+            id: "e",
+            eventIdentifier: "e",
+            title: "E",
+            start: laterToday,
+            end: laterToday.addingTimeInterval(1800),
+            conferenceURL: try XCTUnwrap(URL(string: "https://meet.google.com/abc-defg-hij")),
+            serviceName: "Google Meet",
+            attendees: [
+                MeetingCalendarAttendee(name: "Ana", email: "ana@example.com", isOrganizer: true),
+                MeetingCalendarAttendee(name: "Paul", email: "paul@example.com", isOrganizer: false),
+            ]
+        )
+        XCTAssertEqual(
+            MeetingUpcomingEventsPolicy.detailParts(for: event(at: laterToday, reminder: call, tentative: true)),
+            ["30 min", "Google Meet", "2 people", "Not accepted yet"]
+        )
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.detailParts(for: event(at: laterToday)), ["30 min"])
+
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.joinStatus(for: event(at: self.now.addingTimeInterval(200)), at: self.now), "In 4 min")
+        XCTAssertEqual(MeetingUpcomingEventsPolicy.joinStatus(for: event(at: self.now.addingTimeInterval(-60)), at: self.now), "Now")
     }
 }
