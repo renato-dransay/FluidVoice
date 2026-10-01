@@ -9,6 +9,7 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
     case mistral
     case openAI
     case speechmatics
+    case gladia
 
     var id: String { self.rawValue }
     /// Voice engine keys live under their own ids and are never shared with AI Providers keys.

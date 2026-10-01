@@ -5,6 +5,9 @@ import Foundation
 nonisolated protocol LiveTranscriptionAdapter: Sendable {
     var provider: LiveTranscriptionProviderID { get }
     func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest
+    /// The WebSocket request to open, after any step the provider needs first. Gladia exchanges a REST
+    /// session request for its socket URL here; every other provider returns `connectionRequest`.
+    func prepareConnection(apiKey: String, configuration: LiveTranscriptionConfiguration) async throws -> URLRequest
     func openingMessages(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> [LiveTransportMessage]
     var waitsForReady: Bool { get }
     /// Mutating so adapters can keep per-connection audio state, such as a frame count or a resampler.
@@ -21,6 +24,10 @@ nonisolated protocol LiveTranscriptionAdapter: Sendable {
 }
 
 nonisolated extension LiveTranscriptionAdapter {
+    func prepareConnection(apiKey: String, configuration: LiveTranscriptionConfiguration) async throws -> URLRequest {
+        try self.connectionRequest(apiKey: apiKey, configuration: configuration)
+    }
+
     func openingMessages(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> [LiveTransportMessage] { [] }
     var waitsForReady: Bool { false }
     func audioMessage(_ pcm16: Data) -> LiveTransportMessage { .data(pcm16) }
@@ -42,6 +49,7 @@ nonisolated enum LiveTranscriptionAdapters {
         case .mistral: MistralLiveAdapter()
         case .openAI: OpenAILiveAdapter()
         case .speechmatics: SpeechmaticsLiveAdapter()
+        case .gladia: GladiaLiveAdapter()
         }
     }
 }

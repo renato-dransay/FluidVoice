@@ -85,6 +85,16 @@ nonisolated enum LiveTranscriptionCatalog {
             keyURL: URL(string: "https://portal.speechmatics.com"),
             usageURL: URL(string: "https://portal.speechmatics.com")
         ),
+        LiveTranscriptionProviderInfo(
+            id: .gladia,
+            name: "Gladia",
+            models: [.init(id: "solaria-1", name: "Solaria-1")],
+            // 100+ languages with automatic detection and code-switching.
+            detectsLanguageAutomatically: true,
+            languageCodes: nil,
+            keyURL: URL(string: "https://app.gladia.io"),
+            usageURL: URL(string: "https://app.gladia.io")
+        ),
     ]
 
     static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {

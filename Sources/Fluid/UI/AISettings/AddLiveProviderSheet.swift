@@ -13,7 +13,7 @@ struct AddLiveProviderSheet: View {
             title: "Add a live provider",
             subtitle: "Words appear while you speak.",
             symbol: "waveform",
-            height: 480,
+            // The default height fits four rows of tiles and the Add button without scrolling.
             close: { self.dismiss() }
         ) {
             Text("Choose a provider").font(self.theme.typography.bodyStrong)
