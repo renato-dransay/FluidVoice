@@ -7,6 +7,7 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
     case assemblyAI
     case elevenLabs
     case mistral
+    case openAI
 
     var id: String { self.rawValue }
     /// Voice engine keys live under their own ids and are never shared with AI Providers keys.

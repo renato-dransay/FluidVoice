@@ -57,6 +57,19 @@ nonisolated enum LiveTranscriptionCatalog {
             usageURL: URL(string: "https://console.mistral.ai/usage"),
             sendsLanguageChoice: false
         ),
+        LiveTranscriptionProviderInfo(
+            id: .openAI,
+            name: "OpenAI",
+            models: [
+                .init(id: "gpt-live-transcribe", name: "GPT Live Transcribe"),
+                .init(id: "gpt-realtime-whisper", name: "GPT Realtime Whisper"),
+            ],
+            // Takes `languages` as hints; transcribes without them too.
+            detectsLanguageAutomatically: true,
+            languageCodes: nil,
+            keyURL: URL(string: "https://platform.openai.com/api-keys"),
+            usageURL: URL(string: "https://platform.openai.com/usage")
+        ),
     ]
 
     static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {

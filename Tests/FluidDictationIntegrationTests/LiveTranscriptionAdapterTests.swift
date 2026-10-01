@@ -17,6 +17,11 @@ final class LiveTranscriptionAdapterTests: XCTestCase {
         XCTAssertEqual(data, Data(count: 4))
     }
 
+    func testPCM16DecodeReadsUnalignedSlices() {
+        let data = Data([0xFF]) + LivePCM16.encode([0, -1, 0.5])
+        XCTAssertEqual(LivePCM16.decode(data.dropFirst()), [0, -1, Float(16_383) / 32_768])
+    }
+
     func testHTTPStatusesMapToActionableErrors() {
         XCTAssertEqual(LiveHTTPStatus.failure(for: 401), .authentication)
         XCTAssertEqual(LiveHTTPStatus.failure(for: 403), .authentication)

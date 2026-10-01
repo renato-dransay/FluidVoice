@@ -40,6 +40,7 @@ nonisolated enum LiveTranscriptionAdapters {
         case .assemblyAI: AssemblyAILiveAdapter()
         case .elevenLabs: ElevenLabsLiveAdapter()
         case .mistral: MistralLiveAdapter()
+        case .openAI: OpenAILiveAdapter()
         }
     }
 }
@@ -58,6 +59,43 @@ nonisolated enum LivePCM16 {
             }
         }
         return data
+    }
+
+    /// Signed 16-bit little-endian PCM back to float samples in -1...1.
+    static func decode(_ data: Data) -> [Float] {
+        data.withUnsafeBytes { raw in
+            // A Data slice need not be 2-byte aligned, so each sample is loaded unaligned.
+            (0 ..< raw.count / 2).map { Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: $0 * 2, as: Int16.self))) / 32_768 }
+        }
+    }
+}
+
+/// 16 kHz to 24 kHz by linear interpolation, for providers that accept only 24 kHz (OpenAI).
+/// Stateful so chunk boundaries do not click: output sample k sits at input position 2k/3, and a
+/// position past the last sample of a chunk waits for the first sample of the next one.
+nonisolated struct LiveResampler16kTo24k: Sendable {
+    /// The last sample of the previous chunk, at index -1 of the current one.
+    private var previous: Float?
+    /// Position of the next output sample, in thirds of an input sample, relative to the current chunk.
+    private var nextPosition = 0
+
+    mutating func process(_ samples: [Float]) -> [Float] {
+        guard let last = samples.last else { return [] }
+        var output: [Float] = []
+        output.reserveCapacity(samples.count * 3 / 2 + 1)
+        let end = 3 * (samples.count - 1)
+        while self.nextPosition <= end {
+            // Positions are at least -2 thirds, so the floor index is -1 or more.
+            let index = self.nextPosition >= 0 ? self.nextPosition / 3 : -1
+            let fraction = Float(self.nextPosition - 3 * index) / 3
+            let left = index < 0 ? (self.previous ?? samples[0]) : samples[index]
+            let value = fraction == 0 ? left : left + (samples[index + 1] - left) * fraction
+            output.append(value)
+            self.nextPosition += 2
+        }
+        self.nextPosition -= 3 * samples.count
+        self.previous = last
+        return output
     }
 }
 
