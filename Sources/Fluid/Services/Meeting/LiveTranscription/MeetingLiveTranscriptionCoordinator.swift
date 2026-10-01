@@ -49,6 +49,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var applicationEngine: (any MeetingLiveCaptionEngine)?
     /// Each track's own state; the snapshot shows their combination. Guarded by `stateLock`.
     private var trackAvailability: [MeetingAudioTrackKind: MeetingLiveAvailability] = [:]
+    /// Set while a Live cloud provider transcribes this recording. Guarded by `stateLock`.
+    private var cloudConfiguration: LiveTranscriptionConfiguration?
+    /// Every finished provider turn, before echo suppression, for the completed transcript.
+    /// Guarded by `stateLock`.
+    private var cloudTurns: [MeetingLiveCloudTranscript.Turn] = []
 
     init(
         onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void,
@@ -78,6 +83,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
             self.publish { $0.settingAvailability(.unavailable(reason: reason)) }
         case let .cloud(configuration, apiKey):
             let name = LiveTranscriptionCatalog.info(for: configuration.provider).name
+            self.stateLock.withLock { self.cloudConfiguration = configuration }
             self.diag("[live] streaming captions to \(configuration.provider.rawValue) mode=\(mode)")
             self.launchEngines(mode: mode) { kind in self.makeCloudEngine(kind, configuration, apiKey) }
             self.publish { $0.settingAvailability(.unavailable(reason: "Connecting live captions to \(name)…")) }
@@ -165,9 +171,27 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.diag(
             "[live] stopping engines offers=\(self.stateLock.withLock { self.offerCounts.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ") })"
         )
-        await microphone?.stop()
-        await application?.stop()
+        // Concurrently: a cloud engine can wait a few seconds for its provider's last words.
+        await withTaskGroup(of: Void.self) { group in
+            for engine in [microphone, application].compactMap(\.self) {
+                group.addTask { await engine.stop() }
+            }
+        }
         self.diag("[live] engines stopped, models released")
+    }
+
+    /// What the Live cloud provider transcribed, or nil when captions ran on this Mac. Read after
+    /// `stop()`, which lets each provider finish its last words first.
+    func cloudTranscript() -> MeetingLiveCloudTranscript? {
+        self.stateLock.withLock {
+            self.cloudConfiguration.map { configuration in
+                MeetingLiveCloudTranscript(
+                    provider: configuration.provider,
+                    modelID: configuration.modelID,
+                    turns: self.cloudTurns.sorted { $0.presentationStart < $1.presentationStart }
+                )
+            }
+        }
     }
 
     private func launch(_ engine: any MeetingLiveCaptionEngine) {
@@ -207,6 +231,15 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         let speaker = Self.speaker(for: kind)
 
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {
+            if self.cloudConfiguration != nil {
+                // Processing applies its own echo verdicts, so the transcript keeps every turn.
+                self.cloudTurns.append(MeetingLiveCloudTranscript.Turn(
+                    trackKind: kind,
+                    text: text,
+                    presentationStart: start.seconds,
+                    presentationEnd: end.seconds
+                ))
+            }
             self.snapshot.revision &+= 1
             if speaker == .you {
                 if self.microphoneCaptureMethod != .voiceProcessing {

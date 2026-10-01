@@ -46,7 +46,7 @@ OpenRouter's own catalog notes name word-level timestamps for Whisper Large V3, 
 
 Local Nemotron still identifies speakers. Track separation, echo handling, speaker matching, and transcript assembly use the existing shared meeting pipeline.
 
-Automatic and supported manual language selection apply to the completed cloud transcript. Live captions are set separately: they stay on this Mac in English unless a Live cloud provider is chosen for them (see [Live cloud transcription](live-transcription.md#meeting-live-captions)). Missing or invalid word timestamps produce an incomplete result with an actionable error; the app never invents timestamps. Retrying a meeting can reuse successful recognition chunks with the same audio and frozen configuration.
+Automatic and supported manual language selection apply to the completed cloud transcript. With OpenRouter, live captions run on this Mac in English; the **Live cloud** choice streams captions and the transcript from a live provider instead (see [Live cloud transcription](live-transcription.md#meetings-fluidmeet)). Missing or invalid word timestamps produce an incomplete result with an actionable error; the app never invents timestamps. Retrying a meeting can reuse successful recognition chunks with the same audio and frozen configuration.
 
 Optional speaker labels for imported audio use local diarization aligned against one timed cloud transcript, so they also need a model with verified word timestamps. The check runs from meeting settings with OpenRouter selected there and does not change the meeting model. Words with no confident speaker remain unassigned. Speaker labels for imported video are not supported in this release; disable that option to transcribe video as plain text.
 

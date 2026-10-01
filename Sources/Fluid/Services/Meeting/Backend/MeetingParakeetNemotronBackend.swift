@@ -50,6 +50,25 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         usesTextOverlapEchoVerdicts: true
     )
 
+    static let liveCloudDescriptor = MeetingBackendDescriptor(
+        id: .liveCloudNemotron,
+        version: "1",
+        execution: .hosted,
+        supportedLanguageCodes: MeetingCloudLanguage.supportedCodes,
+        supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+        supportedFinalPrecisions: [.utterance],
+        resultContract: .canonicalEvidence,
+        knownLimits: [
+            "Text is what the Live cloud provider streamed during the recording; nothing is transcribed afterwards.",
+            "Each caption turn is one timed utterance, so speaker labels follow turns rather than words.",
+            "Audio recorded while no provider connection was open has no text.",
+            "Nemotron has 8 speaker slots per analysis epoch and requires Apple Silicon.",
+        ],
+        analysisSampleRate: 16_000,
+        requiresLocalDiarization: true,
+        usesTextOverlapEchoVerdicts: true
+    )
+
     let descriptor: MeetingBackendDescriptor
 
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
@@ -70,7 +89,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
-        let language = self.descriptor.id == .openRouterNemotron || request.session.languageCode == MeetingCloudLanguage.automatic
+        let language = self.descriptor.id.usesCloudLanguage || request.session.languageCode == MeetingCloudLanguage.automatic
             ? request.configuration.languageCode : request.session.languageCode
         guard self.descriptor.supportedLanguageCodes.contains(language) else {
             throw MeetingBackendError.unsupportedLanguage(
@@ -82,6 +101,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         // (plan §5): no coercion of another model or feature into this backend.
         if self.descriptor.id == .openRouterNemotron {
             try MeetingCloudConfiguration.validate(request.configuration)
+        } else if self.descriptor.id == .liveCloudNemotron {
+            // The text already exists; a recording that streamed nothing fails before any model loads.
+            guard try MeetingLiveCloudTranscript.load(from: request.sessionDirectory) != nil else {
+                throw MeetingLiveCloudTranscriptError.missing
+            }
         } else {
             _ = try MeetingProviderOptions.resolve(request.configuration)
         }
@@ -307,6 +331,22 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
         try Task.checkCancellation()
 
+        // Live cloud: the provider transcribed the recording while it ran; its saved turns replace ASR.
+        if backendID == .liveCloudNemotron {
+            await progress(.transcribing)
+            guard let transcript = try MeetingLiveCloudTranscript.load(from: request.sessionDirectory) else {
+                throw MeetingLiveCloudTranscriptError.missing
+            }
+            return try self.assembleLiveBundle(
+                request: request,
+                backendID: backendID,
+                manifest: manifest,
+                epochWork: epochWork,
+                phaseA: phaseA,
+                transcript: transcript
+            )
+        }
+
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
         // failed phase A are excluded from ASR as well: an epoch is one unit of work.
         await progress(.transcribing)
@@ -470,6 +510,108 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             ),
             coverageReceipts: receipts
         )
+    }
+
+    /// Live cloud assembly: one utterance unit per streamed turn, placed in the epoch that holds its
+    /// start and assigned to the speaker slots active during it. Receipts follow phase A, because
+    /// the text needs no further work per epoch.
+    private nonisolated static func assembleLiveBundle(
+        request: MeetingBackendRequest,
+        backendID: MeetingBackendID,
+        manifest: MeetingAnalysisManifest,
+        epochWork: [EpochWork],
+        phaseA: MeetingNemotronPhaseResult,
+        transcript: MeetingLiveCloudTranscript
+    ) throws -> MeetingCanonicalResultBundle {
+        let activityByEpoch = Dictionary(grouping: phaseA.activity, by: { $0.token.analysisEpochID })
+        var units: [MeetingFinalTextUnit] = []
+        var receipts: [MeetingSpanCoverageReceipt] = []
+        for work in epochWork {
+            if let reason = phaseA.failures[work.epoch.id] {
+                receipts += work.spans.map { Self.receipt(for: $0, status: .failed, reasonCode: reason) }
+            } else {
+                receipts += work.spans.map { Self.receipt(for: $0, status: .processed) }
+            }
+        }
+        for track in manifest.tracks {
+            let trackWork = epochWork.filter { $0.track.id == track.id && phaseA.failures[$0.epoch.id] == nil }
+            for (index, turn) in transcript.turns.enumerated() where turn.trackKind == track.kind {
+                try Task.checkCancellation()
+                let text = turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty,
+                      let placed = Self.liveTurnPlacement(
+                          recordedStart: turn.presentationStart - manifest.presentationOriginSeconds,
+                          recordedEnd: turn.presentationEnd - manifest.presentationOriginSeconds,
+                          epochs: trackWork.map(\.spans)
+                      ),
+                      let spanIDs = Self.intersectingSpanIDs(start: placed.start, end: placed.end, spans: trackWork[placed.epochIndex].spans)
+                else { continue }
+                let work = trackWork[placed.epochIndex]
+                units.append(MeetingFinalTextUnit(
+                    id: "unit:\(request.attemptID.uuidString):\(work.epoch.id):live:\(index)",
+                    trackID: work.track.id,
+                    analysisEpochID: work.epoch.id,
+                    precision: .utterance,
+                    text: text,
+                    analysisStart: placed.start,
+                    analysisEnd: placed.end,
+                    speaker: Self.assignment(
+                        start: placed.start,
+                        end: placed.end,
+                        activity: activityByEpoch[work.epoch.id] ?? [],
+                        allowDominance: true
+                    ),
+                    analysisSpanIDs: spanIDs,
+                    confidence: nil
+                ))
+            }
+        }
+        return MeetingCanonicalResultBundle(
+            evidence: MeetingFinalTranscriptEvidence(
+                backendID: backendID,
+                attemptID: request.attemptID,
+                units: units,
+                speakerActivity: phaseA.activity.filter { phaseA.failures[$0.token.analysisEpochID] == nil },
+                speakerSlotsContinueAcrossEpochs: true
+            ),
+            coverageReceipts: receipts
+        )
+    }
+
+    /// Places a streamed turn, given in recorded (origin-relative presentation) seconds, on one
+    /// track's analysis stream. `epochs` holds each epoch's spans in analysis order. The turn belongs
+    /// to the epoch whose span holds its start, or, when it starts in a gap, to the first span it
+    /// reaches; its end is clamped to that epoch, so no turn is counted twice.
+    nonisolated static func liveTurnPlacement(
+        recordedStart: TimeInterval,
+        recordedEnd: TimeInterval,
+        epochs: [[MeetingAnalysisSpan]]
+    ) -> (epochIndex: Int, start: TimeInterval, end: TimeInterval)? {
+        guard recordedStart.isFinite, recordedEnd.isFinite, recordedEnd > recordedStart else { return nil }
+        let pieces = epochs.enumerated().flatMap { index, spans in spans.map { (epochIndex: index, span: $0) } }
+        let owner = pieces.first {
+            $0.span.recordedInterval.start <= recordedStart && recordedStart < $0.span.recordedInterval.end
+        } ?? pieces
+            .filter { $0.span.recordedInterval.start > recordedStart && $0.span.recordedInterval.start < recordedEnd }
+            .min { $0.span.recordedInterval.start < $1.span.recordedInterval.start }
+        guard let owner else { return nil }
+        let spans = epochs[owner.epochIndex]
+        let start = recordedStart < owner.span.recordedInterval.start
+            ? owner.span.analysisInterval.start
+            : Self.analysisTime(forRecorded: recordedStart, in: owner.span)
+        guard let last = spans.last(where: { $0.recordedInterval.start < recordedEnd }) else { return nil }
+        let end = recordedEnd >= last.recordedInterval.end
+            ? last.analysisInterval.end
+            : Self.analysisTime(forRecorded: recordedEnd, in: last)
+        guard end > start else { return nil }
+        return (owner.epochIndex, start, end)
+    }
+
+    private nonisolated static func analysisTime(forRecorded seconds: TimeInterval, in span: MeetingAnalysisSpan) -> TimeInterval {
+        let recorded = span.recordedInterval
+        guard recorded.duration > 0 else { return span.analysisInterval.start }
+        let fraction = min(max((seconds - recorded.start) / recorded.duration, 0), 1)
+        return span.analysisInterval.start + fraction * span.analysisInterval.duration
     }
 
     private nonisolated static func receipt(

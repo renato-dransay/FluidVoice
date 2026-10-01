@@ -276,7 +276,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     /// Removes the provider from the list with its key and model choice. If it was active, dictation returns to
-    /// Local; if meeting captions used it, they return to the on-device model.
+    /// Local; if FluidMeet transcribed with it, meetings return to Local too.
     func removeLiveProvider(_ provider: LiveTranscriptionProviderID) {
         let wasActive = self.settings.storedLiveProvider == provider
         do {
@@ -291,7 +291,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.liveActivationStatus[provider] = nil
         self.liveRejectedKeys.remove(provider)
         if wasActive { self.deactivateLiveProvider() }
-        if self.settings.meetingLiveCaptionProvider == provider { self.settings.meetingLiveCaptionProvider = nil }
+        if self.settings.meetingLiveCloudProvider == provider {
+            self.settings.meetingLiveCloudProvider = nil
+            if self.settings.meetingTranscriptionBackendID == .liveCloudNemotron { self.settings.meetingTranscriptionBackendID = .parakeetNemotron }
+        }
         self.settings.objectWillChange.send()
     }
 

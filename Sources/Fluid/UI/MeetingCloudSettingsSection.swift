@@ -1,6 +1,13 @@
 import SwiftUI
 
 struct MeetingCloudSettingsSection: View {
+    /// The three meeting transcription choices, named like the Voice Engine tabs.
+    private enum Engine: Hashable {
+        case local
+        case openRouter
+        case liveCloud
+    }
+
     let onOpenVoiceEngine: () -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
@@ -9,70 +16,171 @@ struct MeetingCloudSettingsSection: View {
     @State private var checkProgress: (completed: Int, total: Int, modelName: String)?
     @State private var modelStatus = ""
 
-    private var usesCloud: Bool { self.settings.meetingTranscriptionBackendID == .openRouterNemotron }
+    private var engine: Engine {
+        switch self.settings.meetingTranscriptionBackendID {
+        case .openRouterNemotron: .openRouter
+        case .liveCloudNemotron: .liveCloud
+        default: .local
+        }
+    }
+
+    private var usesCloud: Bool { self.engine == .openRouter }
 
     var body: some View {
-        FluidManagementGroup(title: "Completed meeting transcripts") {
+        FluidManagementGroup(title: "Meeting transcription") {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Picker("Transcription", selection: Binding(
-                    get: { self.usesCloud },
-                    set: { self.settings.meetingTranscriptionBackendID = $0 ? .openRouterNemotron : .parakeetNemotron }
+                    get: { self.engine },
+                    set: { self.select($0) }
                 )) {
-                    Text("Local").tag(false)
-                    Text("OpenRouter").tag(true)
+                    Text("Local").tag(Engine.local)
+                    Text("OpenRouter").tag(Engine.openRouter)
+                    Text("Live cloud").tag(Engine.liveCloud)
                 }
                 .pickerStyle(.segmented)
+                .accessibilityIdentifier("meeting-transcription-engine")
 
-                if self.usesCloud {
-                    Picker("Meeting model", selection: self.$settings.meetingCloudModelID) {
-                        ForEach(self.supportedModels, id: \.id) { model in
-                            Text(model.name).tag(model.id)
-                        }
-                        if !self.supportedModels.contains(where: { $0.id == self.settings.meetingCloudModelID }) {
-                            Text("\(self.name(for: self.settings.meetingCloudModelID)) (not verified)").tag(self.settings.meetingCloudModelID)
-                        }
-                    }
-                    .disabled(self.checkProgress != nil)
-                    HStack(spacing: self.theme.metrics.spacing.sm) {
-                        Button(self.uncheckedModels.isEmpty ? "Re-check models without word timings" : "Check catalog models for word timings", action: self.checkCatalogModels)
-                            .meetingGlassAction()
-                            .disabled(self.checkProgress != nil || self.checkCandidates.isEmpty)
-                        if let progress = self.checkProgress {
-                            ProgressView("Checking \(progress.completed) of \(progress.total): \(progress.modelName)…").controlSize(.small)
-                        }
-                    }
-                    if !self.modelStatus.isEmpty {
-                        Text(self.modelStatus)
-                            .font(self.theme.typography.caption)
-                            .textSelection(.enabled)
-                    }
-                    Text(self.uncheckedModels.isEmpty
-                        ? "Only models with verified word timings are listed, because meetings need them to label speakers."
-                        : "Only models with verified word timings are listed, because meetings need them to label speakers. OpenRouter lists \(self.uncheckedModels.count) unchecked models; checking sends each one short synthetic clip.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                    Picker("Transcript language", selection: self.$settings.meetingCloudLanguageCode) {
-                        ForEach(MeetingCloudLanguage.choices, id: \.code) { language in
-                            Text(language.name).tag(language.code)
-                        }
-                    }
-                    Text("Recorded audio is sent to OpenRouter. Speaker detection stays on this Mac. Charges apply to audio duration.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                    Button(self.settings.openRouterTranscriptionAPIKey.isEmpty
-                        ? "Add OpenRouter key in Voice Engine" : "Manage OpenRouter key in Voice Engine", action: self.onOpenVoiceEngine)
-                        .meetingGlassAction()
-                } else {
-                    Text("Parakeet transcribes English on this Mac.")
-                        .font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.secondaryText)
+                switch self.engine {
+                case .openRouter: self.openRouterSettings
+                case .liveCloud: self.liveCloudSettings
+                case .local:
+                    self.caption("Parakeet transcribes English on this Mac. Live captions also run on this Mac, in English.")
                 }
-                Text("Changes apply when the next transcription starts.")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                self.caption(self.engine == .liveCloud
+                    ? "Changes apply when the next recording starts."
+                    : "Changes apply when the next transcription starts.")
             }
         }
         .task(id: self.usesCloud) { await self.refreshCatalog() }
+    }
+
+    private func select(_ engine: Engine) {
+        switch engine {
+        case .local: self.settings.meetingTranscriptionBackendID = .parakeetNemotron
+        case .openRouter: self.settings.meetingTranscriptionBackendID = .openRouterNemotron
+        case .liveCloud: self.settings.selectMeetingLiveCloud()
+        }
+    }
+
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var transcriptLanguagePicker: some View {
+        Picker("Transcript language", selection: self.$settings.meetingCloudLanguageCode) {
+            ForEach(MeetingCloudLanguage.choices, id: \.code) { language in
+                Text(language.name).tag(language.code)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var openRouterSettings: some View {
+        Picker("Meeting model", selection: self.$settings.meetingCloudModelID) {
+            ForEach(self.supportedModels, id: \.id) { model in
+                Text(model.name).tag(model.id)
+            }
+            if !self.supportedModels.contains(where: { $0.id == self.settings.meetingCloudModelID }) {
+                Text("\(self.name(for: self.settings.meetingCloudModelID)) (not verified)").tag(self.settings.meetingCloudModelID)
+            }
+        }
+        .disabled(self.checkProgress != nil)
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            Button(self.uncheckedModels.isEmpty ? "Re-check models without word timings" : "Check catalog models for word timings", action: self.checkCatalogModels)
+                .meetingGlassAction()
+                .disabled(self.checkProgress != nil || self.checkCandidates.isEmpty)
+            if let progress = self.checkProgress {
+                ProgressView("Checking \(progress.completed) of \(progress.total): \(progress.modelName)…").controlSize(.small)
+            }
+        }
+        if !self.modelStatus.isEmpty {
+            Text(self.modelStatus)
+                .font(self.theme.typography.caption)
+                .textSelection(.enabled)
+        }
+        self.caption(self.uncheckedModels.isEmpty
+            ? "Only models with verified word timings are listed, because meetings need them to label speakers."
+            : "Only models with verified word timings are listed, because meetings need them to label speakers. OpenRouter lists \(self.uncheckedModels.count) unchecked models; checking sends each one short synthetic clip.")
+        self.transcriptLanguagePicker
+        self.caption("Recorded audio is sent to OpenRouter after you stop. Speaker detection stays on this Mac, and live captions run on this Mac in English. Charges apply to audio duration.")
+        Button(self.settings.openRouterTranscriptionAPIKey.isEmpty
+            ? "Add OpenRouter key in Voice Engine" : "Manage OpenRouter key in Voice Engine", action: self.onOpenVoiceEngine)
+            .meetingGlassAction()
+    }
+
+    private var liveProviderChoices: [LiveTranscriptionProviderID] { self.settings.meetingLiveCloudProviderChoices }
+
+    @ViewBuilder
+    private var liveCloudSettings: some View {
+        let selected = self.settings.meetingLiveCloudProvider
+        if self.liveProviderChoices.isEmpty, selected == nil {
+            self.caption("Add a live provider and save its API key under Voice Engine > Live cloud, then choose it here. Live cloud streams the meeting while you record, so captions and the transcript come from the same provider.")
+            Button("Add a live provider in Voice Engine", action: self.onOpenVoiceEngine)
+                .meetingGlassAction()
+        } else {
+            Picker("Live provider", selection: self.$settings.meetingLiveCloudProvider) {
+                if selected == nil {
+                    Text("Choose a provider").tag(LiveTranscriptionProviderID?.none)
+                }
+                ForEach(self.liveProviderChoices) { provider in
+                    Text(Self.name(of: provider)).tag(Optional(provider))
+                }
+                if let selected, !self.liveProviderChoices.contains(selected) {
+                    Text("\(Self.name(of: selected)) (key required)").tag(Optional(selected))
+                }
+            }
+            .accessibilityIdentifier("meeting-live-cloud-provider")
+            if let selected {
+                self.caption("Model: \(Self.modelName(of: selected)). Change it in the provider's Manage sheet in Voice Engine.")
+            }
+            self.transcriptLanguagePicker
+            if let selected, let note = self.languageNote(for: selected) {
+                self.caption(note)
+            }
+            self.caption(self.liveCloudPrivacy(selected))
+            Button("Manage live providers in Voice Engine", action: self.onOpenVoiceEngine)
+                .meetingGlassAction()
+        }
+    }
+
+    private func liveCloudPrivacy(_ provider: LiveTranscriptionProviderID?) -> String {
+        guard let provider else { return "Choose the provider that receives the meeting audio." }
+        let name = Self.name(of: provider)
+        if !self.liveProviderChoices.contains(provider) {
+            return "\(name) has no saved API key, so meetings cannot be transcribed until you add one under Voice Engine > Live cloud."
+        }
+        return [
+            "While you record, meeting audio streams to \(name) with your key. Live captions and the completed transcript both come from it, so nothing is uploaded after you stop.",
+            "Speaker detection stays on this Mac.",
+            "Online calls stream your microphone and the call audio separately, and \(name) bills each stream for the whole recording.",
+        ].joined(separator: " ")
+    }
+
+    /// Mirrors `SettingsStore.meetingLiveCloudSource`: a language the provider does not list is
+    /// detected automatically when the provider can.
+    private func languageNote(for provider: LiveTranscriptionProviderID) -> String? {
+        let info = LiveTranscriptionCatalog.info(for: provider)
+        let code = self.settings.meetingCloudLanguageCode
+        guard code != MeetingCloudLanguage.automatic else {
+            return info.detectsLanguageAutomatically ? nil : "\(info.name) cannot detect the language, so it uses your Primary language from Voice Engine."
+        }
+        guard info.supports(languageCode: code) || !info.detectsLanguageAutomatically else {
+            let name = Locale.current.localizedString(forLanguageCode: code) ?? code
+            return "\(info.name) does not list \(name), so it detects the language automatically."
+        }
+        return nil
+    }
+
+    private static func name(of provider: LiveTranscriptionProviderID) -> String {
+        LiveTranscriptionCatalog.info(for: provider).name
+    }
+
+    private static func modelName(of provider: LiveTranscriptionProviderID) -> String {
+        let modelID = LiveTranscriptionPreferences(defaults: .standard).modelID(for: provider)
+        return LiveTranscriptionCatalog.info(for: provider).models.first { $0.id == modelID }?.name ?? modelID
     }
 
     private var supportedModels: [CloudTranscriptionModel] { self.models.filter(\.supportsWordTimings) }

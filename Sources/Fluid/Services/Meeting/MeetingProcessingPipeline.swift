@@ -1467,7 +1467,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             )
         )
-        let requestedLanguage = configuration.asrProvider == .openRouter || session.languageCode == MeetingCloudLanguage.automatic
+        let requestedLanguage = configuration.asrProvider != .local || session.languageCode == MeetingCloudLanguage.automatic
             ? configuration.languageCode : session.languageCode
         guard backend.descriptor.supportedLanguageCodes.contains(requestedLanguage) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: requestedLanguage)

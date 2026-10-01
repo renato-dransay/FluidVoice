@@ -18,7 +18,7 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .recording: "Choose audio sources and how completed meetings are transcribed."
+        case .recording: "Choose audio sources and how meetings are transcribed."
         case .automation: "Choose when to see a recording prompt and how long to keep audio."
         case .integrations: "Connect your meeting notes to the AI assistants you already use."
         }
@@ -277,7 +277,6 @@ struct MeetingRecordingSettingsSheet: View {
             }
 
             MeetingCloudSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
-            MeetingLiveCaptionSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {

@@ -20,6 +20,8 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 nonisolated enum MeetingASRProvider: String, CaseIterable, Sendable {
     case local
     case openRouter
+    /// The transcript a Live cloud provider streamed during the recording; nothing is transcribed afterwards.
+    case liveCloud
 }
 
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it

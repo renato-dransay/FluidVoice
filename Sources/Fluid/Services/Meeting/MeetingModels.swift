@@ -1153,7 +1153,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         for attempt in self.processingAttempts {
             if let languageCode = attempt.languageCode {
-                let isCloud = attempt.backendID == MeetingBackendID.openRouterNemotron.rawValue
+                let isCloud = attempt.backendID.map { MeetingBackendID(rawValue: $0).usesCloudLanguage } ?? false
                 guard MeetingCloudLanguage.supportedCodes.contains(languageCode),
                       isCloud || languageCode == self.languageCode || (self.languageCode == MeetingCloudLanguage.automatic && languageCode == "en")
                 else { throw MeetingModelValidationError.unsupportedLanguage }

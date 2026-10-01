@@ -109,6 +109,10 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
     private var onDegraded: MeetingLiveCaptionHandlers.Degraded?
     private var onReady: MeetingLiveCaptionHandlers.Ready?
     private var hasStarted = false
+    /// Set while `stop()` lets the provider finish; turns still close, nothing reconnects.
+    private var isStopping = false
+    /// Set while a long connection finishes before its replacement opens.
+    private var isRotating = false
     private var isStopped = false
     private var loopTask: Task<Void, Never>?
 
@@ -187,22 +191,33 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
         self.loopTask = Task { [weak self] in await self?.runLoop() }
     }
 
+    /// Terminal. The capture has stopped by now, so the audio still queued is sent and the provider
+    /// gets its finish messages; its last words close the open turn before the connection closes.
+    /// `LiveTranscriptionSession.finish` gives up after its own deadline.
     func stop() async {
+        guard !self.isStopping, !self.isStopped else { return }
+        self.isStopping = true
+        self.loopTask?.cancel()
+        await self.loopTask?.value
+        self.loopTask = nil
+        if let session = self.session {
+            for sample in self.queue.drainAll() {
+                await self.feed(sample)
+            }
+            _ = try? await session.finish()
+            // The progress stream ends with the session; its last values are handled before the turn closes.
+            await self.progressTask?.value
+            self.session = nil
+            self.streamedMilliseconds += await session.streamedMilliseconds
+        }
+        self.progressTask?.cancel()
+        self.progressTask = nil
+        if let turn = self.turn { self.closeTurn(turn, text: turn.text, shownThrough: self.latest.displayText) }
         self.isStopped = true
         self.onPartial = nil
         self.onUtterance = nil
         self.onDegraded = nil
         self.onReady = nil
-        self.loopTask?.cancel()
-        await self.loopTask?.value
-        self.loopTask = nil
-        self.progressTask?.cancel()
-        self.progressTask = nil
-        if let session = self.session {
-            self.session = nil
-            self.streamedMilliseconds += await session.streamedMilliseconds
-            await session.cancel()
-        }
         if self.streamedMilliseconds > 0 {
             self.recordUsage(self.configuration.provider, self.streamedMilliseconds)
             self.streamedMilliseconds = 0
@@ -218,7 +233,7 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
     // MARK: - Sessions
 
     private func openSession() {
-        guard !self.isStopped, !self.hasGivenUp else { return }
+        guard !self.isStopping, !self.isStopped, !self.hasGivenUp else { return }
         self.sessionGeneration += 1
         let generation = self.sessionGeneration
         let session = self.makeSession(self.configuration, self.apiKey)
@@ -244,15 +259,18 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
     }
 
     private func sessionConnected(generation: Int) {
-        guard generation == self.sessionGeneration, !self.isStopped else { return }
+        guard generation == self.sessionGeneration, !self.isStopping, !self.isStopped else { return }
         self.onReady?(self.kind)
     }
 
     private func sessionEnded(generation: Int) async {
-        guard generation == self.sessionGeneration, !self.isStopped, let session = self.session else { return }
+        // While stopping, `stop()` itself closes the session and the last turn.
+        guard generation == self.sessionGeneration, !self.isStopping, !self.isRotating, !self.isStopped,
+              let session = self.session
+        else { return }
         let failure = await session.failureReason
         self.streamedMilliseconds += await session.streamedMilliseconds
-        guard generation == self.sessionGeneration, !self.isStopped else { return }
+        guard generation == self.sessionGeneration, !self.isStopping, !self.isStopped else { return }
         self.session = nil
         self.progressTask = nil
         if let turn = self.turn { self.closeTurn(turn, text: turn.text, shownThrough: self.latest.displayText) }
@@ -276,29 +294,31 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
         self.retryAtUptime = self.uptime() + delay
     }
 
-    /// Replaces a long-running connection with a new one; the old one's audio and text are dropped.
+    /// Replaces a long-running connection with a new one. The old one finishes first, so speech that
+    /// began just before the switch still reaches the transcript; audio captured meanwhile waits in
+    /// the queue for the new connection.
     private func rotateSession() async {
         guard let session = self.session else { return }
         DebugLogger.shared.info(
             "Meeting live captions: replacing \(self.configuration.provider.rawValue) connection track=\(self.kind.rawValue)",
             source: "MeetingLive"
         )
+        self.isRotating = true
+        _ = try? await session.finish()
+        await self.progressTask?.value
+        self.isRotating = false
         if let turn = self.turn { self.closeTurn(turn, text: turn.text, shownThrough: self.latest.displayText) }
-        // A new generation first, so the old session's end is ignored.
         self.session = nil
-        self.sessionGeneration += 1
-        self.progressTask?.cancel()
         self.progressTask = nil
         self.streamedMilliseconds += await session.streamedMilliseconds
-        await session.cancel()
-        guard !self.isStopped else { return }
+        guard !self.isStopping, !self.isStopped else { return }
         self.openSession()
     }
 
     // MARK: - Audio
 
     private func runLoop() async {
-        while !Task.isCancelled, !self.isStopped {
+        while !Task.isCancelled, !self.isStopping, !self.isStopped {
             let samples = self.queue.drainAll()
             let now = self.uptime()
             if samples.isEmpty {
@@ -332,7 +352,7 @@ actor MeetingCloudCaptionEngine: MeetingLiveCaptionEngine {
     }
 
     private func maintainSession() async {
-        guard !self.isStopped else { return }
+        guard !self.isStopping, !self.isStopped else { return }
         if self.session == nil {
             if let retryAt = self.retryAtUptime, self.uptime() >= retryAt { self.openSession() }
             return

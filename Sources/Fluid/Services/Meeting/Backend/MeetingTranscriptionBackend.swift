@@ -22,6 +22,14 @@ nonisolated struct MeetingBackendID: RawRepresentable, Hashable, Codable, Sendab
     /// Hosted word-timed ASR with local Nemotron speaker detection.
     static let openRouterNemotron = MeetingBackendID(rawValue: "openrouter-nemotron-3-v1")
 
+    /// Text streamed to a Live cloud provider during the recording, with local Nemotron speaker detection.
+    static let liveCloudNemotron = MeetingBackendID(rawValue: "live-cloud-nemotron-3-v1")
+
+    /// Backends whose transcript language is the cloud transcript language rather than Parakeet's English.
+    var usesCloudLanguage: Bool {
+        self == .openRouterNemotron || self == .liveCloudNemotron
+    }
+
     /// Single source of truth for new meeting-processing attempts. Keep explicit stored selections
     /// untouched; this value applies only when no preference has been recorded.
     static let productionDefault: MeetingBackendID = .parakeetNemotron

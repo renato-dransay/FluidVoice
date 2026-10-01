@@ -1087,6 +1087,85 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(outside.disposition, .outsideActivity)
     }
 
+    func testLiveCloudBuildsUtterancesFromStreamedTurnsWithoutASR() async throws {
+        let chunk = self.makeChunk(sequence: 0, start: 100, end: 104)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track], languageCode: "auto")
+        let directory = try self.makeTempSessionDirectory()
+        try MeetingLiveCloudTranscript(
+            provider: .soniox,
+            modelID: "stt-rt-v5",
+            turns: [
+                .init(trackKind: .microphone, text: "Bom dia a todos", presentationStart: 100.2, presentationEnd: 101.8),
+                .init(trackKind: .microphone, text: "Obrigado", presentationStart: 102.5, presentationEnd: 103.5),
+                .init(trackKind: .applicationAudio, text: "not this track", presentationStart: 100.5, presentationEnd: 101),
+            ]
+        ).write(to: directory)
+        let runtime = FakeRuntime()
+        let backend = MeetingParakeetNemotronBackend(
+            runtimeFactory: { _ in runtime },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer(),
+            descriptor: MeetingParakeetNemotronBackend.liveCloudDescriptor
+        )
+        let plan = try backend.plan(self.makeRequest(
+            session: session,
+            directory: directory,
+            configuration: MeetingFinalProcessingConfiguration(asrProvider: .liveCloud, asrModel: "soniox/stt-rt-v5", languageCode: "auto")
+        ))
+        let manifest = try self.makeManifest(
+            plan: plan,
+            observations: [MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 4)]
+        )
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        runtime.diarizerFactory.segmentsByEpoch = [
+            epoch.id: [
+                MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0.0, end: 2.0),
+                MeetingNemotronSpeakerSegment(slotIndex: 1, start: 2.2, end: 4.0),
+            ],
+        ]
+
+        let outcome = try await backend.execute(plan: plan, manifest: manifest) { _ in }
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertTrue(runtime.asrAttemptIDs.isEmpty, "Live cloud text needs no ASR")
+        XCTAssertEqual(bundle.evidence.backendID, .liveCloudNemotron)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Bom dia a todos", "Obrigado"])
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { $0.precision == .utterance })
+        XCTAssertEqual(bundle.evidence.units.first?.analysisStart ?? 0, 0.2, accuracy: 0.01)
+        XCTAssertEqual(bundle.evidence.units.first?.analysisEnd ?? 0, 1.8, accuracy: 0.01)
+        guard case let .assigned(first) = bundle.evidence.units[0].speaker,
+              case let .assigned(second) = bundle.evidence.units[1].speaker
+        else { return XCTFail("Each turn overlaps one speaker") }
+        XCTAssertEqual([first.label, second.label], ["slot-0", "slot-1"])
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+
+        let assembly = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: bundle.evidence,
+            coverageReceipts: bundle.coverageReceipts
+        ))
+        XCTAssertEqual(assembly.segments.map(\.text), ["Bom dia a todos", "Obrigado"])
+        XCTAssertEqual(assembly.speakers.count, 2)
+    }
+
+    func testLiveCloudRefusesARecordingWithoutAStreamedTranscript() throws {
+        let fixture = self.makeTwoEpochFixture()
+        let backend = MeetingParakeetNemotronBackend(
+            runtimeFactory: { _ in FakeRuntime() },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer(),
+            descriptor: MeetingParakeetNemotronBackend.liveCloudDescriptor
+        )
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(
+            session: fixture.session,
+            directory: self.makeTempSessionDirectory(),
+            configuration: MeetingFinalProcessingConfiguration(asrProvider: .liveCloud, asrModel: "soniox/stt-rt-v5", languageCode: "auto")
+        ))) { error in
+            XCTAssertEqual(error as? MeetingLiveCloudTranscriptError, .missing)
+        }
+    }
+
     func testCoverageUnionDoesNotDoubleCountDuplicateSpeakerIntervals() {
         let (slot0, slot1) = self.attributionTokens()
         let activity = [

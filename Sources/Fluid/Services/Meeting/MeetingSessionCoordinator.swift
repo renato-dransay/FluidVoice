@@ -1981,6 +1981,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscriptionCoordinator = nil
         await coordinator.stop()
         self.liveTranscript = .empty
+        // Live cloud makes the completed transcript from what the provider streamed, so it is saved
+        // with the session before processing reads it.
+        guard let transcript = coordinator.cloudTranscript(), let sessionID = self.activeSession?.id else { return }
+        do {
+            try transcript.write(to: try await self.store.sessionDirectory(for: sessionID))
+        } catch {
+            DebugLogger.shared.warning(
+                "Saving the Live cloud transcript failed: \(error.localizedDescription)",
+                source: "MeetingSessionCoordinator"
+            )
+        }
     }
 
     private func releaseActivityLease() async {
