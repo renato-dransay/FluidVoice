@@ -9,7 +9,9 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         case timed
     }
 
-    /// Manual mode still commits on its own after about 36 s of uncommitted audio (protocols §4).
+    // EVIDENCE: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/transcripts-and-commit-strategies (checked 2026-10-01)
+    /// Manual mode still commits on its own after about 36 s of uncommitted audio, and the docs call a
+    /// commit every 20-30 s good practice.
     private static let commitIntervalMilliseconds = 30_000
 
     /// Commit replies received, a reply sent in both variants counting once.
@@ -55,8 +57,15 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         return .text(#"{"audio_base_64":""# + pcm16.base64EncodedString() + #"","commit":\#(commit),"message_type":"input_audio_chunk","sample_rate":16000}"#)
     }
 
+    // JUDGMENT: when the last chunk already carried an interval commit, no audio is left uncommitted, and a
+    // second commit right behind it would be an empty one in a short burst. That commit's reply ends the
+    // stream instead.
+    // EVIDENCE: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference (checked 2026-10-01):
+    // `commit_throttled` is an error for "too many commit requests made in a short period of time", and an
+    // error is returned "before the WebSocket connection is closed". The docs give no minimum interval.
     mutating func finishMessages() -> [LiveTransportMessage] {
         self.finishRequested = true
+        if self.commitsSent > 0, self.uncommittedMilliseconds == 0 { return [] }
         self.commitsSent += 1
         return [.text(#"{"audio_base_64":"","commit":true,"message_type":"input_audio_chunk","sample_rate":16000}"#)]
     }
@@ -84,8 +93,9 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         try LiveHTTPStatus.request("https://api.elevenlabs.io/v1/models", headers: ["xi-api-key": apiKey])
     }
 
-    // JUDGMENT: with include_timestamps the docs list both commit messages without saying whether one commit
-    // sends one or both. A commit of the other kind with the same text right after the previous one is
+    // EVIDENCE: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference (checked 2026-10-01):
+    // with include_timestamps one commit sends both messages, `committed_transcript_with_timestamps` "after the
+    // committed transcript". A commit of the other kind with the same text right after the previous one is
     // read as the same commit, so the text never doubles; the timed variant's end is kept.
     private mutating func commit(text: String, end: Int?, kind: CommitKind) -> [LiveTranscriptUpdate] {
         let segment: LiveTranscriptSegment
@@ -106,7 +116,8 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         switch type {
         case "auth_error": .authentication
         case "quota_exceeded": .quotaExhausted
-        case "rate_limited", "resource_exhausted": .rateLimited
+        // `queue_overflow` asks the client to send fewer requests, like a rate limit.
+        case "rate_limited", "resource_exhausted", "queue_overflow": .rateLimited
         default: .sessionClosed(type)
         }
     }

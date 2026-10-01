@@ -116,12 +116,32 @@ final class LiveTranscriptionElevenLabsTests: XCTestCase {
         XCTAssertEqual(commits.indices.filter { commits[$0] }, [29, 59], "The chunks that complete 30 s and 60 s carry a commit")
     }
 
+    func testAFinishRightAfterAnIntervalCommitSendsNoSecondCommit() {
+        var adapter = ElevenLabsLiveAdapter()
+        let second = Data(count: 1000 * LivePCM16.bytesPerMillisecond)
+        // The 30th second carries the interval commit, and the recording stops on it.
+        for _ in 0 ..< 30 { _ = adapter.audioMessage(second) }
+        XCTAssertTrue(adapter.finishMessages().isEmpty, "An empty commit right behind the interval commit is not sent")
+        XCTAssertEqual(
+            adapter.parse(.text(#"{"message_type":"committed_transcript","text":"thirty seconds"}"#)),
+            [.segment(.init(id: "c1", text: "thirty seconds", isFinal: true, audioEndMilliseconds: nil)), .pending(""), .finished],
+            "The interval commit's reply ends the stream"
+        )
+    }
+
+    func testAFinishWithoutAudioStillCommits() {
+        var adapter = ElevenLabsLiveAdapter()
+        XCTAssertEqual(adapter.finishMessages().count, 1)
+    }
+
     func testErrorMessagesMap() {
         var adapter = ElevenLabsLiveAdapter()
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"auth_error","error":"PRIVATE"}"#)), [.failure(.authentication)])
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"quota_exceeded","error":"PRIVATE"}"#)), [.failure(.quotaExhausted)])
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"rate_limited","error":"PRIVATE"}"#)), [.failure(.rateLimited)])
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"resource_exhausted","error":"PRIVATE"}"#)), [.failure(.rateLimited)])
+        XCTAssertEqual(adapter.parse(.text(#"{"message_type":"queue_overflow","error":"PRIVATE"}"#)), [.failure(.rateLimited)])
+        XCTAssertEqual(adapter.parse(.text(#"{"message_type":"commit_throttled","error":"PRIVATE"}"#)), [.failure(.sessionClosed("commit_throttled"))])
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"input_error","error":"PRIVATE"}"#)), [.failure(.sessionClosed("input_error"))])
         XCTAssertEqual(adapter.parse(.text(#"{"message_type":"warning","warning":"PRIVATE"}"#)), [])
     }
