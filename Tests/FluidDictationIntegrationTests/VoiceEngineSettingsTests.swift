@@ -151,6 +151,39 @@ final class VoiceEngineSettingsTests: XCTestCase {
             Model.cloudSpeechModelCaptions(providerID: "soniox", supportsWordTimings: true),
             [base, "This provider answers after a short wait, so dictation feels slower than with Local or Live cloud."]
         )
+        XCTAssertEqual(
+            Model.cloudSpeechModelCaptions(providerID: "gladia", modelID: "solaria-3", supportsWordTimings: true).last,
+            "Solaria-3 cannot detect the language. It needs English, French, German, Spanish or Italian as your Primary or Secondary language."
+        )
+        XCTAssertTrue(Model.cloudSpeechModelCaptions(providerID: "deepgram", modelID: "nova-3-medical", supportsWordTimings: true).last?.hasPrefix("English only.") == true)
+        XCTAssertEqual(Model.cloudSpeechModelCaptions(providerID: "deepgram", modelID: "nova-3", supportsWordTimings: true), [base])
+    }
+
+    /// Like Speechmatics Live without a Primary language: a model that would fail every dictation never
+    /// becomes the engine, and the check sends nothing.
+    func testActivationRefusesAModelThatCannotTakeTheDictationLanguages() async {
+        let store = self.store(FakeKeychain(["gladia": "gl-key"]))
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data())
+        }
+        let clients: (String) -> any CloudTranscriptionClient = { _ in GladiaTranscriptionClient(session: CloudURLProtocol.session()) }
+        let outcome = await CloudEngineActivation(keyStore: store).activate(
+            "gladia",
+            check: { apiKey in
+                try await VoiceEngineSettingsViewModel.checkCloudProvider(
+                    "gladia", modelID: "solaria-3", apiKey: apiKey, languageIssue: .unsupportedLanguageForModel, clients: clients
+                )
+            },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(outcome, .failed(
+            message: "Couldn't activate Gladia: This Gladia model doesn't support your dictation language. Choose another model or language in Voice Engine.",
+            keyRejected: false
+        ))
+        XCTAssertTrue(recorder.requests.isEmpty)
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
     }
 
     func testTheShownCloudProviderIsBrowsedThenStoredThenFirstConnected() {

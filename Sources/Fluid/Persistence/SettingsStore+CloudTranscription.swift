@@ -63,6 +63,22 @@ struct CloudTranscriptionPreferences {
         return stored.isEmpty ? defaultID : stored
     }
 
+    /// The language problem the provider's chosen model has with the dictation languages, for dictation
+    /// (the language chosen in the overlay, otherwise Primary and Secondary) or for imported files (Primary
+    /// and Secondary). Nil when the model can run.
+    func languageIssue(for providerID: String) -> CloudTranscriptionError? {
+        let modelID = self.modelID(for: providerID)
+        let dictation = CloudTranscriptionConfiguration(
+            providerID: providerID,
+            modelID: modelID,
+            languageCode: self.dictationLanguageCode,
+            primaryLanguageCode: self.primaryLanguageCode,
+            secondaryLanguageCode: self.secondaryLanguageCode
+        )
+        let files = dictation.with(languageCode: .some(nil))
+        return CloudTranscriptionCatalog.languageIssue(for: dictation) ?? CloudTranscriptionCatalog.languageIssue(for: files)
+    }
+
     /// True when the provider's chosen model is a stored choice its catalog no longer lists.
     func isUnlistedModel(for providerID: String) -> Bool {
         let modelID = self.modelID(for: providerID)

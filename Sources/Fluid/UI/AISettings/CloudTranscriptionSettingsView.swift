@@ -100,7 +100,7 @@ struct CloudTranscriptionSettingsView: View {
         if providerID == CloudTranscriptionPreferences.defaultProviderID {
             OpenRouterModelControls(settings: self.settings, viewModel: self.viewModel)
         } else {
-            CloudSpeechModelControls(settings: self.settings, providerID: providerID)
+            CloudSpeechModelControls(settings: self.settings, viewModel: self.viewModel, providerID: providerID)
         }
     }
 
@@ -227,6 +227,7 @@ struct CloudTranscriptionSettingsView: View {
 /// The one "Speech model" picker of a Cloud provider other than OpenRouter, from its catalog (CLD-4).
 struct CloudSpeechModelControls: View {
     @ObservedObject var settings: SettingsStore
+    @ObservedObject var viewModel: VoiceEngineSettingsViewModel
     let providerID: String
 
     var body: some View {
@@ -239,8 +240,19 @@ struct CloudSpeechModelControls: View {
                 selection: self.selection,
                 accessibilityIdentifier: "cloud-speech-model-\(self.providerID)"
             )
-            ForEach(VoiceEngineSettingsViewModel.cloudSpeechModelCaptions(providerID: self.providerID, supportsWordTimings: supportsWordTimings), id: \.self) { caption in
+            ForEach(
+                VoiceEngineSettingsViewModel.cloudSpeechModelCaptions(providerID: self.providerID, modelID: selectedID, supportsWordTimings: supportsWordTimings),
+                id: \.self
+            ) { caption in
                 Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+            // Like the Live cloud sheet's missing-language warning: shown while every dictation would fail.
+            if let warning = self.viewModel.cloudLanguageWarning(for: self.providerID) {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("cloud-language-warning-\(self.providerID)")
             }
         }
     }
@@ -268,7 +280,8 @@ struct SpeechModelPickerRow: View {
                 selectedModel: self.$selection,
                 controlWidth: 280,
                 popoverWidth: 340,
-                accessibilityIdentifier: self.accessibilityIdentifier
+                accessibilityIdentifier: self.accessibilityIdentifier,
+                accessibilityTitle: self.title
             )
             Spacer(minLength: 0)
         }

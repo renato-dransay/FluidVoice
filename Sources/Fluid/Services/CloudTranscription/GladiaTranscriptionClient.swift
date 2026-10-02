@@ -111,6 +111,12 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
     }
 
+    /// `.unsupportedLanguageForModel` when Solaria-3 has none of its languages to use, otherwise nil.
+    static func languageIssue(for configuration: CloudTranscriptionConfiguration) -> CloudTranscriptionError? {
+        guard configuration.modelID == self.singleLanguageModelID, (try? self.singleLanguage(for: configuration)) == nil else { return nil }
+        return .unsupportedLanguageForModel
+    }
+
     /// The one language Solaria-3 transcribes this recording in. A chosen language is never replaced.
     static func singleLanguage(for configuration: CloudTranscriptionConfiguration) throws -> String {
         let candidates = configuration.languageCode.map { [$0] } ?? [configuration.primaryLanguageCode, configuration.secondaryLanguageCode].compactMap { $0 }

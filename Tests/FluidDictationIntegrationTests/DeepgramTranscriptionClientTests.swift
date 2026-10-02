@@ -58,7 +58,30 @@ final class DeepgramTranscriptionClientTests: XCTestCase {
         }
         XCTAssertEqual(try query("nova-2"), ["model": "nova-2", "smart_format": "true", "detect_language": "true"])
         XCTAssertEqual(try query("nova-3-medical"), ["model": "nova-3-medical", "smart_format": "true", "language": "en"], "English only: never detection")
-        XCTAssertEqual(try query("nova-3-medical", language: "de")["language"], "en")
+        XCTAssertNil(DeepgramTranscriptionClient.languageIssue(for: .init(providerID: "deepgram", modelID: "nova-3-medical", primaryLanguageCode: "de")))
+        XCTAssertNil(DeepgramTranscriptionClient.languageIssue(for: .init(providerID: "deepgram", modelID: "nova-3", languageCode: "de")))
+    }
+
+    /// Nova-3 Medical never transcribes a chosen non-English language as English: it fails before sending.
+    func testAnEnglishOnlyModelRefusesAnotherChosenLanguageBeforeSending() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data())
+        }
+        do {
+            _ = try await self.client().transcribe(
+                samples: [0.1], configuration: .init(providerID: "deepgram", modelID: "nova-3-medical", languageCode: "de"), apiKey: "k", wordTimings: false
+            )
+            XCTFail("German must not be transcribed as English")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedLanguageForModel)
+            XCTAssertEqual(
+                CloudTranscriptionError.message(for: error, providerName: "Deepgram"),
+                "This Deepgram model doesn't support your dictation language. Choose another model or language in Voice Engine."
+            )
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
     }
 
     func testAStoredModelTheCatalogNoLongerListsIsStillSent() async throws {

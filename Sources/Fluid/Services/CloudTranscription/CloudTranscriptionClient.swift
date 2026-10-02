@@ -93,6 +93,17 @@ nonisolated enum CloudTranscriptionCatalog {
         }
     }
 
+    /// The error a provider's model raises before sending anything because it cannot take the dictation
+    /// languages: Gladia Solaria-3 without one of its five languages, Deepgram Nova-3 Medical with a chosen
+    /// language other than English. Nil when the model can run.
+    static func languageIssue(for configuration: CloudTranscriptionConfiguration) -> CloudTranscriptionError? {
+        switch configuration.providerID {
+        case GladiaTranscriptionClient.id: GladiaTranscriptionClient.languageIssue(for: configuration)
+        case DeepgramTranscriptionClient.id: DeepgramTranscriptionClient.languageIssue(for: configuration)
+        default: nil
+        }
+    }
+
     /// The model a provider uses until the user picks another.
     static func defaultModelID(for providerID: String) -> String? {
         providerID == self.openRouterID ? CloudTranscriptionModel.defaultDictationID : self.models(for: providerID).first?.id

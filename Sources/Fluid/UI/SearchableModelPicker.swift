@@ -50,6 +50,8 @@ struct SearchableModelPicker: View {
     let controlHeight: CGFloat?
     let popoverWidth: CGFloat
     let accessibilityIdentifier: String?
+    /// The label VoiceOver reads for the button, such as "Speech model", when the visible title sits beside it.
+    let accessibilityTitle: String?
 
     init(
         models: [String],
@@ -86,7 +88,8 @@ struct SearchableModelPicker: View {
         controlWidth: CGFloat = 180,
         controlHeight: CGFloat? = nil,
         popoverWidth: CGFloat = 280,
-        accessibilityIdentifier: String? = nil
+        accessibilityIdentifier: String? = nil,
+        accessibilityTitle: String? = nil
     ) {
         self.items = items
         self._selectedModel = selectedModel
@@ -99,6 +102,7 @@ struct SearchableModelPicker: View {
         self.controlHeight = controlHeight
         self.popoverWidth = popoverWidth
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.accessibilityTitle = accessibilityTitle
     }
 
     @State private var searchText = ""
@@ -145,7 +149,11 @@ struct SearchableModelPicker: View {
             .buttonStyle(.plain)
             .disabled(!self.selectionEnabled)
             .opacity(self.selectionEnabled ? 1 : 0.55)
-            .modifier(PickerAccessibilityIdentifier(identifier: self.accessibilityIdentifier))
+            .modifier(PickerAccessibility(
+                identifier: self.accessibilityIdentifier,
+                title: self.accessibilityTitle,
+                value: self.selectedModel.isEmpty ? "Select Model" : self.selectedName
+            ))
             .popover(isPresented: self.$isShowingPopover, arrowEdge: .bottom) {
                 VStack(spacing: 0) {
                     // Search field
@@ -280,13 +288,21 @@ struct SearchableModelPicker: View {
     }
 }
 
-/// Sets an accessibility identifier only when the caller named one, so callers without one keep none.
-private struct PickerAccessibilityIdentifier: ViewModifier {
+/// Sets an accessibility identifier, and a label with the selection as its value, only when the caller
+/// named them, so callers without them keep the button's own text.
+private struct PickerAccessibility: ViewModifier {
     let identifier: String?
+    let title: String?
+    let value: String
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        if let identifier {
+        if let identifier, let title {
+            content.accessibilityIdentifier(identifier).accessibilityLabel(title).accessibilityValue(self.value)
+        } else if let identifier {
             content.accessibilityIdentifier(identifier)
+        } else if let title {
+            content.accessibilityLabel(title).accessibilityValue(self.value)
         } else {
             content
         }

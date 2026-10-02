@@ -27,7 +27,9 @@ nonisolated enum LiveTranscriptionCatalog {
             // the legacy models. `DeepgramLiveAdapter.language(for:)` sends each its language.
             models: [
                 .init(id: "nova-3", name: "Nova-3"),
-                .init(id: "nova-2", name: "Nova-2", note: "Older · Uses your Primary language"),
+                // EVIDENCE: https://developers.deepgram.com/docs/models-languages-overview (checked 2026-10-02): Nova-2
+                // streams these 33 languages, so its warnings use this list rather than Nova-3's `multi` set.
+                .init(id: "nova-2", name: "Nova-2", note: "Older · Uses your Primary language", languageCodes: DeepgramLiveAdapter.olderModelLanguageCodes),
                 .init(id: "nova-3-medical", name: "Nova-3 Medical", note: "English only · Medical terms", languageCodes: ["en"]),
             ],
             detectsLanguageAutomatically: true,

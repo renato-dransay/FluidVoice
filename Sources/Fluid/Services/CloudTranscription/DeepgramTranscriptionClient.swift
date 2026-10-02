@@ -34,8 +34,15 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
         .init(id: "nova-2", name: "Nova-2", wordTimingSupport: .supported, languageHintProviderTags: [], note: "Older; covers languages Nova-3 lacks"),
         .init(id: "nova-3-medical", name: "Nova-3 Medical", wordTimingSupport: .supported, languageHintProviderTags: [], note: "English only · Medical terms"),
     ]
-    /// Models documented for English only: they are always sent `language=en`.
+    /// Models documented for English only: they are sent `language=en`, and a recording with another
+    /// chosen language fails before anything is sent instead of being transcribed as English.
     static let englishOnlyModelIDs: Set<String> = ["nova-3-medical"]
+
+    /// `.unsupportedLanguageForModel` for an English-only model with another chosen language, otherwise nil.
+    static func languageIssue(for configuration: CloudTranscriptionConfiguration) -> CloudTranscriptionError? {
+        guard self.englishOnlyModelIDs.contains(configuration.modelID), let language = configuration.languageCode, language != "en" else { return nil }
+        return .unsupportedLanguageForModel
+    }
     static let shared = DeepgramTranscriptionClient()
 
     private static let listenEndpoint = "https://api.deepgram.com/v1/listen"
@@ -62,6 +69,7 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
         try Task.checkCancellation()
         guard configuration.providerID == Self.id else { throw CloudTranscriptionError.unsupportedModel }
         try configuration.validate(wordTimings: wordTimings)
+        if let issue = Self.languageIssue(for: configuration) { throw issue }
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         let audio = try CloudEncodedAudio.best(samples: samples)
         guard let url = Self.listenURL(configuration: configuration) else { throw CloudTranscriptionError.network }
@@ -93,7 +101,7 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
     }
 
     /// The model always; the chosen language, otherwise automatic detection (English for an English-only
-    /// model); punctuation and formatting so the words read as written text. No Model Improvement Program
+    /// model, which `transcribe` never sends another chosen language); punctuation and formatting so the words read as written text. No Model Improvement Program
     /// opt-out, which would forfeit Deepgram's discount.
     static func listenURL(configuration: CloudTranscriptionConfiguration) -> URL? {
         var components = URLComponents(string: self.listenEndpoint)

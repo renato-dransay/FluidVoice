@@ -320,7 +320,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     static let slowCloudProviderIDs: Set<String> = ["speechmatics", "soniox", "assemblyai", "gladia"]
 
     /// The captions under a non-OpenRouter provider's "Speech model" menu (VE-5 item 4).
-    static func cloudSpeechModelCaptions(providerID: String, supportsWordTimings: Bool) -> [String] {
+    static func cloudSpeechModelCaptions(providerID: String, modelID: String? = nil, supportsWordTimings: Bool) -> [String] {
         var captions = [
             "Turns speech into text. Used for dictation, imported files and voice commands. Cleanup Styles run afterwards on your default text provider.",
         ]
@@ -330,7 +330,22 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         if !supportsWordTimings {
             captions.append("Imported files are transcribed without speaker labels.")
         }
+        if let modelID, let requirement = self.cloudModelLanguageRequirements["\(providerID)/\(modelID)"] {
+            captions.append(requirement)
+        }
         return captions
+    }
+
+    /// Models that cannot take every dictation language, keyed `<provider>/<model>`, with what they need.
+    private static let cloudModelLanguageRequirements: [String: String] = [
+        "gladia/solaria-3": "Solaria-3 cannot detect the language. It needs English, French, German, Spanish or Italian as your Primary or Secondary language.",
+        "deepgram/nova-3-medical": "English only. A dictation in another language picked in the overlay fails instead of being transcribed as English.",
+    ]
+
+    /// The warning the Cloud tab shows while the provider's chosen model cannot take the dictation languages.
+    func cloudLanguageWarning(for providerID: String) -> String? {
+        CloudTranscriptionPreferences(defaults: .standard).languageIssue(for: providerID)
+            .map { $0.message(providerName: VoiceEngineStatus.providerName(providerID)) }
     }
 
     /// VE-5 item 7: with a Cloud provider other than OpenRouter, Cleanup Styles run afterwards on the default
@@ -404,7 +419,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             try await Self.checkCloudProvider(
                 providerID,
                 modelID: self.settings.cloudTranscriptionModelID(for: providerID),
-                apiKey: apiKey
+                apiKey: apiKey,
+                languageIssue: CloudTranscriptionPreferences(defaults: .standard).languageIssue(for: providerID)
             )
             return
         }
@@ -434,12 +450,14 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         guard listed.style.contains(chosen.style) else { throw CloudActivationError.styleModelUnavailable(providerName: name) }
     }
 
-    /// The check of a Cloud provider other than OpenRouter (VE-5a): the model locally, then one request
-    /// without audio that the provider answers only for a key it accepts.
+    /// The check of a Cloud provider other than OpenRouter (VE-5a): the model locally, then whether it can
+    /// take the dictation languages (`languageIssue`), then one request without audio that the provider
+    /// answers only for a key it accepts. A model that would fail every dictation never becomes the engine.
     static func checkCloudProvider(
         _ providerID: String,
         modelID: String,
         apiKey: String,
+        languageIssue: CloudTranscriptionError? = nil,
         clients: (String) -> any CloudTranscriptionClient = CloudTranscriptionClients.make
     ) async throws {
         let configuration = CloudTranscriptionConfiguration(providerID: providerID, modelID: modelID)
@@ -448,6 +466,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         } catch {
             throw CloudActivationError.speechModelUnavailable(providerName: VoiceEngineStatus.providerName(providerID))
         }
+        if let languageIssue { throw languageIssue }
         try await clients(providerID).checkKey(apiKey: apiKey)
     }
 

@@ -154,6 +154,34 @@ final class CloudVendorSupportTests: XCTestCase {
         XCTAssertFalse(preferences.configuration.allowsUnlistedModel)
     }
 
+    /// Solaria-3 needs one of its five languages, and Nova-3 Medical refuses a chosen non-English language;
+    /// the Cloud tab warns and activation refuses while either would fail every dictation.
+    @MainActor
+    func testModelsThatCannotTakeTheDictationLanguagesReportIt() throws {
+        let suite = "CloudVendorSupportTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertNil(preferences.languageIssue(for: "gladia"), "Solaria-1 detects any language")
+
+        preferences.setModelID("solaria-3", for: "gladia")
+        XCTAssertEqual(preferences.languageIssue(for: "gladia"), .unsupportedLanguageForModel, "No language at all")
+        preferences.primaryLanguageCode = "ja"
+        XCTAssertEqual(preferences.languageIssue(for: "gladia"), .unsupportedLanguageForModel)
+        preferences.secondaryLanguageCode = "fr"
+        XCTAssertNil(preferences.languageIssue(for: "gladia"), "French serves dictation and files")
+        preferences.dictationLanguageCode = "ja"
+        XCTAssertEqual(preferences.languageIssue(for: "gladia"), .unsupportedLanguageForModel, "Japanese picked in the overlay")
+
+        preferences.setModelID("nova-3-medical", for: "deepgram")
+        XCTAssertEqual(preferences.languageIssue(for: "deepgram"), .unsupportedLanguageForModel)
+        preferences.dictationLanguageCode = nil
+        XCTAssertNil(preferences.languageIssue(for: "deepgram"), "Without a chosen language Nova-3 Medical uses English")
+        preferences.setModelID("nova-3", for: "deepgram")
+        preferences.dictationLanguageCode = "ja"
+        XCTAssertNil(preferences.languageIssue(for: "deepgram"))
+    }
+
     // MARK: - Errors and HTTP
 
     func testErrorsNameTheProviderAndKeepOpenRouterWording() {

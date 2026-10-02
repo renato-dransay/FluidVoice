@@ -29,17 +29,28 @@ final class LiveTranscriptionDeepgramTests: XCTestCase {
         XCTAssertTrue(request.url?.query?.contains("language=pt") == true)
     }
 
-    func testEachModelGetsTheLanguageItSupports() {
-        func language(_ modelID: String, chosen: String? = nil, hints: [String] = []) -> String {
-            DeepgramLiveAdapter.language(for: LiveTranscriptionConfiguration(provider: .deepgram, modelID: modelID, languageCode: chosen, languageHints: hints))
+    func testEachModelGetsTheLanguageItSupports() throws {
+        func language(_ modelID: String, chosen: String? = nil, hints: [String] = []) throws -> String {
+            try DeepgramLiveAdapter.language(for: LiveTranscriptionConfiguration(provider: .deepgram, modelID: modelID, languageCode: chosen, languageHints: hints))
         }
-        XCTAssertEqual(language("nova-3", hints: ["de"]), "multi")
-        XCTAssertEqual(language("nova-2", hints: ["de"]), "de", "Nova-2's multi covers only Spanish and English")
-        XCTAssertEqual(language("nova-2"), "multi")
-        XCTAssertEqual(language("nova-2", chosen: "fr", hints: ["de"]), "fr")
-        XCTAssertEqual(language("nova-3-medical", chosen: "de"), "en", "English only")
-        XCTAssertEqual(language("a-retired-model"), "multi", "An unlisted stored model keeps Nova-3's request")
-        XCTAssertEqual(LiveTranscriptionCatalog.info(for: .deepgram).models.map(\.id), ["nova-3", "nova-2", "nova-3-medical"])
+        XCTAssertEqual(try language("nova-3", hints: ["de"]), "multi")
+        XCTAssertEqual(try language("nova-2", hints: ["de"]), "de", "Nova-2's multi covers only Spanish and English")
+        XCTAssertEqual(try language("nova-2"), "multi")
+        XCTAssertEqual(try language("nova-2", chosen: "fr", hints: ["de"]), "fr")
+        XCTAssertEqual(try language("nova-3-medical", hints: ["de"]), "en", "English only; Primary and Secondary are only hints")
+        XCTAssertEqual(try language("nova-3-medical", chosen: "en"), "en")
+        XCTAssertThrowsError(try language("nova-3-medical", chosen: "de"), "A chosen language is never replaced") {
+            XCTAssertEqual($0 as? LiveTranscriptionError, .unsupportedLanguage("German"))
+        }
+        let medical = LiveTranscriptionConfiguration(provider: .deepgram, modelID: "nova-3-medical", languageCode: "de", languageHints: [])
+        XCTAssertThrowsError(try DeepgramLiveAdapter().connectionRequest(apiKey: "k", configuration: medical))
+        XCTAssertEqual(try language("a-retired-model"), "multi", "An unlisted stored model keeps Nova-3's request")
+        let info = LiveTranscriptionCatalog.info(for: .deepgram)
+        XCTAssertEqual(info.models.map(\.id), ["nova-3", "nova-2", "nova-3-medical"])
+        XCTAssertEqual(DeepgramLiveAdapter.olderModelLanguageCodes.count, 33)
+        XCTAssertTrue(info.supports(languageCode: "ko", modelID: "nova-2"), "Nova-2 lists Korean, which Nova-3's multi set lacks")
+        XCTAssertFalse(info.supports(languageCode: "ko", modelID: "nova-3"))
+        XCTAssertFalse(info.supports(languageCode: "de", modelID: "nova-3-medical"))
     }
 
     func testInterimReplacesPendingAndFinalAppendsWithItsEndTime() {
