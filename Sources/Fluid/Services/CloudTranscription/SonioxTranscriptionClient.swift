@@ -192,12 +192,12 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
 
     /// EVIDENCE: https://soniox.com/docs/api-reference/errors (checked 2026-10-03): a failed transcription carries
     /// an `error_type` such as `organization_monthly_budget_exhausted`, `project_monthly_budget_exhausted` or
-    /// `model_not_available`; anything else stays a plain job failure.
+    /// `model_not_available`. A real account with no prepaid balance left returned the undocumented
+    /// `organization_balance_exhausted` (2026-10-03), so every balance or budget code reads as missing credits;
+    /// anything else stays a plain job failure.
     static func jobError(forErrorType errorType: String?) -> CloudTranscriptionError {
-        switch errorType {
-        case "organization_monthly_budget_exhausted", "project_monthly_budget_exhausted": .creditsExhausted
-        default: .jobFailed
-        }
+        guard let errorType else { return .jobFailed }
+        return errorType.hasSuffix("_balance_exhausted") || errorType.hasSuffix("_budget_exhausted") ? .creditsExhausted : .jobFailed
     }
 
     private func transcript(_ transcriptionID: String, key: String) async throws -> TranscriptResponse {
