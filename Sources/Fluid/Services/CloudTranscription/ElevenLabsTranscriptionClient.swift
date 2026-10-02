@@ -7,7 +7,9 @@ import Foundation
 /// `model_id`, optional `language_code`, `timestamps_granularity` (`none`, `word`, `character`) and
 /// `tag_audio_events`. The response has `text` and `words[]` with `text`, `start`, `end` (seconds) and
 /// `type` (`word`, `spacing`, `audio_event`). No hint field exists, so only a chosen language is sent.
-/// EVIDENCE: https://elevenlabs.io/docs/overview/models (checked 2026-10-02): `scribe_v2` is the batch model.
+/// EVIDENCE: https://elevenlabs.io/docs/overview/models (checked 2026-10-02): `scribe_v2` is the batch model and
+/// `scribe_v2_medical`, its clinical fine-tune, takes the same request (batch only). `scribe_v1` was removed on
+/// 2026-07-09 (https://elevenlabs.io/docs/changelog/2026/6/8).
 /// EVIDENCE: https://elevenlabs.io/docs/overview/capabilities/speech-to-text (checked 2026-10-02): FLAC and WAV
 /// are accepted.
 /// EVIDENCE: https://elevenlabs.io/docs/eleven-api/resources/errors (checked 2026-10-02): 401
@@ -26,6 +28,7 @@ nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
     static let name = "ElevenLabs"
     static let models: [CloudTranscriptionModel] = [
         .init(id: "scribe_v2", name: "Scribe v2", wordTimingSupport: .supported, languageHintProviderTags: []),
+        .init(id: "scribe_v2_medical", name: "Scribe v2 Medical", wordTimingSupport: .supported, languageHintProviderTags: [], note: "Medical terms"),
     ]
     static let shared = ElevenLabsTranscriptionClient()
 

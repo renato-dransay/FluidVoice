@@ -68,6 +68,34 @@ final class GladiaTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(languageConfig?["code_switching"] as? Bool, false)
     }
 
+    func testSolaria3GetsExactlyOneOfItsLanguages() throws {
+        func languageConfig(_ configuration: CloudTranscriptionConfiguration) throws -> [String: Any]? {
+            let body = try JSONSerialization.jsonObject(with: GladiaTranscriptionClient.jobBody(audioURL: "u", configuration: configuration)) as? [String: Any]
+            XCTAssertEqual(body?["model"] as? String, "solaria-3")
+            return body?["language_config"] as? [String: Any]
+        }
+        let chosen = try languageConfig(.init(providerID: "gladia", modelID: "solaria-3", languageCode: "de", primaryLanguageCode: "fr"))
+        XCTAssertEqual(chosen?["languages"] as? [String], ["de"])
+        XCTAssertNil(chosen?["code_switching"], "Solaria-3 takes no code switching")
+        let primary = try languageConfig(.init(providerID: "gladia", modelID: "solaria-3", primaryLanguageCode: "ja", secondaryLanguageCode: "fr"))
+        XCTAssertEqual(primary?["languages"] as? [String], ["fr"], "Without a chosen language, the first dictation language it takes")
+        XCTAssertThrowsError(try GladiaTranscriptionClient.jobBody(audioURL: "u", configuration: .init(providerID: "gladia", modelID: "solaria-3", languageCode: "ja"))) {
+            XCTAssertEqual($0 as? CloudTranscriptionError, .unsupportedLanguageForModel, "A chosen language is never replaced")
+        }
+        XCTAssertThrowsError(try GladiaTranscriptionClient.jobBody(audioURL: "u", configuration: .init(providerID: "gladia", modelID: "solaria-3")))
+    }
+
+    func testSolaria3WithoutAUsableLanguageUploadsNothing() async throws {
+        let stub = CloudVendorStub(self.routes())
+        stub.install()
+        let error = await CloudJobVendorAssert.failure {
+            try await self.client().transcribe(samples: [0.1], configuration: .init(providerID: "gladia", modelID: "solaria-3", primaryLanguageCode: "ja"), apiKey: "k", wordTimings: false)
+        }
+        XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedLanguageForModel)
+        XCTAssertTrue(stub.recorder.requests.isEmpty)
+        XCTAssertTrue(CloudTranscriptionError.unsupportedLanguageForModel.message(providerName: "Gladia").hasPrefix("This Gladia model doesn't support your dictation language."))
+    }
+
     func testErrorsAreMappedAndCarryNoServerText() async throws {
         let cases: [(Int, String, CloudTranscriptionError)] = [
             (401, #"{"statusCode":401,"message":"PRIVATE gl-key"}"#, .authentication),
@@ -186,7 +214,7 @@ final class GladiaTranscriptionClientTests: XCTestCase {
 
         let before = stub.recorder.requests.count
         let error = await CloudJobVendorAssert.failure {
-            try await engine.transcribe(samples: [0.1], configuration: .init(providerID: "gladia", modelID: "solaria-3"), apiKey: "k", wordTimings: false)
+            try await engine.transcribe(samples: [0.1], configuration: .init(providerID: "gladia", modelID: "solaria-fusion"), apiKey: "k", wordTimings: false)
         }
         XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedModel)
         XCTAssertEqual(stub.recorder.requests.count, before)

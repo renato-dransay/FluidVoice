@@ -72,6 +72,22 @@ final class SpeechmaticsTranscriptionClientTests: XCTestCase {
         XCTAssertNil(plain.words)
     }
 
+    func testMelia1AlwaysTakesMultiWithTheLanguagesAsHints() throws {
+        XCTAssertEqual(
+            try SpeechmaticsTranscriptionClient.jobConfig(configuration: .init(providerID: "speechmatics", modelID: "melia-1", primaryLanguageCode: "de", secondaryLanguageCode: "en")),
+            #"{"transcription_config":{"language":"multi","language_hints":["de","en"],"model":"melia-1"},"type":"transcription"}"#
+        )
+        XCTAssertEqual(
+            try SpeechmaticsTranscriptionClient.jobConfig(configuration: .init(providerID: "speechmatics", modelID: "melia-1", languageCode: "es", primaryLanguageCode: "de")),
+            #"{"transcription_config":{"language":"multi","language_hints":["es"],"model":"melia-1"},"type":"transcription"}"#
+        )
+        XCTAssertEqual(
+            try SpeechmaticsTranscriptionClient.jobConfig(configuration: .init(providerID: "speechmatics", modelID: "melia-1")),
+            #"{"transcription_config":{"language":"multi","model":"melia-1"},"type":"transcription"}"#,
+            "Never `auto`, which Melia 1 refuses"
+        )
+    }
+
     func testPunctuationAttachesWhereSpeechmaticsSays() {
         typealias Result = SpeechmaticsTranscriptionClient.TranscriptResponse.Result
         let results = try? JSONDecoder().decode([Result].self, from: Data(#"""

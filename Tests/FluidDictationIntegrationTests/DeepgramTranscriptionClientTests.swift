@@ -50,6 +50,30 @@ final class DeepgramTranscriptionClientTests: XCTestCase {
         XCTAssertFalse(items.contains { $0.name == "mip_opt_out" }, "Opting out of the Model Improvement Program would forfeit Deepgram's discount")
     }
 
+    func testEachModelGetsTheLanguageItSupports() throws {
+        func query(_ modelID: String, language: String? = nil) throws -> [String: String] {
+            let url = try XCTUnwrap(DeepgramTranscriptionClient.listenURL(configuration: .init(providerID: "deepgram", modelID: modelID, languageCode: language)))
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            return Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+        }
+        XCTAssertEqual(try query("nova-2"), ["model": "nova-2", "smart_format": "true", "detect_language": "true"])
+        XCTAssertEqual(try query("nova-3-medical"), ["model": "nova-3-medical", "smart_format": "true", "language": "en"], "English only: never detection")
+        XCTAssertEqual(try query("nova-3-medical", language: "de")["language"], "en")
+    }
+
+    func testAStoredModelTheCatalogNoLongerListsIsStillSent() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"results":{"channels":[{"alternatives":[{"transcript":"Kept."}]}]}}"#.utf8))
+        }
+        let stored = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-0", allowsUnlistedModel: true)
+        let result = try await self.client().transcribe(samples: [0.1], configuration: stored, apiKey: "k", wordTimings: false)
+        XCTAssertEqual(result.text, "Kept.")
+        let url = try XCTUnwrap(recorder.requests.first?.url)
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "model" }?.value, "nova-0")
+    }
+
     func testPlainTranscriptOmitsWordsAndMissingTimingsFail() async throws {
         CloudURLProtocol.install { _ in
             (200, [:], Data(#"{"results":{"channels":[{"alternatives":[{"transcript":"Plain text."}]}]}}"#.utf8))
@@ -122,7 +146,7 @@ final class DeepgramTranscriptionClientTests: XCTestCase {
         }
         for (configuration, key) in [
             (CloudTranscriptionConfiguration(), "k"),
-            (CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-2"), "k"),
+            (CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-0"), "k"),
             (self.configuration, " "),
         ] {
             do {

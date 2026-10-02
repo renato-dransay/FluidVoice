@@ -65,6 +65,18 @@ final class AssemblyAITranscriptionClientTests: XCTestCase {
         XCTAssertNil(body?["language_detection_options"], "Expected languages would restrict detection, so hints are not sent")
     }
 
+    func testUniversal2IsSentAloneAndOtherModelsFallBackToIt() throws {
+        func speechModels(_ modelID: String) throws -> [String]? {
+            let body = try JSONSerialization.jsonObject(with: AssemblyAITranscriptionClient.transcriptBody(
+                uploadURL: "u", configuration: .init(providerID: "assemblyai", modelID: modelID)
+            )) as? [String: Any]
+            XCTAssertEqual(body?["language_detection"] as? Bool, true)
+            return body?["speech_models"] as? [String]
+        }
+        XCTAssertEqual(try speechModels("universal-3-5-pro"), ["universal-3-5-pro", "universal-2"])
+        XCTAssertEqual(try speechModels("universal-2"), ["universal-2"], "Never the same model twice")
+    }
+
     func testErrorsAreMappedAndCarryNoServerText() async throws {
         let cases: [(Int, String, CloudTranscriptionError)] = [
             (401, #"{"error":"Authentication error, API token missing/invalid. PRIVATE aai-key"}"#, .authentication),
@@ -172,9 +184,9 @@ final class AssemblyAITranscriptionClientTests: XCTestCase {
 
         let before = stub.recorder.requests.count
         let error = await CloudJobVendorAssert.failure {
-            try await engine.transcribe(samples: [0.1], configuration: .init(providerID: "assemblyai", modelID: "universal-2"), apiKey: "k", wordTimings: false)
+            try await engine.transcribe(samples: [0.1], configuration: .init(providerID: "assemblyai", modelID: "universal-3-pro"), apiKey: "k", wordTimings: false)
         }
-        XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedModel, "Universal-2 is only the fallback")
+        XCTAssertEqual(error as? CloudTranscriptionError, .unsupportedModel, "A retired model is not offered")
         XCTAssertEqual(stub.recorder.requests.count, before)
     }
 

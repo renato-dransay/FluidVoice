@@ -12,8 +12,15 @@ import Foundation
 /// them, which is stronger than a hint, so the Primary and Secondary languages are not sent.
 /// EVIDENCE: https://developers.deepgram.com/docs/errors (checked 2026-10-02): 402 `ASR_PAYMENT_REQUIRED` when the
 /// project has no credits, 429 `TOO_MANY_REQUESTS`.
-/// EVIDENCE: https://developers.deepgram.com/docs/models-languages-overview (checked 2026-10-02): `nova-3` is the
-/// current general model for pre-recorded audio.
+/// EVIDENCE: https://developers.deepgram.com/docs/models-languages-overview and
+/// https://developers.deepgram.com/docs/model (checked 2026-10-02): `nova-3` (alias of `nova-3-general`) is the
+/// current general model for pre-recorded audio. `nova-2` stays generally available for languages Nova-3 lacks;
+/// `detect_language` works with it. `nova-3-medical` takes the same endpoint and parameters but is documented
+/// for English only, so it is always sent `language=en`: automatic detection could pick a language the model
+/// lacks, and Deepgram then falls back to an older model without saying so
+/// (https://developers.deepgram.com/docs/language-detection, checked 2026-10-02). Left out: Flux (streaming only,
+/// on `/v2/listen` with another protocol), `nova-3-pharma` and the `nova-2-*` domain variants (niche, English
+/// only), and the legacy `nova`, `enhanced`, `base` and `whisper` models.
 /// EVIDENCE: https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program (checked
 /// 2026-10-02): requests take part in the Model Improvement Program unless they send `mip_opt_out=true`. Listed
 /// rates assume participation, and a Deepgram staff answer (https://github.com/orgs/deepgram/discussions/1292,
@@ -24,7 +31,11 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
     static let name = "Deepgram"
     static let models: [CloudTranscriptionModel] = [
         .init(id: "nova-3", name: "Nova-3", wordTimingSupport: .supported, languageHintProviderTags: []),
+        .init(id: "nova-2", name: "Nova-2", wordTimingSupport: .supported, languageHintProviderTags: [], note: "Older; covers languages Nova-3 lacks"),
+        .init(id: "nova-3-medical", name: "Nova-3 Medical", wordTimingSupport: .supported, languageHintProviderTags: [], note: "English only · Medical terms"),
     ]
+    /// Models documented for English only: they are always sent `language=en`.
+    static let englishOnlyModelIDs: Set<String> = ["nova-3-medical"]
     static let shared = DeepgramTranscriptionClient()
 
     private static let listenEndpoint = "https://api.deepgram.com/v1/listen"
@@ -81,16 +92,18 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
         return result
     }
 
-    /// The model always; the chosen language, otherwise automatic detection; punctuation and
-    /// formatting so the words read as written text. No Model Improvement Program opt-out, which would forfeit
-    /// Deepgram's discount.
+    /// The model always; the chosen language, otherwise automatic detection (English for an English-only
+    /// model); punctuation and formatting so the words read as written text. No Model Improvement Program
+    /// opt-out, which would forfeit Deepgram's discount.
     static func listenURL(configuration: CloudTranscriptionConfiguration) -> URL? {
         var components = URLComponents(string: self.listenEndpoint)
         var items = [
             URLQueryItem(name: "model", value: configuration.modelID),
             URLQueryItem(name: "smart_format", value: "true"),
         ]
-        if let language = configuration.languageCode {
+        if self.englishOnlyModelIDs.contains(configuration.modelID) {
+            items.append(URLQueryItem(name: "language", value: "en"))
+        } else if let language = configuration.languageCode {
             items.append(URLQueryItem(name: "language", value: language))
         } else {
             items.append(URLQueryItem(name: "detect_language", value: "true"))

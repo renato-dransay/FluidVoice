@@ -10,7 +10,12 @@ import Foundation
 /// multipart fields `config` (JSON with `type: transcription` and `transcription_config`) and `data_file`;
 /// FLAC and WAV are accepted.
 /// EVIDENCE: https://docs.speechmatics.com/speech-to-text/models (checked 2026-10-02): `transcription_config.model`
-/// takes `standard` (the default) or `enhanced`, among others; `operating_point` is the deprecated name.
+/// takes `standard` (the default when it is left out, so it is always sent), `enhanced` (highest accuracy) and
+/// `melia-1`; `operating_point` is the deprecated name. Melia 1 is multilingual and batch only in EU1 and US1:
+/// it needs `language: "multi"`, refuses `auto` and language packs, and takes `language_hints`
+/// (https://docs.speechmatics.com/speech-to-text/batch/input, checked 2026-10-02). Its json-v2 words carry a
+/// `language` field and keep `start_time` and `end_time` (https://docs.speechmatics.com/speech-to-text/batch/output).
+/// Left out: `oak-1` (healthcare audio) and `linden-1` (Agent STT only, not the Jobs API).
 /// EVIDENCE: https://docs.speechmatics.com/speech-to-text/batch/language-identification (checked 2026-10-02):
 /// `language: "auto"` asks for automatic identification. `expected_languages` restricts identification to
 /// the listed languages, which is stronger than a hint, so the Primary and Secondary languages are not sent.
@@ -29,7 +34,10 @@ nonisolated struct SpeechmaticsTranscriptionClient: CloudTranscriptionClient {
     static let models: [CloudTranscriptionModel] = [
         .init(id: "enhanced", name: "Enhanced", wordTimingSupport: .supported, languageHintProviderTags: []),
         .init(id: "standard", name: "Standard", wordTimingSupport: .supported, languageHintProviderTags: []),
+        .init(id: multilingualModelID, name: "Melia 1", wordTimingSupport: .supported, languageHintProviderTags: [], note: "Multilingual · Switches language mid-recording"),
     ]
+    /// Melia 1 transcribes several languages in one file and always takes `language: "multi"`.
+    static let multilingualModelID = "melia-1"
     static let shared = SpeechmaticsTranscriptionClient()
 
     private static let jobsEndpoint = "https://eu1.asr.api.speechmatics.com/v2/jobs"
@@ -81,15 +89,18 @@ nonisolated struct SpeechmaticsTranscriptionClient: CloudTranscriptionClient {
         return result
     }
 
-    /// The chosen language, otherwise automatic identification; the chosen model.
+    /// The chosen language, otherwise automatic identification; the chosen model. Melia 1 always takes
+    /// `multi`, with the chosen language, otherwise the Primary and Secondary languages, as hints.
     static func jobConfig(configuration: CloudTranscriptionConfiguration) throws -> String {
-        let config: [String: Any] = [
-            "type": "transcription",
-            "transcription_config": [
-                "language": configuration.languageCode ?? "auto",
-                "model": configuration.modelID,
-            ],
-        ]
+        var transcription: [String: Any] = ["model": configuration.modelID]
+        if configuration.modelID == self.multilingualModelID {
+            transcription["language"] = "multi"
+            let hints = configuration.languageCode.map { [$0] } ?? [configuration.primaryLanguageCode, configuration.secondaryLanguageCode].compactMap { $0 }
+            if !hints.isEmpty { transcription["language_hints"] = hints }
+        } else {
+            transcription["language"] = configuration.languageCode ?? "auto"
+        }
+        let config: [String: Any] = ["type": "transcription", "transcription_config": transcription]
         let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
         guard let text = String(bytes: data, encoding: .utf8) else { throw CloudTranscriptionError.malformedResponse }
         return text

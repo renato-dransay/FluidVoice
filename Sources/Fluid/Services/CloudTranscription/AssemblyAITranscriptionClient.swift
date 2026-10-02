@@ -11,6 +11,12 @@ import Foundation
 /// `universal-3-pro`; the singular `speech_model` is deprecated). `language_code` cannot be combined with
 /// `language_detection`. `language_detection_options.expected_languages` restricts detection, which is
 /// stronger than a hint, so the Primary and Secondary languages are not sent.
+/// EVIDENCE: https://www.assemblyai.com/docs/pre-recorded-audio/select-the-speech-model and the `SpeechModel` enum in
+/// https://www.assemblyai.com/docs/openapi.yaml (checked 2026-10-02): the batch models are `universal-3-5-pro`
+/// (recommended, 18 languages) and `universal-2` (99 languages). `speech_models` is a priority list: a language
+/// the first model lacks goes to the next, so Universal-2 follows Universal-3.5 Pro, and Universal-2 alone is
+/// sent as a one-entry list. Both take `language_detection` and return word timestamps. `universal-3-pro` has
+/// returned an error since 2026-09-02 and `slam-1` is gone from the enum (https://www.assemblyai.com/changelog).
 /// EVIDENCE: https://www.assemblyai.com/docs/api-reference/transcripts/get (checked 2026-10-02):
 /// `GET /v2/transcript/{id}`, `status` is `queued`, `processing`, `completed` or `error`; `words[]` carry
 /// `text`, `start` and `end` in milliseconds.
@@ -28,11 +34,12 @@ import Foundation
 nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
     static let id = "assemblyai"
     static let name = "AssemblyAI"
-    static let models: [CloudTranscriptionModel] = [
-        .init(id: "universal-3-5-pro", name: "Universal-3.5 Pro", wordTimingSupport: .supported, languageHintProviderTags: []),
-    ]
     /// Universal-2 takes over the languages Universal-3.5 Pro does not cover.
     static let fallbackSpeechModelID = "universal-2"
+    static let models: [CloudTranscriptionModel] = [
+        .init(id: "universal-3-5-pro", name: "Universal-3.5 Pro", wordTimingSupport: .supported, languageHintProviderTags: []),
+        .init(id: fallbackSpeechModelID, name: "Universal-2", wordTimingSupport: .supported, languageHintProviderTags: [], note: "99 languages · Lower price"),
+    ]
     static let shared = AssemblyAITranscriptionClient()
 
     private static let baseURL = "https://api.assemblyai.com/v2"
@@ -92,11 +99,12 @@ nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
         return result
     }
 
-    /// The chosen model with Universal-2 as its fallback; the chosen language, otherwise detection.
+    /// The chosen model with Universal-2 as its fallback (Universal-2 alone when it is the choice); the
+    /// chosen language, otherwise detection.
     static func transcriptBody(uploadURL: String, configuration: CloudTranscriptionConfiguration) throws -> Data {
         var body: [String: Any] = [
             "audio_url": uploadURL,
-            "speech_models": [configuration.modelID, self.fallbackSpeechModelID],
+            "speech_models": self.speechModels(for: configuration.modelID),
         ]
         if let language = configuration.languageCode {
             body["language_code"] = language
@@ -104,6 +112,11 @@ nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
             body["language_detection"] = true
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
+    /// The priority list for the chosen model: the model, then Universal-2 for the languages it lacks.
+    static func speechModels(for modelID: String) -> [String] {
+        modelID == self.fallbackSpeechModelID ? [modelID] : [modelID, self.fallbackSpeechModelID]
     }
 
     /// A negative balance is a 400 whose message says so; it means no credits, not a bad request. The

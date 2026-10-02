@@ -54,12 +54,19 @@ struct CloudTranscriptionPreferences {
         providerID == self.defaultProviderID ? "CloudTranscriptionModel" : "CloudTranscriptionModel.\(providerID)"
     }
 
-    /// The provider's chosen speech model when its catalog still offers it, otherwise its default model.
-    /// Empty for a provider without a catalog.
+    /// The provider's chosen speech model, otherwise its default model. A stored model the catalog no
+    /// longer lists stays chosen, so an update never switches it silently; the picker shows it as no longer
+    /// listed. Empty for a provider without a catalog.
     func modelID(for providerID: String) -> String {
-        let stored = self.defaults.string(forKey: Self.modelDefaultsKey(for: providerID)) ?? ""
-        if CloudTranscriptionCatalog.models(for: providerID).contains(where: { $0.id == stored }) { return stored }
-        return CloudTranscriptionCatalog.defaultModelID(for: providerID) ?? ""
+        guard let defaultID = CloudTranscriptionCatalog.defaultModelID(for: providerID) else { return "" }
+        let stored = self.defaults.string(forKey: Self.modelDefaultsKey(for: providerID))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? defaultID : stored
+    }
+
+    /// True when the provider's chosen model is a stored choice its catalog no longer lists.
+    func isUnlistedModel(for providerID: String) -> Bool {
+        let modelID = self.modelID(for: providerID)
+        return !modelID.isEmpty && !CloudTranscriptionCatalog.models(for: providerID).contains { $0.id == modelID }
     }
 
     /// Ignores a model the provider's catalog does not offer.
@@ -145,7 +152,8 @@ struct CloudTranscriptionPreferences {
             providerID: providerID,
             modelID: self.modelID(for: providerID),
             primaryLanguageCode: self.primaryLanguageCode,
-            secondaryLanguageCode: self.secondaryLanguageCode
+            secondaryLanguageCode: self.secondaryLanguageCode,
+            allowsUnlistedModel: self.isUnlistedModel(for: providerID)
         )
     }
 
@@ -157,7 +165,8 @@ struct CloudTranscriptionPreferences {
             modelID: self.modelID(for: providerID),
             languageCode: selectedLanguage,
             primaryLanguageCode: self.primaryLanguageCode,
-            secondaryLanguageCode: self.secondaryLanguageCode
+            secondaryLanguageCode: self.secondaryLanguageCode,
+            allowsUnlistedModel: self.isUnlistedModel(for: providerID)
         )
     }
 

@@ -9,6 +9,10 @@ import Foundation
 /// EVIDENCE: https://docs.mistral.ai/studio/audio/speech_to_text/offline_transcription (checked 2026-10-02):
 /// `timestamp_granularities` "is currently not compatible with `language`", so word timings would cost the
 /// chosen language. With no documented word schema either, the catalog marks word timings unsupported.
+/// EVIDENCE: https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02 (checked 2026-10-02): Voxtral Mini
+/// Transcribe 2 is served on this endpoint as `voxtral-mini-latest` and as the dated `voxtral-mini-2602`.
+/// `voxtral-mini-2507` was retired on 2026-05-31 and Voxtral Small is for chat only
+/// (https://docs.mistral.ai/getting-started/models/models_overview/).
 /// EVIDENCE: https://docs.mistral.ai/resources/known-limitations (checked 2026-10-02): WAV, MP3, FLAC, OGG and
 /// WEBM are accepted, up to 500 MB and 60 minutes, so FLAC with the WAV fallback is sent.
 nonisolated struct MistralTranscriptionClient: CloudTranscriptionClient {
@@ -16,6 +20,7 @@ nonisolated struct MistralTranscriptionClient: CloudTranscriptionClient {
     static let name = "Mistral"
     static let models: [CloudTranscriptionModel] = [
         .init(id: "voxtral-mini-latest", name: "Voxtral Mini", wordTimingSupport: .unsupported, languageHintProviderTags: []),
+        .init(id: "voxtral-mini-2602", name: "Voxtral Mini Transcribe 2 (26.02)", wordTimingSupport: .unsupported, languageHintProviderTags: [], note: "Fixed release; does not move with updates"),
     ]
     static let shared = MistralTranscriptionClient()
 

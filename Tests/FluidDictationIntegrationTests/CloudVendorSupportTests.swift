@@ -36,13 +36,13 @@ final class CloudVendorSupportTests: XCTestCase {
 
     func testCatalogsAndClientsCoverEveryShippedProvider() {
         XCTAssertEqual(CloudTranscriptionCatalog.models(for: "openrouter").map(\.id), CloudTranscriptionModel.catalog.map(\.id))
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "deepgram").map(\.id), ["nova-3"])
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "elevenlabs").map(\.id), ["scribe_v2"])
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "mistral").map(\.id), ["voxtral-mini-latest"])
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "speechmatics").map(\.id), ["enhanced", "standard"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "deepgram").map(\.id), ["nova-3", "nova-2", "nova-3-medical"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "elevenlabs").map(\.id), ["scribe_v2", "scribe_v2_medical"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "mistral").map(\.id), ["voxtral-mini-latest", "voxtral-mini-2602"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "speechmatics").map(\.id), ["enhanced", "standard", "melia-1"])
         XCTAssertEqual(CloudTranscriptionCatalog.models(for: "soniox").map(\.id), ["stt-async-v5"])
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "assemblyai").map(\.id), ["universal-3-5-pro"])
-        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "gladia").map(\.id), ["solaria-1"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "assemblyai").map(\.id), ["universal-3-5-pro", "universal-2"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "gladia").map(\.id), ["solaria-1", "solaria-3"])
         XCTAssertEqual(
             CloudTranscriptionClients.providerIDs,
             ["openrouter", "deepgram", "elevenlabs", "mistral", "speechmatics", "soniox", "assemblyai", "gladia"]
@@ -101,6 +101,57 @@ final class CloudVendorSupportTests: XCTestCase {
         XCTAssertEqual(preferences.dictationConfiguration.primaryLanguageCode, "de")
         preferences.providerID = "openrouter"
         XCTAssertEqual(preferences.configuration.modelID, "openai/whisper-1")
+    }
+
+    func testDefaultsStayAndEveryListedModelPassesValidation() {
+        let defaults = [
+            "openrouter": CloudTranscriptionModel.defaultDictationID, "deepgram": "nova-3", "elevenlabs": "scribe_v2",
+            "mistral": "voxtral-mini-latest", "speechmatics": "enhanced", "soniox": "stt-async-v5",
+            "assemblyai": "universal-3-5-pro", "gladia": "solaria-1",
+        ]
+        for id in CloudTranscriptionClients.providerIDs {
+            XCTAssertEqual(CloudTranscriptionCatalog.defaultModelID(for: id), defaults[id], id)
+            for model in CloudTranscriptionCatalog.models(for: id) where id != "openrouter" {
+                XCTAssertNoThrow(try CloudTranscriptionConfiguration(providerID: id, modelID: model.id).validate(wordTimings: model.supportsWordTimings), model.id)
+                XCTAssertEqual(CloudTranscriptionCatalog.models(for: id).filter { $0.id == model.id }.count, 1, "Listed once: \(model.id)")
+            }
+        }
+    }
+
+    /// A model the user chose stays chosen after an update drops it from the catalog: it is still sent, its
+    /// word timings count as unchecked, and a model typed anywhere else must still be listed.
+    @MainActor
+    func testAStoredModelTheCatalogNoLongerListsKeepsWorking() throws {
+        let suite = "CloudVendorSupportTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("nova-0", forKey: "CloudTranscriptionModel.deepgram")
+        defaults.set("vendor/withdrawn-speech-model", forKey: "CloudTranscriptionModel")
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.modelID(for: "deepgram"), "nova-0")
+        XCTAssertEqual(preferences.modelID, "vendor/withdrawn-speech-model", "OpenRouter's stored choice is kept too")
+        XCTAssertTrue(preferences.isUnlistedModel(for: "deepgram"))
+
+        preferences.providerID = "deepgram"
+        let configuration = preferences.dictationConfiguration
+        XCTAssertEqual(configuration.modelID, "nova-0")
+        XCTAssertTrue(configuration.allowsUnlistedModel)
+        XCTAssertNoThrow(try configuration.validate(wordTimings: false))
+        XCTAssertThrowsError(try configuration.validate(wordTimings: true)) {
+            XCTAssertEqual($0 as? CloudTranscriptionError, .unsupportedWordTimings, "Unchecked timings never feed speaker labels")
+        }
+        XCTAssertFalse(configuration.with(modelID: "nova-9").allowsUnlistedModel, "Another model must be listed")
+        XCTAssertThrowsError(try configuration.with(modelID: "nova-9").validate(wordTimings: false))
+        XCTAssertEqual(try JSONDecoder().decode(CloudTranscriptionConfiguration.self, from: JSONEncoder().encode(configuration)), configuration)
+
+        let listed = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-3")
+        let encoded = try XCTUnwrap(String(bytes: JSONEncoder().encode(listed), encoding: .utf8))
+        XCTAssertFalse(encoded.contains("allowsUnlistedModel"), "A listed model encodes as before, keeping its chunk cache")
+
+        preferences.setModelID("nova-2", for: "deepgram")
+        XCTAssertEqual(preferences.modelID(for: "deepgram"), "nova-2")
+        XCTAssertFalse(preferences.isUnlistedModel(for: "deepgram"))
+        XCTAssertFalse(preferences.configuration.allowsUnlistedModel)
     }
 
     // MARK: - Errors and HTTP

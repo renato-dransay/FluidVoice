@@ -124,6 +124,10 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
     let audioDictation: CloudAudioDictationInstructions?
     let primaryLanguageCode: String?
     let secondaryLanguageCode: String?
+    /// True for the user's stored choice of a model the provider's catalog no longer lists. Such a model
+    /// is still sent, so an app update never switches a user's model silently; its word timings count
+    /// as unchecked. A model typed anywhere else must be listed.
+    let allowsUnlistedModel: Bool
 
     init(
         providerID: String = CloudTranscriptionCatalog.openRouterID,
@@ -131,10 +135,12 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         languageCode: String? = nil,
         primaryLanguageCode: String? = nil,
         secondaryLanguageCode: String? = nil,
-        audioDictation: CloudAudioDictationInstructions? = nil
+        audioDictation: CloudAudioDictationInstructions? = nil,
+        allowsUnlistedModel: Bool = false
     ) {
         self.providerID = providerID
         self.modelID = modelID
+        self.allowsUnlistedModel = allowsUnlistedModel
         self.audioDictation = audioDictation
         self.languageCode = Self.normalizedLanguageCode(languageCode)
         self.primaryLanguageCode = Self.normalizedLanguageCode(primaryLanguageCode)
@@ -151,27 +157,43 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         self.audioDictation = try values.decodeIfPresent(CloudAudioDictationInstructions.self, forKey: .audioDictation)
         self.primaryLanguageCode = try values.decodeIfPresent(String.self, forKey: .primaryLanguageCode)
         self.secondaryLanguageCode = try values.decodeIfPresent(String.self, forKey: .secondaryLanguageCode)
+        self.allowsUnlistedModel = try values.decodeIfPresent(Bool.self, forKey: .allowsUnlistedModel) ?? false
+    }
+
+    /// The flag is written only when set, so a listed model encodes as before and keeps its chunk cache.
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(self.providerID, forKey: .providerID)
+        try values.encode(self.modelID, forKey: .modelID)
+        try values.encodeIfPresent(self.languageCode, forKey: .languageCode)
+        try values.encodeIfPresent(self.audioDictation, forKey: .audioDictation)
+        try values.encodeIfPresent(self.primaryLanguageCode, forKey: .primaryLanguageCode)
+        try values.encodeIfPresent(self.secondaryLanguageCode, forKey: .secondaryLanguageCode)
+        if self.allowsUnlistedModel { try values.encode(true, forKey: .allowsUnlistedModel) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case providerID, modelID, languageCode, audioDictation, primaryLanguageCode, secondaryLanguageCode
+        case providerID, modelID, languageCode, audioDictation, primaryLanguageCode, secondaryLanguageCode, allowsUnlistedModel
     }
 
     static let meetingDefault = CloudTranscriptionConfiguration(modelID: CloudTranscriptionModel.defaultMeetingID)
 
-    /// The same request settings with another model or language, for the provider already chosen.
+    /// The same request settings with another model or language, for the provider already chosen. Another
+    /// model must be listed; only the stored choice may be unlisted.
     func with(
         modelID: String? = nil,
         languageCode: String?? = nil,
         audioDictation: CloudAudioDictationInstructions?? = nil
     ) -> CloudTranscriptionConfiguration {
-        CloudTranscriptionConfiguration(
+        let newModelID = modelID ?? self.modelID
+        return CloudTranscriptionConfiguration(
             providerID: self.providerID,
-            modelID: modelID ?? self.modelID,
+            modelID: newModelID,
             languageCode: languageCode ?? self.languageCode,
             primaryLanguageCode: self.primaryLanguageCode,
             secondaryLanguageCode: self.secondaryLanguageCode,
-            audioDictation: audioDictation ?? self.audioDictation
+            audioDictation: audioDictation ?? self.audioDictation,
+            allowsUnlistedModel: self.allowsUnlistedModel && newModelID == self.modelID
         )
     }
 
@@ -192,9 +214,16 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         if wordTimings, !model.supportsWordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
     }
 
-    /// The speech model in this provider's catalog, or nil when the provider does not offer it.
+    /// The speech model in this provider's catalog; for a stored choice the catalog no longer lists, that
+    /// model with unchecked word timings; otherwise nil.
     var model: CloudTranscriptionModel? {
-        CloudTranscriptionCatalog.models(for: self.providerID).first { $0.id == self.modelID }
+        if let listed = CloudTranscriptionCatalog.models(for: self.providerID).first(where: { $0.id == self.modelID }) {
+            return listed
+        }
+        guard self.allowsUnlistedModel, CloudTranscriptionCatalog.defaultModelID(for: self.providerID) != nil,
+              !self.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return CloudTranscriptionModel(id: self.modelID, name: self.modelID, wordTimingSupport: .unverified, languageHintProviderTags: [])
     }
 
     var languageHintPrompt: String? {
@@ -230,6 +259,8 @@ nonisolated struct CloudTranscriptionModel: Identifiable, Equatable, Sendable {
     // DeepInfra is deliberately omitted: its prompt forwarding has not been verified.
     // Models discovered from the catalog have no verified tags, so they receive no prompt.
     let languageHintProviderTags: [String]
+    /// A short line the model picker shows under the name, such as "English only".
+    var note: String?
 
     var supportsWordTimings: Bool { self.wordTimingSupport == .supported }
 
@@ -328,6 +359,8 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
     case dictationTooLong, truncatedDictationResponse
     /// A job vendor reported that the transcription job failed.
     case jobFailed
+    /// The chosen model transcribes a fixed set of languages, and none of the dictation languages is in it.
+    case unsupportedLanguageForModel
 
     var errorDescription: String? { self.message(providerName: CloudTranscriptionCatalog.openRouterName) }
 
@@ -361,6 +394,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .wordTimingCheckInconclusive: "The model returned no text for the spoken test clip, so its word timings could not be checked. Try again or choose another model."
         case .dictationTooLong: "OpenRouter dictation with a Cleanup Style supports recordings up to 8 minutes. Record a shorter dictation, turn the style off, or import longer audio as a file."
         case .jobFailed: "\(name) could not transcribe this recording. Retry or choose local transcription."
+        case .unsupportedLanguageForModel: "This \(name) model doesn't support your dictation language. Choose another model or language in Voice Engine."
         case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
     }

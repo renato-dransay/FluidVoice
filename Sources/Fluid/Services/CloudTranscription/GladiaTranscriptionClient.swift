@@ -9,6 +9,12 @@ import Foundation
 /// EVIDENCE: https://docs.gladia.io/api-reference/v2/pre-recorded/init (checked 2026-10-02):
 /// `POST /v2/pre-recorded` with `audio_url`, `model` (`solaria-1` is the default) and `language_config`
 /// (`languages`, `code_switching`); the response has `id`. 401 for a missing or invalid key.
+/// EVIDENCE: https://docs.gladia.io/chapters/introduction/models and the `model` enum in
+/// https://docs.gladia.io/api-reference/v2/pre-recorded/init (checked 2026-10-02): `solaria-1` is the default and
+/// covers 100+ languages; `solaria-3` (generally available since 2026-06-10, https://www.gladia.io/changelog)
+/// transcribes English, French, German, Spanish and Italian, pre-recorded only, and the reference asks for
+/// exactly one language in `language_config.languages`, without code switching. Left out: `solaria-fusion`,
+/// which appears only in that enum and is documented nowhere else.
 /// EVIDENCE: https://docs.gladia.io/chapters/language/language-detection (checked 2026-10-02): omitting
 /// `languages` detects among all languages; a list restricts detection to it, which is stronger than a
 /// hint, so the Primary and Secondary languages are not sent.
@@ -26,7 +32,11 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
     static let name = "Gladia"
     static let models: [CloudTranscriptionModel] = [
         .init(id: "solaria-1", name: "Solaria-1", wordTimingSupport: .supported, languageHintProviderTags: []),
+        .init(id: singleLanguageModelID, name: "Solaria-3", wordTimingSupport: .supported, languageHintProviderTags: [], note: "English, French, German, Spanish, Italian"),
     ]
+    /// Solaria-3 takes exactly one of its five languages per file.
+    static let singleLanguageModelID = "solaria-3"
+    static let singleLanguageModelCodes: Set<String> = ["en", "fr", "de", "es", "it"]
     static let shared = GladiaTranscriptionClient()
 
     private static let baseURL = "https://api.gladia.io/v2"
@@ -58,6 +68,8 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
         guard configuration.providerID == Self.id else { throw CloudTranscriptionError.unsupportedModel }
         try configuration.validate(wordTimings: wordTimings)
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
+        // The job body is built before the upload, so a language Solaria-3 cannot take sends nothing.
+        _ = try Self.jobBody(audioURL: "", configuration: configuration)
         let audio = try CloudEncodedAudio.best(samples: samples)
         let started = ProcessInfo.processInfo.systemUptime
         let job = try await CloudRemoteCleanup.run(providerID: Self.id, retry: self.cleanupRetry) { cleanup in
@@ -86,13 +98,26 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
         return result
     }
 
-    /// The chosen model; the chosen language, otherwise automatic detection (no `languages`).
+    /// The chosen model; the chosen language, otherwise automatic detection (no `languages`). Solaria-3
+    /// cannot detect: it gets the chosen language, otherwise the Primary or Secondary language, when it is one
+    /// of its five, and fails before anything is sent when none is.
     static func jobBody(audioURL: String, configuration: CloudTranscriptionConfiguration) throws -> Data {
         var body: [String: Any] = ["audio_url": audioURL, "model": configuration.modelID]
-        if let language = configuration.languageCode {
+        if configuration.modelID == self.singleLanguageModelID {
+            body["language_config"] = ["languages": [try self.singleLanguage(for: configuration)]]
+        } else if let language = configuration.languageCode {
             body["language_config"] = ["languages": [language], "code_switching": false] as [String: Any]
         }
         return try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+    }
+
+    /// The one language Solaria-3 transcribes this recording in. A chosen language is never replaced.
+    static func singleLanguage(for configuration: CloudTranscriptionConfiguration) throws -> String {
+        let candidates = configuration.languageCode.map { [$0] } ?? [configuration.primaryLanguageCode, configuration.secondaryLanguageCode].compactMap { $0 }
+        guard let language = candidates.first(where: self.singleLanguageModelCodes.contains) else {
+            throw CloudTranscriptionError.unsupportedLanguageForModel
+        }
+        return language
     }
 
     // MARK: - Requests
