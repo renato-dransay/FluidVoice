@@ -122,7 +122,7 @@ extension VoiceEngineSettingsView {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// "Active Model" while the local engine is active; otherwise the model kept for imported files.
+    /// "Active Model" while the local engine is active; otherwise the selected local model and what uses it.
     @ViewBuilder
     private var activeModelHeader: some View {
         if self.settings.speechExecutionSource == .local {
@@ -134,7 +134,10 @@ extension VoiceEngineSettingsView {
                 Text("Selected local model")
                     .font(self.theme.typography.sectionTitle)
                     .foregroundStyle(self.voiceEngineTitleText)
-                Text("Used for imported files, and for dictation when you activate it.")
+                Text(VoiceEngineSettingsViewModel.selectedLocalModelCaption(
+                    engine: self.settings.speechExecutionSource,
+                    cloudProviderName: self.settings.cloudTranscriptionProviderName
+                ))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.voiceEngineSecondaryText)
             }

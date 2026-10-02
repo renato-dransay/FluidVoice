@@ -1,14 +1,16 @@
 import SwiftUI
 
 struct MeetingCloudSettingsSection: View {
-    /// The three meeting transcription choices, named like the Voice Engine tabs.
+    /// The three meeting transcription choices, named like the Voice Engine tabs. Cloud is OpenRouter
+    /// for meetings.
     private enum Engine: Hashable {
         case local
         case openRouter
         case liveCloud
     }
 
-    let onOpenVoiceEngine: () -> Void
+    /// Leaves FluidMeet settings for another screen: AI Providers for keys, Voice Engine for live providers.
+    let onNavigate: (AppNavigationDestination) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
 
@@ -34,7 +36,7 @@ struct MeetingCloudSettingsSection: View {
                     set: { self.select($0) }
                 )) {
                     Text("Local").tag(Engine.local)
-                    Text("OpenRouter").tag(Engine.openRouter)
+                    Text("Cloud").tag(Engine.openRouter)
                     Text("Live cloud").tag(Engine.liveCloud)
                 }
                 .pickerStyle(.segmented)
@@ -105,10 +107,12 @@ struct MeetingCloudSettingsSection: View {
             ? "Only models with verified word timings are listed, because meetings need them to label speakers."
             : "Only models with verified word timings are listed, because meetings need them to label speakers. OpenRouter lists \(self.uncheckedModels.count) unchecked models; checking sends each one short synthetic clip.")
         self.transcriptLanguagePicker
-        self.caption("Recorded audio is sent to OpenRouter after you stop. Speaker detection stays on this Mac, and live captions run on this Mac in English. Charges apply to audio duration.")
-        Button(self.settings.openRouterTranscriptionAPIKey.isEmpty
-            ? "Add OpenRouter key in Voice Engine" : "Manage OpenRouter key in Voice Engine", action: self.onOpenVoiceEngine)
-            .meetingGlassAction()
+        self.caption("Recorded audio is sent to OpenRouter after you stop. Other cloud providers are not available for meetings yet. Speaker detection stays on this Mac, and live captions run on this Mac in English. Charges apply to audio duration.")
+        Button(self.settings.openRouterTranscriptionAPIKey.isEmpty ? "Set up in AI Providers" : "Manage in AI Providers") {
+            self.onNavigate(.aiProvider(id: CloudTranscriptionPreferences.defaultProviderID, origin: .fluidMeet))
+        }
+        .meetingGlassAction()
+        .accessibilityIdentifier("meeting-openrouter-key")
     }
 
     private var liveProviderChoices: [LiveTranscriptionProviderID] { self.settings.meetingLiveCloudProviderChoices }
@@ -117,9 +121,11 @@ struct MeetingCloudSettingsSection: View {
     private var liveCloudSettings: some View {
         let selected = self.settings.meetingLiveCloudProvider
         if self.liveProviderChoices.isEmpty, selected == nil {
-            self.caption("Add a live provider and save its API key under Voice Engine > Live cloud, then choose it here. Live cloud streams the meeting while you record, so captions and the transcript come from the same provider.")
-            Button("Add a live provider in Voice Engine", action: self.onOpenVoiceEngine)
-                .meetingGlassAction()
+            self.caption("Connect a live provider with its API key in AI Providers, then choose it here. Live cloud streams the meeting while you record, so captions and the transcript come from the same provider.")
+            Button("Set up a live provider in AI Providers") {
+                self.onNavigate(.addProvider(capability: .liveTranscription, origin: .fluidMeet))
+            }
+            .meetingGlassAction()
         } else {
             Picker("Live provider", selection: self.$settings.meetingLiveCloudProvider) {
                 if selected == nil {
@@ -141,7 +147,7 @@ struct MeetingCloudSettingsSection: View {
                 self.caption(note)
             }
             self.caption(self.liveCloudPrivacy(selected))
-            Button("Manage live providers in Voice Engine", action: self.onOpenVoiceEngine)
+            Button("Manage live providers in Voice Engine") { self.onNavigate(.voiceEngine(tab: .liveCloud)) }
                 .meetingGlassAction()
         }
     }
@@ -150,7 +156,7 @@ struct MeetingCloudSettingsSection: View {
         guard let provider else { return "Choose the provider that receives the meeting audio." }
         let name = Self.name(of: provider)
         if !self.liveProviderChoices.contains(provider) {
-            return "\(name) has no saved API key, so meetings cannot be transcribed until you add one under Voice Engine > Live cloud."
+            return "\(name) has no saved API key, so meetings cannot be transcribed until you add one in AI Providers."
         }
         return [
             "While you record, meeting audio streams to \(name) with your key. Live captions and the completed transcript both come from it, so nothing is uploaded after you stop.",
@@ -218,7 +224,7 @@ struct MeetingCloudSettingsSection: View {
         guard self.checkProgress == nil, !candidates.isEmpty else { return }
         let apiKey = self.settings.openRouterTranscriptionAPIKey
         guard !apiKey.isEmpty else {
-            self.modelStatus = "Add your OpenRouter key in Voice Engine before checking models."
+            self.modelStatus = "Add an OpenRouter API key in AI Providers before checking models."
             return
         }
         self.modelStatus = ""

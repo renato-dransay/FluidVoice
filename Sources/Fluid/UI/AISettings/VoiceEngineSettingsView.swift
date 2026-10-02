@@ -23,21 +23,20 @@ struct VoiceEngineSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Active voice engine: \(self.settings.activeVoiceEngineDescription)", systemImage: "checkmark.circle.fill")
-                .font(.callout)
-                .accessibilityIdentifier("active-voice-engine")
+            self.header
+            // Tabs only browse; each tab's Activate changes the engine. The active one carries a check mark.
             Picker("Provider settings", selection: self.$viewModel.browsedSpeechExecutionSource) {
                 ForEach(SpeechExecutionSource.allCases) { source in
-                    Text(source.displayName).tag(source)
+                    let isActive = source == self.settings.speechExecutionSource
+                    Text(Self.tabTitle(for: source, isActive: isActive))
+                        .accessibilityLabel(isActive ? "\(source.displayName), active" : source.displayName)
+                        .tag(source)
                 }
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("voice-engine-provider-tabs")
-            Text("Tabs only show settings. Activate a local model or a live provider, or turn on OpenRouter, to change the voice engine.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             switch self.viewModel.browsedSpeechExecutionSource {
-            case .cloud: OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
+            case .cloud: CloudTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
             case .liveCloud: LiveCloudSettingsView(settings: self.settings, viewModel: self.viewModel)
             case .local: self.speechRecognitionCard
             }
@@ -55,5 +54,31 @@ struct VoiceEngineSettingsView: View {
             .onChange(of: self.settings.selectedSpeechModel) { _, newValue in
                 self.viewModel.handleSelectedSpeechModelChange(newValue)
             }
+    }
+
+    /// A segmented picker carries one text per segment, so the active engine's title gets a check mark.
+    static func tabTitle(for source: SpeechExecutionSource, isActive: Bool) -> String {
+        isActive ? "\(source.displayName) ✓" : source.displayName
+    }
+
+    /// "Active voice engine: …", with a way to the missing key when the engine's provider has none (VE-2).
+    private var header: some View {
+        let status = self.settings.voiceEngineStatus
+        return HStack(spacing: 12) {
+            Label(
+                "Active voice engine: \(status.description)",
+                systemImage: status.missingKeyProviderID == nil ? "checkmark.circle.fill" : "exclamationmark.circle"
+            )
+            .font(.callout)
+            .foregroundStyle(status.missingKeyProviderID == nil ? Color.primary : Color.red)
+            .accessibilityIdentifier("active-voice-engine")
+            if let providerID = status.missingKeyProviderID {
+                Button("Open AI Providers") {
+                    AppNavigationRouter.shared.request(.aiProvider(id: providerID, origin: .voiceEngine(tab: status.tab)))
+                }
+                .fluidGlassAction(quiet: true)
+                .accessibilityIdentifier("active-voice-engine-open-ai-providers")
+            }
+        }
     }
 }

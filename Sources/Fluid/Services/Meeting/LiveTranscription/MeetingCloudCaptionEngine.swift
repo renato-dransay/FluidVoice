@@ -53,7 +53,7 @@ nonisolated enum MeetingCloudCaptionText {
     static func failureMessage(_ error: LiveTranscriptionError, providerName: String) -> String {
         switch error {
         case .missingAPIKey:
-            "Live captions need a \(providerName) API key. Add it in Voice Engine > Live cloud. Recording continues."
+            "Live captions need \(ProviderKeyMessage.indefiniteArticle(for: providerName)) \(providerName) API key. Add it in AI Providers. Recording continues."
         case .authentication:
             "\(providerName) rejected the API key, so live captions stopped. Recording continues."
         case .quotaExhausted:

@@ -39,7 +39,7 @@ struct MeetingRecordingSettingsSheet: View {
     let onModelImported: @MainActor () -> Void
     let onOpenMicrophoneSettings: @MainActor @Sendable () -> Void
     let onOpenScreenRecordingSettings: @MainActor @Sendable () -> Void
-    let onOpenVoiceEngine: () -> Void
+    let onNavigate: (AppNavigationDestination) -> Void
     let onCancel: () -> Void
     let onSave: () -> Void
 
@@ -58,7 +58,7 @@ struct MeetingRecordingSettingsSheet: View {
         onRefreshSources: @escaping () -> Void,
         onOpenMicrophoneSettings: @escaping @MainActor @Sendable () -> Void,
         onOpenScreenRecordingSettings: @escaping @MainActor @Sendable () -> Void,
-        onOpenVoiceEngine: @escaping () -> Void,
+        onNavigate: @escaping (AppNavigationDestination) -> Void,
         onCancel: @escaping () -> Void,
         onSave: @escaping () -> Void,
         onModelImported: @escaping @MainActor () -> Void = {},
@@ -74,7 +74,7 @@ struct MeetingRecordingSettingsSheet: View {
         self.onModelImported = onModelImported
         self.onOpenMicrophoneSettings = onOpenMicrophoneSettings
         self.onOpenScreenRecordingSettings = onOpenScreenRecordingSettings
-        self.onOpenVoiceEngine = onOpenVoiceEngine
+        self.onNavigate = onNavigate
         self.onCancel = onCancel
         self.onSave = onSave
         self._selectedSection = State(initialValue: initialSection)
@@ -276,7 +276,7 @@ struct MeetingRecordingSettingsSheet: View {
                     .accessibilityLabel("Refresh audio sources")
             }
 
-            MeetingCloudSettingsSection(onOpenVoiceEngine: self.onOpenVoiceEngine)
+            MeetingCloudSettingsSection(onNavigate: self.onNavigate)
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {

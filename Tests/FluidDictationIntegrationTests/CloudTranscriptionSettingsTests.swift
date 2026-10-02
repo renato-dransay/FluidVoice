@@ -50,7 +50,7 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertEqual(SpeechExecutionSource.cloud.rawValue, "openRouter")
-        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "OpenRouter")
+        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "Cloud")
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
         XCTAssertEqual(preferences.providerID, "openrouter")
         preferences.source = .cloud

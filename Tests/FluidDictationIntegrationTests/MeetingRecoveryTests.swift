@@ -793,7 +793,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 onRefreshSources: { actions.record() },
                 onOpenMicrophoneSettings: { actions.record() },
                 onOpenScreenRecordingSettings: { actions.record() },
-                onOpenVoiceEngine: { actions.record() },
+                onNavigate: { _ in actions.record() },
                 onCancel: { actions.record() },
                 onSave: { actions.record() },
                 initialSection: section

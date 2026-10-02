@@ -217,7 +217,7 @@ struct DashboardView: View {
             .init(
                 title: "Voice model",
                 icon: "waveform",
-                detail: self.settings.missingLiveKeyMessage ?? "Pick your engine",
+                detail: self.settings.missingVoiceEngineKeyMessage ?? "Pick your engine",
                 action: { self.selectedSidebarItem = .voiceEngine }
             )
         case .microphone:

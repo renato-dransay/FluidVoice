@@ -141,7 +141,7 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var asrService: ASRService
     @ObservedObject private var appServices = AppServices.shared
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
-    let onOpenVoiceEngine: () -> Void
+    let onNavigate: (AppNavigationDestination) -> Void
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
@@ -178,12 +178,12 @@ struct MeetingTranscriptionView: View {
         coordinator: MeetingSessionCoordinator,
         asrService: ASRService,
         historySnapshot: MeetingHistorySnapshot,
-        onOpenVoiceEngine: @escaping () -> Void
+        onNavigate: @escaping (AppNavigationDestination) -> Void
     ) {
         self.coordinator = coordinator
         self.asrService = asrService
         self.historySnapshot = historySnapshot
-        self.onOpenVoiceEngine = onOpenVoiceEngine
+        self.onNavigate = onNavigate
 
         let initialDraft = MeetingTranscriptionSetupDraft(settings: .shared)
         self._setupDraft = State(initialValue: initialDraft)
@@ -355,7 +355,7 @@ struct MeetingTranscriptionView: View {
                 onRefreshSources: self.refreshSourcesFromUserAction,
                 onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
                 onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
-                onOpenVoiceEngine: self.onOpenVoiceEngine,
+                onNavigate: self.onNavigate,
                 onCancel: self.cancelMeetingSettings,
                 onSave: self.saveMeetingSettings,
                 onModelImported: { Task { await self.refreshModelReadiness() } }

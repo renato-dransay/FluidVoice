@@ -101,6 +101,23 @@ nonisolated enum LiveTranscriptUpdate: Equatable, Sendable {
     case failure(LiveTranscriptionError)
 }
 
+/// The missing-key and rejected-key messages of every provider. Keys are entered in AI Providers.
+nonisolated enum ProviderKeyMessage {
+    static func missing(providerName: String) -> String {
+        "Add \(self.indefiniteArticle(for: providerName)) \(providerName) API key in AI Providers."
+    }
+
+    static func rejected(providerName: String) -> String {
+        "\(providerName) rejected the API key. Update it in AI Providers and retry."
+    }
+
+    /// "an" before a vowel ("an OpenRouter API key"), "a" otherwise.
+    static func indefiniteArticle(for name: String) -> String {
+        guard let first = name.lowercased().first else { return "a" }
+        return "aeiou".contains(first) ? "an" : "a"
+    }
+}
+
 nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedError {
     case missingAPIKey
     case authentication
@@ -117,8 +134,8 @@ nonisolated enum LiveTranscriptionError: Error, Equatable, Sendable, LocalizedEr
 
     func message(providerName: String) -> String {
         switch self {
-        case .missingAPIKey: "Add a \(providerName) API key in Voice Engine settings before using live transcription."
-        case .authentication: "\(providerName) rejected the API key. Update it in Voice Engine settings and retry."
+        case .missingAPIKey: ProviderKeyMessage.missing(providerName: providerName)
+        case .authentication: ProviderKeyMessage.rejected(providerName: providerName)
         case .quotaExhausted: "\(providerName) has no remaining credits or quota. Add credits, or activate another voice engine."
         case .rateLimited: "\(providerName) is limiting requests. Wait before retrying, or activate another voice engine."
         case .connectionFailed: "Could not reach \(providerName). Check your connection and retry, or activate another voice engine."

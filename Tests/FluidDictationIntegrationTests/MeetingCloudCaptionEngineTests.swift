@@ -315,14 +315,14 @@ final class MeetingLiveCaptionSourceTests: XCTestCase {
     func testNoProviderAsksForOne() {
         XCTAssertEqual(
             self.source(provider: nil, key: "key", language: "auto"),
-            .unavailable(reason: "Live cloud needs a provider. Add one with its API key in Voice Engine > Live cloud, then choose it in FluidMeet settings.")
+            .unavailable(reason: "Live cloud needs a provider. Connect one with its API key in AI Providers, then choose it in FluidMeet settings.")
         )
     }
 
     func testAProviderWithoutAKeyNamesTheMissingKey() {
         XCTAssertEqual(
             self.source(provider: .soniox, key: "", language: "auto"),
-            .unavailable(reason: "Live cloud needs a Soniox API key. Add it in Voice Engine > Live cloud.")
+            .unavailable(reason: "Live cloud needs a Soniox API key. Add it in AI Providers.")
         )
     }
 

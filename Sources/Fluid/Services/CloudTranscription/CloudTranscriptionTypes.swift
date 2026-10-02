@@ -263,8 +263,8 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
 
     var errorDescription: String? {
         switch self {
-        case .missingAPIKey: "Add an OpenRouter API key in Voice Engine settings before using cloud transcription."
-        case .authentication: "OpenRouter rejected the API key. Update it in Voice Engine settings and retry."
+        case .missingAPIKey: ProviderKeyMessage.missing(providerName: "OpenRouter")
+        case .authentication: ProviderKeyMessage.rejected(providerName: "OpenRouter")
         case .creditsExhausted: "OpenRouter has insufficient credits. Add credits or explicitly choose local transcription."
         case .rateLimited: "OpenRouter is rate limiting requests. Wait before retrying, or choose local transcription."
         case .timeout: "OpenRouter transcription timed out. Retry to resume completed chunks, or choose local transcription."

@@ -13,8 +13,8 @@ enum LiveCloudProviderGroups {
     }
 }
 
-/// The Live cloud tab: connected providers first, then every other live provider under "Not set up".
-/// Keys are entered in AI Providers.
+/// The Live cloud tab: connected providers first, then every other live provider under "Not set up",
+/// each linking to AI Providers, where keys are entered.
 struct LiveCloudSettingsView: View {
     @Environment(\.theme) private var theme
     @ObservedObject var settings: SettingsStore
@@ -47,16 +47,7 @@ struct LiveCloudSettingsView: View {
     private var content: some View {
         let groups = self.groups
         return VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Live cloud providers").font(.headline)
-                Spacer()
-                Button("Add provider", systemImage: "plus") {
-                    AppNavigationRouter.shared.request(.addProvider(capability: .liveTranscription, origin: .voiceEngine(tab: .liveCloud)))
-                }
-                .fluidGlassAction()
-                .disabled(groups.notSetUp.isEmpty)
-                .accessibilityIdentifier("live-cloud-add-provider")
-            }
+            Text("Live cloud providers").font(.headline)
             Text("Words appear while you speak; the final text arrives moments after you stop. Audio streams to the provider while you record. Each provider uses your own API key, entered in AI Providers.")
                 .font(.callout).foregroundStyle(.secondary)
             if groups.connected.isEmpty {
@@ -84,7 +75,7 @@ struct LiveCloudSettingsView: View {
             Divider()
             DictationLanguageControls(
                 settings: self.settings,
-                caption: "Shared with OpenRouter. Dictation detects the language automatically; choose Primary or Secondary while recording to override it."
+                caption: "Shared with Cloud. Dictation detects the language automatically; choose Primary or Secondary while recording to override it."
             )
             Text("Live providers handle dictation, commands and rewrite. Imported files and the local API use your selected local model.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -158,18 +149,23 @@ struct LiveCloudSettingsView: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if self.viewModel.liveRejectedKeys.contains(provider) {
+                    Button("Update key in AI Providers") {
+                        AppNavigationRouter.shared.request(.aiProvider(
+                            id: ProviderRegistry.providerID(for: provider),
+                            origin: .voiceEngine(tab: .liveCloud)
+                        ))
+                    }
+                    .buttonStyle(.link)
+                    .accessibilityIdentifier("live-cloud-update-key-\(provider.rawValue)")
+                }
             }
             Spacer()
             if isActive, !hasKey {
                 self.setUpButton(for: provider)
             }
             if isActive {
-                Text("Active")
-                    .font(self.theme.typography.bodySmallStrong)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.fluidGreen.opacity(0.25)))
-                    .foregroundStyle(Color.fluidGreen)
+                VoiceEngineActiveCapsule()
             } else if !hasKey {
                 self.setUpButton(for: provider)
             } else {
@@ -198,7 +194,7 @@ struct LiveCloudSettingsView: View {
     }
 
     private func activateHelp(hasKey: Bool, needsLanguage: Bool) -> String {
-        if !hasKey { return "Save an API key first." }
+        if !hasKey { return "Add an API key in AI Providers first." }
         if needsLanguage { return "Choose a Primary language under Dictation language first." }
         if self.viewModel.areSpeechModelActionsBlocked { return "Finish the current recording first." }
         return "Use this provider for dictation. The key is checked first."

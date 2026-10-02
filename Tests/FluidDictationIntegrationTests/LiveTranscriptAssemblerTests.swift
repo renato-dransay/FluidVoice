@@ -87,7 +87,7 @@ final class LiveTranscriptAssemblerTests: XCTestCase {
     func testErrorMessagesNameTheProviderAndCarryNoServerText() {
         XCTAssertEqual(
             LiveTranscriptionError.authentication.message(providerName: "Soniox"),
-            "Soniox rejected the API key. Update it in Voice Engine settings and retry."
+            "Soniox rejected the API key. Update it in AI Providers and retry."
         )
         XCTAssertEqual(
             LiveTranscriptionError.sessionClosed("limit_exceeded").message(providerName: "Deepgram"),

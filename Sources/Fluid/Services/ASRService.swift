@@ -800,7 +800,7 @@ final class ASRService: ObservableObject {
     var dictationEngineBadge: String {
         guard self.activeActivityLease != nil else { return SettingsStore.shared.dictationEngineBadge }
         return SettingsStore.dictationEngineBadge(
-            usesOpenRouter: self.isUsingCloudTranscription,
+            cloudProviderName: self.isUsingCloudTranscription ? SettingsStore.shared.cloudTranscriptionProviderName : nil,
             liveProvider: (self.frozenTranscriptionProvider as? LiveCloudTranscriptionProvider)?.configuration.provider
         )
     }
@@ -4013,7 +4013,7 @@ final class ASRService: ObservableObject {
                     self.failedLiveProvider = nil
                     self.hasFailedCloudDictation = true
                     self.errorTitle = "OpenRouter transcription failed"
-                    self.errorMessage = error.localizedDescription + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
+                    self.errorMessage = Self.failedDictationMessage(error.localizedDescription, error: error)
                     self.showError = true
                 }
                 self.isLoadingModel = false
@@ -7889,6 +7889,16 @@ private extension SettingsStore.SpeechModel {
     }
 }
 
+extension ASRService {
+    /// The alert for a failed cloud or live dictation whose recording is kept. A key error already says to
+    /// fix the key in AI Providers and retry, so it gets no second remedy.
+    nonisolated static func failedDictationMessage(_ message: String, error: Error) -> String {
+        let isKeyError = [.missingAPIKey, .authentication].contains(error as? CloudTranscriptionError)
+            || [.missingAPIKey, .authentication].contains(error as? LiveTranscriptionError)
+        return isKeyError ? message : message + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
+    }
+}
+
 private extension ASRService {
     /// Feeds the live session every 100 ms with samples captured since the last tick and
     /// publishes its text through `partialTranscription`, the property the overlay already follows.
@@ -7971,8 +7981,7 @@ private extension ASRService {
             self.hasFailedCloudDictation = false
             self.failedLiveProvider = live.configuration.provider
             self.errorTitle = "\(live.name) transcription failed"
-            self.errorMessage = liveError.message(providerName: live.name)
-                + " Open Voice Engine settings to retry, transcribe locally, or discard the recording."
+            self.errorMessage = Self.failedDictationMessage(liveError.message(providerName: live.name), error: liveError)
             self.showError = true
         }
         self.isLoadingModel = false

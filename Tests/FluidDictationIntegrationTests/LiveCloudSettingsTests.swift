@@ -60,7 +60,7 @@ final class LiveCloudSettingsTests: XCTestCase {
         XCTAssertEqual(SpeechExecutionSource(rawValue: "openRouter"), .cloud)
         XCTAssertEqual(SpeechExecutionSource(rawValue: "liveCloud"), .liveCloud)
         XCTAssertEqual(SpeechExecutionSource.liveCloud.displayName, "Live cloud")
-        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "OpenRouter")
+        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "Cloud")
     }
 
     func testStoredLocalAndOpenRouterSourcesAreKept() throws {
@@ -116,9 +116,9 @@ final class LiveCloudSettingsTests: XCTestCase {
     }
 
     func testTheEngineBadgeNamesTheEngineThatReceivesTheAudio() {
-        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: false, liveProvider: nil), "ON-DEVICE")
-        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: true, liveProvider: nil), "OPENROUTER")
-        XCTAssertEqual(SettingsStore.dictationEngineBadge(usesOpenRouter: false, liveProvider: .deepgram), "DEEPGRAM · LIVE")
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(cloudProviderName: nil, liveProvider: nil), "ON-DEVICE")
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(cloudProviderName: "OpenRouter", liveProvider: nil), "OPENROUTER · CLOUD")
+        XCTAssertEqual(SettingsStore.dictationEngineBadge(cloudProviderName: nil, liveProvider: .deepgram), "DEEPGRAM · LIVE")
     }
 
     private func usableProvider(

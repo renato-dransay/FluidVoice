@@ -2196,7 +2196,7 @@ struct ContentView: View {
             coordinator: self.appServices.meetingSessionCoordinator,
             asrService: self.asr,
             historySnapshot: self.meetingHistorySnapshot,
-            onOpenVoiceEngine: { self.selectedSidebarItem = .voiceEngine }
+            onNavigate: { AppNavigationRouter.shared.request($0) }
         )
     }
 
@@ -5415,9 +5415,10 @@ extension ContentView {
             return self.settings.usesLiveCloudDictation ? "\(name) is ready. Audio streams while you record." : "\(name) key required"
         }
         if self.settings.usesCloudTranscription {
+            let name = self.settings.cloudTranscriptionProviderName
             return self.settings.cloudTranscriptionAPIKey.isEmpty
-                ? "Add an OpenRouter key in Voice Engine settings."
-                : "OpenRouter is configured. Audio uploads after recording stops."
+                ? ProviderKeyMessage.missing(providerName: name)
+                : "\(name) is configured. Audio uploads after recording stops."
         }
         if self.asr.isLoadingModel {
             return "Loading model into memory... (30-60 sec)"

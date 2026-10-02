@@ -1,10 +1,15 @@
 import SwiftUI
 
-/// Cloud setup remains optional; opening this sheet does not change the active voice engine.
+/// Lets a new user connect OpenRouter and make it the voice engine in one sheet. The key goes through
+/// the same field and the same store as AI Providers. Cloud setup remains optional; opening this sheet
+/// does not change the active voice engine.
 struct OnboardingCloudTranscriptionSetupView: View {
+    private static let providerID = CloudTranscriptionPreferences.defaultProviderID
+
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var settings = SettingsStore.shared
     @StateObject private var viewModel: VoiceEngineSettingsViewModel
+    @State private var keyDraft = ""
     @State private var errorMessage: String?
     @State private var isActivating = false
     @State private var activationTask: Task<Void, Never>?
@@ -16,11 +21,30 @@ struct OnboardingCloudTranscriptionSetupView: View {
         ))
     }
 
+    private var hasSavedKey: Bool { !self.settings.openRouterTranscriptionAPIKey.isEmpty }
+    private var hasDraft: Bool { !self.keyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Set up OpenRouter").font(.title2)
-            OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel, showsActivationControl: false)
-                .disabled(self.isActivating)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Your recording is sent to OpenRouter when you stop.")
+                    .font(.callout).foregroundStyle(.secondary)
+                ProviderAPIKeyField(
+                    text: self.$keyDraft,
+                    hasSavedKey: self.hasSavedKey,
+                    link: AIProviderCatalog.keyLink(for: Self.providerID)
+                )
+                OpenRouterModelControls(settings: self.settings, viewModel: self.viewModel)
+                Divider()
+                DictationLanguageControls(
+                    settings: self.settings,
+                    caption: "Dictation detects any language automatically. Choose Primary or Secondary while recording to override detection; the choice is remembered."
+                )
+            }
+            .padding(16)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
+            .disabled(self.isActivating)
             if let errorMessage {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)
             }
@@ -29,66 +53,49 @@ struct OnboardingCloudTranscriptionSetupView: View {
                     self.activationTask?.cancel()
                     self.dismiss()
                 }
-                    .keyboardShortcut(.cancelAction)
+                .keyboardShortcut(.cancelAction)
                 Spacer()
+                if self.isActivating {
+                    ProgressView().controlSize(.small)
+                }
                 Button("Use OpenRouter") { self.activate() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(self.isActivating || self.settings.openRouterTranscriptionAPIKey.isEmpty)
+                    .disabled(self.isActivating || (!self.hasSavedKey && !self.hasDraft))
             }
         }
         .padding(24)
         .frame(width: 650)
+        .task { await self.viewModel.refreshOpenRouterCatalog(force: false) }
         .onDisappear { self.activationTask?.cancel() }
     }
 
+    /// Saves a typed key, then checks it and both models before OpenRouter becomes the voice engine.
     private func activate() {
         guard !self.isActivating else { return }
-        let modelID = self.settings.cloudDictationModelID
-        let speechModelID = self.settings.cloudTranscriptionModelID
-        let apiKey = self.settings.openRouterTranscriptionAPIKey
-        let primaryLanguageCode = self.settings.cloudTranscriptionPrimaryLanguageCode
-        let secondaryLanguageCode = self.settings.cloudTranscriptionSecondaryLanguageCode
-        let originalSource = self.settings.speechExecutionSource
         self.errorMessage = nil
+        if self.hasDraft {
+            do {
+                try self.settings.setProviderAPIKey(self.keyDraft, for: Self.providerID)
+                self.keyDraft = ""
+            } catch {
+                self.errorMessage = error.localizedDescription
+                return
+            }
+        }
         self.isActivating = true
         self.activationTask = Task { @MainActor in
             defer {
                 self.isActivating = false
                 self.activationTask = nil
             }
-            do {
-                let models = try await OpenRouterTranscriptionClient.shared.validateAudioDictation(apiKey: apiKey)
-                let availableModelIDs = Set(models.map(\.id))
-                // Dictation without a Cleanup Style runs on the speech model, so both must be listed.
-                let speechModels = try await OpenRouterTranscriptionClient.shared.validate(apiKey: apiKey)
-                try Task.checkCancellation()
-                guard self.settings.cloudDictationModelID == modelID,
-                      self.settings.cloudTranscriptionModelID == speechModelID,
-                      self.settings.openRouterTranscriptionAPIKey == apiKey,
-                      self.settings.cloudTranscriptionPrimaryLanguageCode == primaryLanguageCode,
-                      self.settings.cloudTranscriptionSecondaryLanguageCode == secondaryLanguageCode,
-                      self.settings.speechExecutionSource == originalSource
-                else {
-                    self.errorMessage = "Voice settings changed during validation. Try activating OpenRouter again."
-                    return
-                }
-                guard speechModels.contains(where: { $0.id == speechModelID }) else {
-                    self.errorMessage = "The selected speech model is unavailable on OpenRouter. Choose another model."
-                    return
-                }
-                guard availableModelIDs.contains(modelID) else {
-                    self.errorMessage = "The selected style model is unavailable on OpenRouter. Choose another model."
-                    return
-                }
-                self.settings.recordSpeechVerification(for: CloudTranscriptionPreferences.defaultProviderID)
-                self.settings.cloudTranscriptionProviderID = CloudTranscriptionPreferences.defaultProviderID
-                self.settings.speechExecutionSource = .cloud
-                self.viewModel.asr.resetTranscriptionProvider()
+            await self.viewModel.refreshOpenRouterCatalog(force: false)
+            let activated = await self.viewModel.activateCloudProvider(Self.providerID)
+            guard !Task.isCancelled else { return }
+            if activated {
                 self.dismiss()
-            } catch is CancellationError {
-                return
-            } catch {
-                self.errorMessage = error.localizedDescription
+            } else {
+                self.errorMessage = self.viewModel.cloudActivationStatus[Self.providerID]
+                    ?? self.viewModel.cloudActivationBlocker(for: Self.providerID)
             }
         }
     }

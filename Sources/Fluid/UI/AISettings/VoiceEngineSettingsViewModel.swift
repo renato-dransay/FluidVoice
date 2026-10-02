@@ -31,7 +31,21 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     /// Providers whose key the provider rejected at activation, shown as "Key rejected" in the row.
     @Published var liveRejectedKeys: Set<LiveTranscriptionProviderID> = []
     @Published var liveProviderBeingChecked: LiveTranscriptionProviderID?
-    /// The speech and style models OpenRouter listed at the last successful validation. Before one,
+    /// The Cloud provider whose settings the Cloud tab shows. View state only: choosing a provider in
+    /// the menu never changes the engine.
+    @Published var browsedCloudProviderID: String?
+    /// The Cloud provider whose activation check or model refresh is running.
+    @Published var cloudProviderBeingChecked: String?
+    /// Why the last Activate of a Cloud provider failed; cleared when it succeeds or its key changes.
+    @Published var cloudActivationStatus: [String: String] = [:]
+    /// Cloud providers whose key the provider rejected at activation or refresh.
+    @Published var cloudRejectedKeys: Set<String> = []
+    /// The outcome of the last `Refresh models`.
+    @Published var cloudRefreshResult: ProviderActionResult?
+    /// OpenRouter's speech and style catalogs as last fetched.
+    @Published var openRouterSpeechModels = CloudTranscriptionModel.catalog
+    @Published var openRouterStyleModels = CloudAudioDictationModel.catalog
+    /// The speech and style models OpenRouter listed at the last successful check. Before one,
     /// every catalog model stays selectable. Cleared when the OpenRouter key changes.
     @Published var validatedOpenRouterSpeechModelIDs: Set<String> = []
     @Published var hasValidatedOpenRouterSpeechModels = false
@@ -74,9 +88,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             .store(in: &self.cancellables)
     }
 
-    /// Browses the active engine's tab, or the tab a navigation request asked for.
+    /// Browses the active engine's tab, or the tab a navigation request asked for. A live provider selected
+    /// without its key browses Live cloud, where the missing key is shown (VE-2).
     func onAppear(requestedTab: SpeechExecutionSource? = nil) {
-        self.browsedSpeechExecutionSource = Self.tabToBrowse(requested: requestedTab, activeEngine: self.settings.speechExecutionSource)
+        self.browsedSpeechExecutionSource = Self.tabToBrowse(requested: requestedTab, activeEngine: self.settings.voiceEngineStatus.tab)
         self.previewSpeechModel = self.settings.selectedSpeechModel
         self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
 
@@ -96,8 +111,11 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             self.liveActivationStatus[live] = nil
             self.liveRejectedKeys.remove(live)
         }
+        self.cloudActivationStatus[change.providerID] = nil
+        self.cloudRejectedKeys.remove(change.providerID)
         if change.providerID == CloudTranscriptionPreferences.defaultProviderID {
             self.clearValidatedOpenRouterCatalogs()
+            self.cloudRefreshResult = nil
         }
     }
 
@@ -227,44 +245,195 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
     }
 
+    /// The line under "Selected local model" while Local is not the engine (VE-8). Live cloud leaves imported
+    /// files to the local model; Cloud handles them itself.
+    static func selectedLocalModelCaption(engine: SpeechExecutionSource, cloudProviderName: String) -> String {
+        switch engine {
+        case .cloud: "Not in use. \(cloudProviderName) handles dictation, imported files and voice commands."
+        case .liveCloud, .local: "Used for imported files, and for dictation when you activate it."
+        }
+    }
+
     func isActiveSpeechModel(_ model: SettingsStore.SpeechModel) -> Bool {
         self.settings.speechExecutionSource == .local && self.settings.selectedSpeechModel == model
     }
 
-    func setCloudTranscriptionEnabled(_ enabled: Bool) {
-        guard !self.areSpeechModelActionsBlocked else { return }
-        guard !enabled || !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
-        if enabled {
-            // Exactly one engine is active: OpenRouter replaces any live provider.
-            self.settings.clearActiveLiveProvider()
-            self.settings.cloudTranscriptionProviderID = CloudTranscriptionPreferences.defaultProviderID
-            self.settings.speechExecutionSource = .cloud
-        } else if self.settings.usesCombinedCloudDictation {
-            // JUDGMENT: turning OpenRouter off (or removing its key) must not leave Live cloud,
-            // so only an active OpenRouter engine falls back to Local.
-            self.settings.speechExecutionSource = .local
+    // MARK: - Cloud
+
+    /// The Cloud tab's provider menu: connected Cloud transcription providers first, then the rest.
+    static func cloudProviderGroups(hasKey: (String) -> Bool) -> (connected: [ProviderDescriptor], notSetUp: [ProviderDescriptor]) {
+        let all = ProviderRegistry.providers(with: .cloudTranscription)
+        return (all.filter { hasKey($0.id) }, all.filter { !hasKey($0.id) })
+    }
+
+    /// The provider the Cloud tab shows: the one browsed in the menu, else the stored Cloud provider, else
+    /// the first connected one. Nil when none is connected.
+    static func shownCloudProviderID(browsed: String?, stored: String, connected: [String]) -> String? {
+        if let browsed, connected.contains(browsed) { return browsed }
+        if connected.contains(stored) { return stored }
+        return connected.first
+    }
+
+    var cloudProviderGroups: (connected: [ProviderDescriptor], notSetUp: [ProviderDescriptor]) {
+        Self.cloudProviderGroups(hasKey: { !self.settings.speechAPIKey(for: $0).isEmpty })
+    }
+
+    var shownCloudProviderID: String? {
+        Self.shownCloudProviderID(
+            browsed: self.browsedCloudProviderID,
+            stored: self.settings.cloudTranscriptionProviderID,
+            connected: self.cloudProviderGroups.connected.map(\.id)
+        )
+    }
+
+    func isActiveCloudProvider(_ providerID: String) -> Bool {
+        self.settings.usesCloudTranscription && self.settings.cloudTranscriptionProviderID == providerID
+    }
+
+    /// Why `Activate` is disabled for this Cloud provider, or nil when it can run.
+    static func cloudActivationBlocker(hasKey: Bool, hasModel: Bool, isBusy: Bool) -> String? {
+        if !hasKey { return "Add an API key in AI Providers first." }
+        if !hasModel { return "Choose a speech model first." }
+        if isBusy { return "Finish the current recording first." }
+        return nil
+    }
+
+    func cloudActivationBlocker(for providerID: String) -> String? {
+        Self.cloudActivationBlocker(
+            hasKey: !self.settings.speechAPIKey(for: providerID).isEmpty,
+            hasModel: !self.settings.cloudTranscriptionModelID.isEmpty,
+            isBusy: self.areSpeechModelActionsBlocked || self.cloudProviderBeingChecked != nil || self.liveProviderBeingChecked != nil
+        )
+    }
+
+    /// The speech status the Cloud tab's connection line shows (VER-5).
+    func cloudProviderStatus(for providerID: String) -> ProviderStatus {
+        ProviderStatus.speech(
+            hasAPIKey: !self.settings.speechAPIKey(for: providerID).isEmpty,
+            isVerifying: self.cloudProviderBeingChecked == providerID,
+            isVerified: self.settings.isSpeechVerified(providerID),
+            verificationFailed: self.cloudRejectedKeys.contains(providerID)
+        )
+    }
+
+    /// Runs the provider's check and makes it the voice engine only when it passes (VE-5a). Returns true
+    /// once the engine switched.
+    @discardableResult
+    func activateCloudProvider(_ providerID: String) async -> Bool {
+        guard self.cloudActivationBlocker(for: providerID) == nil else { return false }
+        self.cloudProviderBeingChecked = providerID
+        self.cloudActivationStatus[providerID] = nil
+        defer { self.cloudProviderBeingChecked = nil }
+        let outcome = await CloudEngineActivation(keyStore: self.settings.providerKeyStore).activate(
+            providerID,
+            check: { apiKey in try await self.checkCloudProvider(providerID, apiKey: apiKey) },
+            canSwitch: { !self.areSpeechModelActionsBlocked }
+        )
+        switch outcome {
+        case .activated:
+            self.cloudRejectedKeys.remove(providerID)
+            self.settings.objectWillChange.send()
+            self.asr.resetTranscriptionProvider()
+            return true
+        case let .failed(message, keyRejected):
+            if keyRejected {
+                self.cloudRejectedKeys.insert(providerID)
+                self.settings.objectWillChange.send()
+            }
+            self.cloudActivationStatus[providerID] = message
+            return false
+        case .cancelled:
+            return false
         }
+    }
+
+    /// OpenRouter: both catalogs are listed with the key and the chosen speech and style models must be on
+    /// them. Every Cloud provider must pass its check before it becomes the engine.
+    private func checkCloudProvider(_ providerID: String, apiKey: String) async throws {
+        guard providerID == CloudTranscriptionPreferences.defaultProviderID else {
+            throw CloudTranscriptionError.unsupportedModel
+        }
+        let speechModelID = self.settings.cloudTranscriptionModelID
+        let styleModelID = self.settings.cloudDictationModelID
+        let listed = try await self.listOpenRouterModels(apiKey: apiKey)
+        try Task.checkCancellation()
+        guard self.settings.cloudTranscriptionModelID == speechModelID, self.settings.cloudDictationModelID == styleModelID else {
+            throw CloudActivationError.settingsChanged
+        }
+        let name = VoiceEngineStatus.providerName(providerID)
+        guard listed.speech.contains(speechModelID) else { throw CloudActivationError.speechModelUnavailable(providerName: name) }
+        guard listed.style.contains(styleModelID) else { throw CloudActivationError.styleModelUnavailable(providerName: name) }
+    }
+
+    /// The listing check: which speech and style models OpenRouter offers this key. Afterwards only those
+    /// stay selectable.
+    private func listOpenRouterModels(apiKey: String) async throws -> (speech: Set<String>, style: Set<String>) {
+        let client = OpenRouterTranscriptionClient.shared
+        let speechModels = try await client.validate(apiKey: apiKey)
+        let styleModels = try await client.validateAudioDictation(apiKey: apiKey)
+        let speech = Set(speechModels.map(\.id))
+        let style = Set(styleModels.map(\.id))
+        self.validatedOpenRouterSpeechModelIDs = speech
+        self.hasValidatedOpenRouterSpeechModels = true
+        self.validatedOpenRouterStyleModelIDs = style
+        self.hasValidatedOpenRouterStyleModels = true
+        return (speech, style)
+    }
+
+    /// `Refresh models`: fetches OpenRouter's catalogs again and checks which models this key can use.
+    func refreshOpenRouterModels() async {
+        let providerID = CloudTranscriptionPreferences.defaultProviderID
+        let apiKey = self.settings.speechAPIKey(for: providerID)
+        guard !apiKey.isEmpty, self.cloudProviderBeingChecked == nil else { return }
+        self.cloudProviderBeingChecked = providerID
+        self.cloudRefreshResult = nil
+        defer { self.cloudProviderBeingChecked = nil }
+        await self.refreshOpenRouterCatalog(force: true)
+        do {
+            let listed = try await self.listOpenRouterModels(apiKey: apiKey)
+            // The key passed a speech check, unless it was replaced while the check ran.
+            if self.settings.speechAPIKey(for: providerID) == apiKey {
+                self.settings.recordSpeechVerification(for: providerID)
+            }
+            self.cloudRejectedKeys.remove(providerID)
+            self.cloudRefreshResult = .success(
+                "\(listed.speech.count) speech models and \(listed.style.count) style models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            if (error as? CloudTranscriptionError) == .authentication {
+                self.cloudRejectedKeys.insert(providerID)
+                self.settings.clearSpeechVerification(for: providerID)
+            }
+            self.cloudRefreshResult = .failure(error.localizedDescription)
+        }
+    }
+
+    /// The catalog is fetched only once a key is saved, so a local-only setup never contacts OpenRouter.
+    /// A failed fetch keeps the cached list; the listing check reports connection errors.
+    func refreshOpenRouterCatalog(force: Bool) async {
+        guard !self.settings.openRouterTranscriptionAPIKey.isEmpty else { return }
+        do {
+            try await CloudTranscriptionCatalogStore.shared.refresh(using: .shared, force: force)
+            self.openRouterSpeechModels = CloudTranscriptionModel.catalog
+            self.openRouterStyleModels = CloudAudioDictationModel.catalog
+        } catch is CancellationError {
+            return
+        } catch {
+            DebugLogger.shared.warning("OpenRouter transcription catalog refresh failed: \(error)", source: "VoiceEngineVM")
+        }
+    }
+
+    /// `Use local model instead`: Local with the selected local model, the state the old switch's off gave.
+    func useLocalModelInstead() {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        CloudEngineActivation(keyStore: self.settings.providerKeyStore).useLocalModelInstead()
+        self.settings.objectWillChange.send()
         self.asr.resetTranscriptionProvider()
     }
 
     // MARK: - Live cloud
-
-    /// Saves or, for an empty key, removes the provider's key and returns the status line to show.
-    /// `setProviderAPIKey` applies the effects of a removal; observers clear the status of the old key.
-    func saveLiveKey(_ key: String, for provider: LiveTranscriptionProviderID) -> String {
-        let isRemoval = key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let wasActive = self.settings.activeLiveProvider == provider
-        do {
-            try self.settings.setProviderAPIKey(isRemoval ? nil : key, for: ProviderRegistry.providerID(for: provider))
-        } catch {
-            return error.localizedDescription
-        }
-        if isRemoval {
-            guard wasActive else { return "API key removed." }
-            return "API key removed. \(LiveTranscriptionCatalog.info(for: provider).name) is no longer active; dictation uses your selected local model."
-        }
-        return "Key saved. Start a test or activate to check it."
-    }
 
     /// Checks the key with one REST request and switches the engine only when it passes.
     func activateLiveProvider(_ provider: LiveTranscriptionProviderID) async {
@@ -299,20 +468,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         } catch {
             self.liveActivationStatus[provider] = "Couldn't activate \(name): \(error.localizedDescription)"
         }
-    }
-
-    /// Removes the provider from the list with its key and model choice. If it was active, dictation returns to
-    /// Local; if FluidMeet transcribed with it, meetings return to Local too (`setProviderAPIKey`).
-    func removeLiveProvider(_ provider: LiveTranscriptionProviderID) {
-        do {
-            try self.settings.setProviderAPIKey(nil, for: ProviderRegistry.providerID(for: provider))
-        } catch {
-            DebugLogger.shared.warning("Live provider key removal failed: provider=\(provider.rawValue)", source: "VoiceEngineVM")
-        }
-        var preferences = LiveTranscriptionPreferences(defaults: .standard)
-        preferences.addedProviders.removeAll { $0 == provider }
-        preferences.removeModelChoice(for: provider)
-        self.settings.objectWillChange.send()
     }
 
     var modelDescriptionText: String {

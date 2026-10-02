@@ -56,12 +56,16 @@ struct LiveTranscriptionConfiguration: Equatable {
     var liveDictationConfiguration: LiveTranscriptionConfiguration?
     var usesLiveCloudDictation: Bool { liveDictationConfiguration != nil }
     func liveTranscriptionAPIKey(for provider: String) -> String { "live-fixture-credential" }
-    static func dictationEngineBadge(usesOpenRouter: Bool, liveProvider: String?) -> String {
-        if usesOpenRouter { return "OPENROUTER" }
+    var cloudTranscriptionProviderName = "OpenRouter"
+    static func dictationEngineBadge(cloudProviderName: String?, liveProvider: String?) -> String {
+        if let cloudProviderName { return "\(cloudProviderName.uppercased()) · CLOUD" }
         return liveProvider.map { "\($0.uppercased()) · LIVE" } ?? "ON-DEVICE"
     }
     var dictationEngineBadge: String {
-        Self.dictationEngineBadge(usesOpenRouter: usesCloudTranscription, liveProvider: liveDictationConfiguration?.provider)
+        Self.dictationEngineBadge(
+            cloudProviderName: usesCloudTranscription ? cloudTranscriptionProviderName : nil,
+            liveProvider: liveDictationConfiguration?.provider
+        )
     }
 }
 struct LiveProviderTestRun {
@@ -396,7 +400,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(service.liveProviderTestRun?.provider == "deepgram", "The lease records the provider test")
             check(service.dictationEngineBadge == "DEEPGRAM · LIVE", "The overlay names the tested provider, never the engine in settings")
             service.releaseExclusiveActivity(dictation)
-            check(service.dictationEngineBadge == "OPENROUTER", "With no recording the overlay names the engine in settings")
+            check(service.dictationEngineBadge == "OPENROUTER · CLOUD", "With no recording the overlay names the engine in settings")
             check(service.liveProviderTestRun?.provider == "deepgram", "The test run outlives the lease for the stop path")
             passes += 1
 

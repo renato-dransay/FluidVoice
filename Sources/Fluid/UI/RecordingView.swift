@@ -26,8 +26,7 @@ struct RecordingView: View {
     }
 
     private var notReadyText: String {
-        if let message = self.settings.missingLiveKeyMessage { return message }
-        return self.settings.usesCloudTranscription ? "OpenRouter key required" : "Model not ready"
+        return self.settings.missingVoiceEngineKeyMessage ?? "Model not ready"
     }
 
     var body: some View {

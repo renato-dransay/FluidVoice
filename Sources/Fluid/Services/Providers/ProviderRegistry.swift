@@ -30,7 +30,7 @@ nonisolated enum ProviderRegistry {
         Self.textProvider("groq", name: "Groq"),
         Self.textProvider("cerebras", name: "Cerebras"),
         Self.textProvider("google", name: "Google"),
-        Self.textProvider("openrouter", name: "OpenRouter", cloudTranscription: true),
+        Self.textProvider("openrouter", name: "OpenRouter", cloudTranscription: true, usageURL: URL(string: "https://openrouter.ai/activity")),
         Self.textProvider("ollama", name: "Ollama", requiresAPIKey: false),
         Self.textProvider("lmstudio", name: "LM Studio", requiresAPIKey: false),
         // Mistral and AssemblyAI gain Text and Cloud transcription when their clients ship.
@@ -95,7 +95,8 @@ nonisolated enum ProviderRegistry {
         name: String,
         requiresAPIKey: Bool = true,
         cloudTranscription: Bool = false,
-        live: LiveTranscriptionProviderID? = nil
+        live: LiveTranscriptionProviderID? = nil,
+        usageURL: URL? = nil
     ) -> ProviderDescriptor {
         var capabilities: Set<ProviderCapability> = [.text]
         if cloudTranscription { capabilities.insert(.cloudTranscription) }
@@ -108,7 +109,7 @@ nonisolated enum ProviderRegistry {
             capabilities: capabilities,
             requiresAPIKey: requiresAPIKey,
             keyURL: website.flatMap { URL(string: $0.url) } ?? liveInfo?.keyURL,
-            usageURL: liveInfo?.usageURL
+            usageURL: usageURL ?? liveInfo?.usageURL
         )
     }
 

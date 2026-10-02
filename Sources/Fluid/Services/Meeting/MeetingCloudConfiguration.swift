@@ -21,7 +21,7 @@ nonisolated enum MeetingCloudConfigurationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "Add your OpenRouter transcription key in Voice Engine settings before transcribing this meeting."
+            return ProviderKeyMessage.missing(providerName: "OpenRouter")
         case .unsupportedModel:
             return "Choose a meeting model verified for word timings in meeting settings. Speaker labels require them."
         case .unsupportedLanguage:

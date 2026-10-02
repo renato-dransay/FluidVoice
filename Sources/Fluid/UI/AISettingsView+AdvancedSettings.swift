@@ -91,7 +91,7 @@ extension AIEnhancementSettingsView {
             VStack(alignment: .leading, spacing: 8) {
                 self.promptProfilesHelpRow("Built-in is the normal prompt. Assign any prompt as Primary to use it with your main hotkey.")
                 if self.settings.usesCombinedCloudDictation {
-                    self.promptProfilesHelpRow("OpenRouter sends the selected style with your audio in one request. The style model and key come from Voice Engine.")
+                    self.promptProfilesHelpRow("OpenRouter sends the selected style with your audio in one request. The style model comes from Voice Engine and the API key from AI Providers.")
                 } else {
                     self.promptProfilesHelpRow("\(PrivateAIProviderFeature.displayName) uses its own local prompt.")
                 }
@@ -1761,7 +1761,7 @@ extension AIEnhancementSettingsView {
 
                             if !canTest {
                                 Text(self.isCombinedCloudPromptEditor
-                                    ? "Save an OpenRouter key and choose a style model in Voice Engine to test your style."
+                                    ? "Add an OpenRouter API key in AI Providers and choose a style model in Voice Engine to test your style."
                                     : "Choose a provider and model to test your prompt.")
                                     .font(.fluidSystem(.caption2))
                                     .foregroundStyle(.secondary)

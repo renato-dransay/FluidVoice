@@ -11,7 +11,7 @@ nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Send
     var displayName: String {
         switch self {
         case .local: "Local"
-        case .cloud: "OpenRouter"
+        case .cloud: "Cloud"
         case .liveCloud: "Live cloud"
         }
     }

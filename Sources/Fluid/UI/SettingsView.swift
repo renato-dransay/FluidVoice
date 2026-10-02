@@ -188,7 +188,8 @@ struct SettingsView: View {
                 .padding(.leading, 30)
             FluidDropdown(title: title) {
                 Picker("Cleanup style", selection: selection) {
-                    Section("ON-DEVICE") {
+                    // Names the engine that hears the dictation; never "ON-DEVICE" while audio leaves the Mac.
+                    Section(self.settings.dictationEngineBadge) {
                         Text("Basic — No cleanup").tag("__OFF__")
                         if PrivateFeatures.privateAIProvider {
                             Text(SettingsStore.DictationModeLabels.smartWithModel)

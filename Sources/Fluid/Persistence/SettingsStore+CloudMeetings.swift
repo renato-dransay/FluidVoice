@@ -39,13 +39,17 @@ extension SettingsStore {
         defaults.set(provider?.rawValue, forKey: "MeetingLiveCloudProvider")
     }
 
-    /// Providers added under Voice Engine > Live cloud that have a saved key, in the order they were added.
+    /// The connected live providers: every live provider with a saved key, in catalog order (FM-3).
     var meetingLiveCloudProviderChoices: [LiveTranscriptionProviderID] {
-        LiveTranscriptionPreferences(defaults: .standard).addedProviders.filter { !self.liveTranscriptionAPIKey(for: $0).isEmpty }
+        Self.meetingLiveCloudProviderChoices(hasKey: { !self.liveTranscriptionAPIKey(for: $0).isEmpty })
+    }
+
+    static func meetingLiveCloudProviderChoices(hasKey: (LiveTranscriptionProviderID) -> Bool) -> [LiveTranscriptionProviderID] {
+        LiveTranscriptionCatalog.all.map(\.id).filter(hasKey)
     }
 
     /// Makes Live cloud the meeting transcription. Without a usable provider choice it takes the
-    /// dictation's live provider, or else the first added provider with a key.
+    /// dictation's live provider, or else the first connected live provider.
     func selectMeetingLiveCloud() {
         let choices = self.meetingLiveCloudProviderChoices
         if self.meetingLiveCloudProvider.map({ !choices.contains($0) }) ?? true {
@@ -78,12 +82,12 @@ extension SettingsStore {
         languageHints: [String]
     ) -> MeetingLiveCaptionSource {
         guard let provider else {
-            return .unavailable(reason: "Live cloud needs a provider. Add one with its API key in Voice Engine > Live cloud, then choose it in FluidMeet settings.")
+            return .unavailable(reason: "Live cloud needs a provider. Connect one with its API key in AI Providers, then choose it in FluidMeet settings.")
         }
         let info = LiveTranscriptionCatalog.info(for: provider)
         let key = apiKey(provider)
         guard !key.isEmpty else {
-            return .unavailable(reason: "Live cloud needs a \(info.name) API key. Add it in Voice Engine > Live cloud.")
+            return .unavailable(reason: "Live cloud needs \(ProviderKeyMessage.indefiniteArticle(for: info.name)) \(info.name) API key. Add it in AI Providers.")
         }
         let requested = languageCode == MeetingCloudLanguage.automatic ? nil : languageCode
         // JUDGMENT: a transcript language the provider does not list would end the stream as unsupported;
