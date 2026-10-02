@@ -1421,11 +1421,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let apiKey = self.providerAPIKey(for: providerID)
 
         do {
-            let models = try await ModelRepository.shared.fetchModels(
+            let fetched = try await ModelRepository.shared.fetchModels(
                 for: providerID,
                 baseURL: baseURL,
                 apiKey: apiKey
             )
+            // AssemblyAI's gateway list never drops the IDs the user added or the model in use.
+            let models = providerID == "assemblyai"
+                ? ModelRepository.assemblyAIRefreshedModels(
+                    fetched: fetched,
+                    existing: self.availableModelsByProvider[key] ?? [],
+                    selected: self.selectedModelByProvider[key]
+                )
+                : fetched
 
             await MainActor.run {
                 guard !models.isEmpty else {

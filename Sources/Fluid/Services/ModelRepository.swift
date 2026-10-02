@@ -89,6 +89,46 @@ final class ModelRepository {
         "nemotron-nano-9b-v2", "nemotron-3-nano-30b-a3b", "nemotron-3-super-120b-a12b",
     ]
 
+    /// Gateway providers that stay off until the user turns them on under Data Controls in the AssemblyAI
+    /// dashboard. EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/providers (checked 2026-10-02).
+    static let assemblyAIOptInGatewayProviders: Set<String> = ["fireworks", "digital_ocean", "together", "together_ai"]
+
+    /// The models a gateway `/v1/models` answer offers this app, default first: none whose `retirement_date`
+    /// has passed, none outside the US or global region the app's endpoint serves, and none served only by an
+    /// opt-in provider. Nil when the answer is not that list.
+    /// EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/api-reference/list-available-models (checked 2026-10-02):
+    /// entries carry `id`, `retirement_date` (Unix seconds, 0 for none), `available_regions` and `providers[].id`.
+    static func assemblyAIGatewayModelIDs(in json: [String: Any], now: Date = Date()) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
+        guard let entries = json["data"] as? [[String: Any]] else { return nil }
+        let ids = entries.compactMap { entry -> String? in
+            guard let id = entry["id"] as? String, !id.isEmpty else { return nil }
+            let retirement = (entry["retirement_date"] as? NSNumber)?.doubleValue ?? 0
+            if retirement > 0, retirement <= now.timeIntervalSince1970 { return nil }
+            if let regions = entry["available_regions"] as? [String], !regions.isEmpty, !regions.contains("us"), !regions.contains("global") {
+                return nil
+            }
+            let providers = (entry["providers"] as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? []
+            if !providers.isEmpty, providers.allSatisfy(self.assemblyAIOptInGatewayProviders.contains) { return nil }
+            return id
+        }
+        let defaultID = self.assemblyAIGatewayModels[0]
+        return (ids.contains(defaultID) ? [defaultID] : []) + Set(ids).subtracting([defaultID]).sorted()
+    }
+
+    /// What an AssemblyAI refresh leaves in the list: the gateway's models, default first, then every ID the
+    /// user added (any listed ID that is neither built in nor in the new answer), then the selected model if
+    /// the gateway no longer lists it, so a refresh never drops the user's choice.
+    static func assemblyAIRefreshedModels(fetched: [String], existing: [String], selected: String?) -> [String] {
+        var models = fetched
+        for id in existing where !models.contains(id) && !self.assemblyAIGatewayModels.contains(id) {
+            models.append(id)
+        }
+        if let selected, !selected.isEmpty, !models.contains(selected) {
+            models.append(selected)
+        }
+        return models
+    }
+
     static func eligibleModel(preferred: String?, from models: [String]) -> String? {
         if let preferred, models.contains(preferred) {
             return preferred
@@ -342,6 +382,11 @@ final class ModelRepository {
                 source: "ModelRepository"
             )
             throw FetchError.invalidResponse(details: "Response is not valid JSON. Check if the base URL '\(baseURL)' is correct.")
+        }
+
+        if providerID == "assemblyai", let models = Self.assemblyAIGatewayModelIDs(in: json) {
+            DebugLogger.shared.debug("fetchModels: Found \(models.count) usable AssemblyAI gateway models", source: "ModelRepository")
+            return models
         }
 
         // Try OpenAI/Groq/Cerebras format first

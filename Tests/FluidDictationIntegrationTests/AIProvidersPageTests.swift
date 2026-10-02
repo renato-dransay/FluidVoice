@@ -101,6 +101,34 @@ final class AIProvidersPageTests: XCTestCase {
         } catch {}
     }
 
+    /// A gateway refresh offers only models this app can use by default, keeps gpt-5-mini first and never
+    /// drops a model the user added or selected.
+    func testAssemblyAIRefreshFiltersTheGatewayListAndKeepsTheUsersModels() throws {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let answer: [String: Any] = ["data": [
+            ["id": "qwen3.5-4b-32k-fast", "retirement_date": 0, "available_regions": ["us", "eu"], "providers": [["id": "assemblyai"]]],
+            ["id": "gpt-5-mini", "retirement_date": 0, "available_regions": ["us"], "providers": [["id": "open_ai"]]],
+            ["id": "retired-model", "retirement_date": 1_700_000_000, "available_regions": ["us"], "providers": [["id": "vertex"]]],
+            ["id": "retiring-later", "retirement_date": 1_809_648_000, "available_regions": ["us"], "providers": [["id": "vertex"]]],
+            ["id": "glm-5.3", "retirement_date": 0, "available_regions": ["us"], "providers": [["id": "digital_ocean"], ["id": "fireworks"]]],
+            ["id": "kimi-k3", "retirement_date": 0, "available_regions": ["us"], "providers": [["id": "bedrock"], ["id": "fireworks"]]],
+            ["id": "eu-only", "retirement_date": 0, "available_regions": ["eu"], "providers": [["id": "vertex"]]],
+        ]]
+        let fetched = try XCTUnwrap(ModelRepository.assemblyAIGatewayModelIDs(in: answer, now: now))
+        XCTAssertEqual(fetched, ["gpt-5-mini", "kimi-k3", "qwen3.5-4b-32k-fast", "retiring-later"])
+        XCTAssertNil(ModelRepository.assemblyAIGatewayModelIDs(in: ["models": []]))
+
+        let refreshed = ModelRepository.assemblyAIRefreshedModels(
+            fetched: fetched,
+            existing: ModelRepository.assemblyAIGatewayModels + ["my-own-model"],
+            selected: "claude-sonnet-4-6"
+        )
+        XCTAssertEqual(refreshed.first, "gpt-5-mini")
+        XCTAssertTrue(refreshed.contains("my-own-model"), "An ID the user added stays")
+        XCTAssertTrue(refreshed.contains("claude-sonnet-4-6"), "The selected model stays")
+        XCTAssertFalse(refreshed.contains("gpt-5-nano"), "A built-in model the gateway no longer lists goes")
+    }
+
     /// REG-7: a custom provider the user pointed at Mistral keeps its own entry; saving the built-in
     /// Mistral key neither merges with it nor touches its key.
     func testACustomProviderPointingAtMistralIsLeftAlone() throws {
