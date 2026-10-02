@@ -24,11 +24,19 @@ extension SettingsStore {
 
     /// The Live cloud provider a meeting streams to when Live cloud makes its transcript.
     var meetingLiveCloudProvider: LiveTranscriptionProviderID? {
-        get { UserDefaults.standard.string(forKey: "MeetingLiveCloudProvider").flatMap(LiveTranscriptionProviderID.init(rawValue:)) }
+        get { Self.meetingLiveCloudProvider(in: .standard) }
         set {
             self.objectWillChange.send()
-            UserDefaults.standard.set(newValue?.rawValue, forKey: "MeetingLiveCloudProvider")
+            Self.setMeetingLiveCloudProvider(newValue, in: .standard)
         }
+    }
+
+    static func meetingLiveCloudProvider(in defaults: UserDefaults) -> LiveTranscriptionProviderID? {
+        defaults.string(forKey: "MeetingLiveCloudProvider").flatMap(LiveTranscriptionProviderID.init(rawValue:))
+    }
+
+    static func setMeetingLiveCloudProvider(_ provider: LiveTranscriptionProviderID?, in defaults: UserDefaults) {
+        defaults.set(provider?.rawValue, forKey: "MeetingLiveCloudProvider")
     }
 
     /// Providers added under Voice Engine > Live cloud that have a saved key, in the order they were added.

@@ -72,10 +72,17 @@ final class AIEnhancementSettingsViewModel {
     func providerKey(for id: String) -> String { id }
     func providerAPIKey(for id: String) -> String { self.providerAPIKeys[id] ?? "" }
     func updateProviderAPIKey(_ value: String, for id: String) { self.providerAPIKeys[id] = value }
-    func saveProviderAPIKeys(invalidating id: String) -> Bool {
+    /// Mirrors the production save: one provider's entry goes through the single write path; an empty
+    /// draft removes it. Other providers' drafts are never written by it.
+    func saveProviderAPIKey(for id: String? = nil) -> Bool {
         self.keySaves += 1
         guard !self.failKeychain else { return false }
-        self.persistedKeys = self.providerAPIKeys
+        let key = id ?? self.selectedProviderID
+        if let value = self.providerAPIKeys[key], !value.isEmpty {
+            self.persistedKeys[key] = value
+        } else {
+            self.persistedKeys.removeValue(forKey: key)
+        }
         return true
     }
 
@@ -199,7 +206,8 @@ final class AIEnhancementSettingsViewModel {
         vm.providerAPIKeys.removeValue(forKey: "openai")
         vm.settings.dictationPromptConfigurations["legacy"] = .init(providerID: "openai")
         vm.refreshProviderItems()
-        check(vm.cachedAddedProviderItems.contains { $0.id == "openai" }, "Referenced provider stays visible after credentials disappear")
+        // Cleanup Styles carry no provider since every style uses the AI Providers card's provider.
+        check(!vm.cachedAddedProviderItems.contains { $0.id == "openai" }, "A style configuration no longer keeps a provider listed")
         vm.isFetchingModels = true
         check(!vm.addProvider(draft), "In-flight editor request blocks another Add")
         let source = try String(contentsOfFile: "Sources/Fluid/UI/AISettingsView+AIConfiguration.swift", encoding: .utf8)
@@ -212,7 +220,7 @@ final class AIEnhancementSettingsViewModel {
         let makeDefault = source.components(separatedBy: "private func makePrimaryDefaultProvider")[1]
             .components(separatedBy: "private func modelBinding")[0]
         check(
-            makeDefault.contains("saveManagedProviderAPIKeyIfNeeded") && !makeDefault.contains("saveProviderAPIKeys"),
+            makeDefault.contains("saveManagedProviderAPIKeyIfNeeded") && !makeDefault.contains("saveProviderAPIKey("),
             "Making a provider default only persists an active credential edit"
         )
         let removal = AIEnhancementSettingsViewModel()
@@ -240,9 +248,7 @@ final class AIEnhancementSettingsViewModel {
         removal.isFetchingModels = false
         check(removal.deleteCurrentProvider(), "Built-in removal succeeds")
         check(removal.settings.selectedProviderID == "fluid" && removal.settings.selectedModel == "mini", "Removing another provider preserves the default")
-        check(removal.settings.dictationPromptConfigurations["affected"]?.providerID == "", "Removed provider cannot remain referenced")
-        check(removal.settings.dictationPromptConfigurations["affected"]?.shortcut == "keep-shortcut", "Removal preserves hotkeys")
-        check(removal.settings.dictationPromptConfigurations["unrelated"] == before["unrelated"], "Unrelated prompt assignment is unchanged")
+        check(removal.settings.dictationPromptConfigurations == before, "Removal leaves style configurations, which hold only shortcuts, unchanged")
         check(removal.settings.rewriteModeSelectedProviderID.isEmpty && removal.settings.rewriteModeSelectedModel == nil, "Affected rewrite route is cleared")
         check(removal.settings.commandModeSelectedProviderID == "other" && removal.settings.commandModeSelectedModel == "keep-model", "Unrelated command route is unchanged")
         check(removal.providerAPIKeys == ["other": "keep-key"] && removal.availableModelsByProvider["other"] == ["keep"], "Unrelated provider credentials and models survive")
@@ -268,10 +274,13 @@ final class AIEnhancementSettingsViewModel {
         check(!closing.saveManagedProviderBeforeClosing("openai"), "Keychain failure keeps Manage open")
         check(closing.providerAPIKeys["openai"] == "edited-key" && closing.settings.selectedProviderID == "fluid", "Failed close preserves the draft and default")
         closing.failKeychain = false
+        closing.providerAPIKeys["anthropic"] = "unsaved-draft"
         check(
             closing.saveManagedProviderBeforeClosing("openai") && closing.persistedKeys["openai"] == "edited-key",
             "Done persists an edited key without verification or model refresh"
         )
+        check(closing.persistedKeys["anthropic"] == nil, "Saving one provider's key never writes a snapshot of other drafts")
+        closing.providerAPIKeys.removeValue(forKey: "anthropic")
         let savedCount = closing.keySaves
         closing.selectedProviderID = "fluid"
         check(closing.saveManagedProviderBeforeClosing("openai") && closing.keySaves == savedCount, "Removal cleanup must not save a different selected provider")

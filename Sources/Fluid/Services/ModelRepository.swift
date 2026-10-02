@@ -126,6 +126,11 @@ final class ModelRepository {
     /// Returns the website URL for getting an API key or downloading the provider software.
     /// Returns nil for providers that don't have a relevant URL.
     func providerWebsiteURL(for providerID: String) -> (url: String, label: String)? {
+        Self.providerWebsiteURL(for: providerID)
+    }
+
+    /// Pure lookup, also read by `ProviderRegistry` outside the main actor.
+    nonisolated static func providerWebsiteURL(for providerID: String) -> (url: String, label: String)? {
         switch providerID {
         case "openai":
             return ("https://platform.openai.com/api-keys", "Get API Key")
@@ -186,48 +191,33 @@ final class ModelRepository {
         return list
     }
 
-    /// Converts a provider ID to a storage key for UserDefaults
-    /// Built-in providers use their ID directly; custom providers get "custom:" prefix
+    /// Converts a provider ID to a storage key for UserDefaults and the Keychain.
+    /// Registry and built-in providers use their ID directly; custom providers get the custom prefix.
     func providerKey(for providerID: String) -> String {
-        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return providerID }
+        ProviderRegistry.providerKey(for: providerID, isBuiltIn: self.isBuiltIn)
+    }
 
-        // Built-in providers use their ID directly
-        if self.isBuiltIn(trimmed) {
-            return trimmed
-        }
-
-        // Custom providers: ensure "custom:" prefix
-        if trimmed.hasPrefix("custom:") {
-            return trimmed
-        }
-        return "custom:\(trimmed)"
+    /// The storage key for a key read back from a stored model dictionary. Known IDs are matched
+    /// case-insensitively, as the dictionaries have always been normalised.
+    func normalizedStoredProviderKey(_ storedKey: String) -> String {
+        let lowercased = self.providerKey(for: storedKey.lowercased())
+        return ProviderRegistry.isCustomProviderKey(lowercased) ? self.providerKey(for: storedKey) : lowercased
     }
 
     /// Returns all possible keys for a provider (for looking up stored settings)
     func providerKeys(for providerID: String) -> [String] {
-        var keys: [String] = []
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.isEmpty {
             return [providerID]
         }
 
-        // Built-in providers: just use the ID
-        if self.isBuiltIn(trimmed) {
-            return [trimmed]
-        }
+        let key = self.providerKey(for: trimmed)
+        // Registry and built-in providers: just use the ID
+        guard ProviderRegistry.isCustomProviderKey(key) else { return [key] }
 
         // Custom providers: try both with and without prefix
-        if trimmed.hasPrefix("custom:") {
-            keys.append(trimmed)
-            keys.append(String(trimmed.dropFirst("custom:".count)))
-        } else {
-            keys.append("custom:\(trimmed)")
-            keys.append(trimmed)
-        }
-
-        return Array(Set(keys))
+        return Array(Set([key, ProviderRegistry.savedProviderID(fromProviderKey: key)]))
     }
 
     // MARK: - Fetch Models from API

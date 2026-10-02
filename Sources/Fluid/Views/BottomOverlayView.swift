@@ -1820,10 +1820,10 @@ private struct BottomOverlayPromptMenuView: View {
             self.onDismissRequested()
         }) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(self.settings.usesCloudTranscription ? "No cleanup" : "Basic")
+                Text(self.settings.usesCombinedCloudDictation ? "No cleanup" : "Basic")
                 Spacer(minLength: 12)
                 if !self.isCompact {
-                    Text(self.settings.usesCloudTranscription ? "OpenRouter voice" : "No cleanup")
+                    Text(self.settings.usesCombinedCloudDictation ? "OpenRouter voice" : "No cleanup")
                         .font(.fluidSystem(size: 10, weight: .medium))
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -2668,7 +2668,7 @@ struct BottomOverlayView: View {
         if activePromptMode.normalized == .dictate {
             switch self.settings.resolvedDictationPromptSelection(for: self.activeDictationShortcutSlot, appBundleID: self.promptResolutionBundleID) {
             case .off:
-                return self.settings.usesCloudTranscription ? "No cleanup" : "Basic"
+                return self.settings.usesCombinedCloudDictation ? "No cleanup" : "Basic"
             case .privateAI:
                 return self.isAppPromptOverrideActive ? nil : SettingsStore.DictationModeLabels.smart
             case .default:

@@ -391,7 +391,7 @@ struct ContentView: View {
     // MARK: - Provider Management
 
     @State private var providerAPIKeys: [String: String] = [:] // [providerKey: apiKey]
-    @State private var currentProvider: String = "" // canonical key: "openai" | "groq" | "custom:<id>"
+    @State private var currentProvider: String = "" // canonical key from ModelRepository.providerKey(for:): a known ID, or a custom provider key
 
     @State private var savedProviders: [SettingsStore.SavedProvider] = []
     @State private var selectedProviderID: String = SettingsStore.shared.selectedProviderID
@@ -785,8 +785,7 @@ struct ContentView: View {
 
         var normalized: [String: [String]] = [:]
         for (key, models) in self.availableModelsByProvider {
-            let lower = key.lowercased()
-            let newKey = ModelRepository.shared.isBuiltIn(lower) ? lower : (key.hasPrefix("custom:") ? key : "custom:\(key)")
+            let newKey = ModelRepository.shared.normalizedStoredProviderKey(key)
             let clean = Array(Set(models.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })).sorted()
             if !clean.isEmpty {
                 normalized[newKey] = clean
@@ -797,8 +796,7 @@ struct ContentView: View {
 
         var normalizedSel: [String: String] = [:]
         for (key, model) in self.selectedModelByProvider {
-            let lower = key.lowercased()
-            let newKey = ModelRepository.shared.isBuiltIn(lower) ? lower : (key.hasPrefix("custom:") ? key : "custom:\(key)")
+            let newKey = ModelRepository.shared.normalizedStoredProviderKey(key)
             if let list = normalized[newKey], list.contains(model) {
                 normalizedSel[newKey] = model
             }
@@ -1127,16 +1125,13 @@ struct ContentView: View {
     private func handlePendingAppNavigation() {
         guard let destination = AppNavigationRouter.shared.consumePendingDestination() else { return }
 
-        switch destination {
-        case .aiEnhancements:
-            self.navigateToApp(.aiEnhancements)
-        case .history:
-            self.navigateToApp(.history)
-        case .dictationShortcuts:
+        if destination == .dictationShortcuts {
             self.openSettings(.shortcuts)
-        case .meetingTranscription:
-            self.navigateToApp(.meetingTranscription)
+            return
         }
+        // A provider request lands on AI Providers; Voice Engine reads its requested tab when it appears.
+        guard let sidebarItem = destination.sidebarItem else { return }
+        self.navigateToApp(sidebarItem)
     }
 
     private func navigateToApp(_ destination: SidebarItem) {
@@ -2262,14 +2257,7 @@ struct ContentView: View {
     // MARK: - Provider Management Functions
 
     private func providerKey(for providerID: String) -> String {
-        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        // Built-in providers use their ID directly
-        if ModelRepository.shared.isBuiltIn(trimmed) { return trimmed }
-        // Saved providers use their stable id with "custom:" prefix (if not already present)
-        if trimmed.hasPrefix("custom:") { return trimmed }
-        return "custom:\(trimmed)"
+        ModelRepository.shared.providerKey(for: providerID)
     }
 
     private func updateCurrentProvider() {
@@ -5427,7 +5415,7 @@ extension ContentView {
             return self.settings.usesLiveCloudDictation ? "\(name) is ready. Audio streams while you record." : "\(name) key required"
         }
         if self.settings.usesCloudTranscription {
-            return self.settings.openRouterTranscriptionAPIKey.isEmpty
+            return self.settings.cloudTranscriptionAPIKey.isEmpty
                 ? "Add an OpenRouter key in Voice Engine settings."
                 : "OpenRouter is configured. Audio uploads after recording stops."
         }
@@ -5447,7 +5435,7 @@ extension ContentView {
     private var onboardingVoiceModelReady: Bool {
         if self.settings.usesLiveCloudDictation { return true }
         if self.settings.usesCloudTranscription {
-            return !self.settings.openRouterTranscriptionAPIKey.isEmpty
+            return !self.settings.cloudTranscriptionAPIKey.isEmpty
         }
         return self.asr.isAsrReady
     }

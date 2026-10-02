@@ -27,7 +27,7 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
-        preferences.source = .openRouter
+        preferences.source = .cloud
         preferences.modelID = "openai/whisper-large-v3"
         preferences.primaryLanguageCode = "pt"
         preferences.secondaryLanguageCode = "en"
@@ -42,7 +42,29 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertEqual(preferences.configuration.primaryLanguageCode, "de")
         XCTAssertEqual(preferences.configuration.secondaryLanguageCode, "fr")
         XCTAssertNil(preferences.configuration.languageCode)
-        XCTAssertTrue(preferences.source == .openRouter)
+        XCTAssertTrue(preferences.source == .cloud)
+    }
+
+    func testTheCloudSourceKeepsItsStoredValueAndProviderDefaultsToOpenRouter() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(SpeechExecutionSource.cloud.rawValue, "openRouter")
+        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "OpenRouter")
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.providerID, "openrouter")
+        preferences.source = .cloud
+        XCTAssertEqual(defaults.string(forKey: "SpeechExecutionSource"), "openRouter")
+        preferences.providerID = "deepgram"
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: defaults).providerID, "deepgram")
+    }
+
+    /// The one-request style path is OpenRouter's: Cloud with any other provider is not combined.
+    func testCombinedCloudDictationNeedsCloudWithOpenRouter() {
+        XCTAssertTrue(SettingsStore.usesCombinedCloudDictation(source: .cloud, cloudProviderID: "openrouter"))
+        XCTAssertFalse(SettingsStore.usesCombinedCloudDictation(source: .cloud, cloudProviderID: "deepgram"))
+        XCTAssertFalse(SettingsStore.usesCombinedCloudDictation(source: .local, cloudProviderID: "openrouter"))
+        XCTAssertFalse(SettingsStore.usesCombinedCloudDictation(source: .liveCloud, cloudProviderID: "openrouter"))
     }
 
     func testFormerManualLanguageBecomesOptionalHintWithoutForcingDetection() throws {

@@ -63,6 +63,40 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertNil(SidebarItem.customDictionary.aiEnhancementConfigurationSection)
     }
 
+    func testEachDestinationSelectsTheRightPage() {
+        XCTAssertEqual(AppNavigationDestination.aiProvider(id: "deepgram", origin: .voiceEngine(tab: .liveCloud)).sidebarItem, .aiEnhancements)
+        XCTAssertEqual(AppNavigationDestination.addProvider(capability: .liveTranscription, origin: .fluidMeet).sidebarItem, .aiEnhancements)
+        XCTAssertEqual(AppNavigationDestination.addProvider(capability: nil, origin: nil).sidebarItem, .aiEnhancements)
+        XCTAssertEqual(AppNavigationDestination.voiceEngine(tab: .cloud).sidebarItem, .voiceEngine)
+        XCTAssertEqual(AppNavigationDestination.voiceEngine(tab: nil).sidebarItem, .voiceEngine)
+        XCTAssertEqual(AppNavigationDestination.aiEnhancements.sidebarItem, .aiEnhancements)
+        XCTAssertEqual(AppNavigationDestination.history.sidebarItem, .history)
+        XCTAssertEqual(AppNavigationDestination.meetingTranscription.sidebarItem, .meetingTranscription)
+        XCTAssertNil(AppNavigationDestination.dictationShortcuts.sidebarItem)
+    }
+
+    func testARequestedVoiceEngineTabIsConsumedOnceAndWinsOverTheActiveEngine() {
+        var requests = AppNavigationRequests()
+        requests.request(.voiceEngine(tab: .liveCloud))
+
+        XCTAssertEqual(requests.consumeDestination(), .voiceEngine(tab: .liveCloud))
+        XCTAssertNil(requests.consumeDestination())
+        // The page appears after the app switched pages and reads the tab then.
+        let requested = requests.consumeVoiceEngineTab()
+        XCTAssertEqual(requested, .liveCloud)
+        XCTAssertEqual(VoiceEngineSettingsViewModel.tabToBrowse(requested: requested, activeEngine: .local), .liveCloud)
+        XCTAssertNil(requests.consumeVoiceEngineTab())
+        XCTAssertEqual(VoiceEngineSettingsViewModel.tabToBrowse(requested: nil, activeEngine: .cloud), .cloud)
+    }
+
+    func testARequestForAnotherPageDropsAnUnreadVoiceEngineTab() {
+        var requests = AppNavigationRequests()
+        requests.request(.voiceEngine(tab: .cloud))
+        requests.request(.aiProvider(id: "openrouter", origin: .voiceEngine(tab: .cloud)))
+        XCTAssertNil(requests.consumeVoiceEngineTab())
+        XCTAssertEqual(requests.consumeDestination(), .aiProvider(id: "openrouter", origin: .voiceEngine(tab: .cloud)))
+    }
+
     func testInactiveSettingsSearchResignsFirstResponder() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 240, height: 80),

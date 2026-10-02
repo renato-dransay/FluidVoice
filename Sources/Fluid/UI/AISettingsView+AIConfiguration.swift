@@ -2634,7 +2634,7 @@ extension AIEnhancementSettingsView {
                 Button("OK") {
                     let trimmedKey = self.viewModel.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
                     self.viewModel.updateProviderAPIKey(trimmedKey, for: self.viewModel.selectedProviderID)
-                    guard self.viewModel.saveProviderAPIKeys() else { return }
+                    guard self.viewModel.saveProviderAPIKey() else { return }
                     if self.viewModel.connectionStatus != .unknown {
                         self.viewModel.connectionStatus = .unknown
                         self.viewModel.connectionErrorMessage = ""

@@ -10,10 +10,6 @@ struct OpenRouterTranscriptionSettingsView: View {
     @State private var isValidating = false
     @State private var models = CloudTranscriptionModel.catalog
     @State private var audioModels = CloudAudioDictationModel.catalog
-    @State private var availableModelIDs: Set<String> = []
-    @State private var hasValidatedCatalog = false
-    @State private var availableDictationModelIDs: Set<String> = []
-    @State private var hasValidatedDictationCatalog = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -71,11 +67,10 @@ struct OpenRouterTranscriptionSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Remove key", role: .destructive) {
                     do {
-                        let wasActive = self.settings.usesCloudTranscription
-                        try self.settings.saveOpenRouterTranscriptionAPIKey("")
-                        self.viewModel.setCloudTranscriptionEnabled(false)
-                        self.viewModel.asr.resetTranscriptionProvider()
-                        self.clearValidatedCatalogs()
+                        let wasActive = self.settings.usesCombinedCloudDictation
+                        // Removal switches an active OpenRouter engine to Local; observers rebuild the
+                        // transcription provider and forget the validated catalogs.
+                        try self.settings.setProviderAPIKey(nil, for: CloudTranscriptionPreferences.defaultProviderID)
                         // A live provider stays active when the OpenRouter key goes.
                         self.status = wasActive
                             ? "API key removed. OpenRouter is off; dictation and imported files use your selected local model."
@@ -116,7 +111,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             Divider()
             ForEach(self.audioModels, id: \.id) { model in
                 Text(model.name).tag(model.id)
-                    .disabled(self.hasValidatedDictationCatalog && !self.availableDictationModelIDs.contains(model.id))
+                    .disabled(self.viewModel.hasValidatedOpenRouterStyleModels && !self.viewModel.validatedOpenRouterStyleModelIDs.contains(model.id))
             }
         }
         .accessibilityIdentifier("openrouter-audio-dictation-model")
@@ -170,7 +165,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     private var transcriptionModelOptions: some View {
         ForEach(self.models, id: \.id) { model in
             Text(model.name).tag(model.id)
-                .disabled(self.hasValidatedCatalog && !self.availableModelIDs.contains(model.id))
+                .disabled(self.viewModel.hasValidatedOpenRouterSpeechModels && !self.viewModel.validatedOpenRouterSpeechModelIDs.contains(model.id))
         }
     }
 
@@ -228,10 +223,8 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     private func saveKey() {
         do {
-            try self.settings.saveOpenRouterTranscriptionAPIKey(self.keyDraft)
+            try self.settings.setProviderAPIKey(self.keyDraft, for: CloudTranscriptionPreferences.defaultProviderID)
             self.keyDraft = ""
-            self.viewModel.asr.resetTranscriptionProvider()
-            self.clearValidatedCatalogs()
             self.status = "Key saved. Validate the connection to check access and available models."
         } catch { self.status = error.localizedDescription }
     }
@@ -247,11 +240,15 @@ struct OpenRouterTranscriptionSettingsView: View {
             do {
                 let client = OpenRouterTranscriptionClient.shared
                 let dictationModels = try await client.validateAudioDictation(apiKey: apiKey)
-                self.availableDictationModelIDs = Set(dictationModels.map(\.id))
-                self.hasValidatedDictationCatalog = true
+                self.viewModel.validatedOpenRouterStyleModelIDs = Set(dictationModels.map(\.id))
+                self.viewModel.hasValidatedOpenRouterStyleModels = true
                 let transcriptionModels = try await client.validate(apiKey: apiKey)
-                self.availableModelIDs = Set(transcriptionModels.map(\.id))
-                self.hasValidatedCatalog = true
+                self.viewModel.validatedOpenRouterSpeechModelIDs = Set(transcriptionModels.map(\.id))
+                self.viewModel.hasValidatedOpenRouterSpeechModels = true
+                // The key passed a speech check, unless it was replaced while the check ran.
+                if self.settings.openRouterTranscriptionAPIKey == apiKey {
+                    self.settings.recordSpeechVerification(for: CloudTranscriptionPreferences.defaultProviderID)
+                }
                 self.status = "Key verified. \(transcriptionModels.count) speech models and \(dictationModels.count) style models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
             } catch { self.status = error.localizedDescription }
         }
@@ -270,12 +267,5 @@ struct OpenRouterTranscriptionSettingsView: View {
         } catch {
             DebugLogger.shared.warning("OpenRouter transcription catalog refresh failed: \(error)", source: "OpenRouterTranscriptionSettingsView")
         }
-    }
-
-    private func clearValidatedCatalogs() {
-        self.availableModelIDs = []
-        self.hasValidatedCatalog = false
-        self.availableDictationModelIDs = []
-        self.hasValidatedDictationCatalog = false
     }
 }

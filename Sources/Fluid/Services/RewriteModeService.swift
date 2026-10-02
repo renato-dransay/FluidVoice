@@ -434,11 +434,7 @@ final class RewriteModeService: ObservableObject {
     }
 
     private func providerKey(for providerID: String) -> String {
-        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        if ModelRepository.shared.isBuiltIn(trimmed) { return trimmed }
-        if trimmed.hasPrefix("custom:") { return trimmed }
-        return "custom:\(trimmed)"
+        ModelRepository.shared.providerKey(for: providerID)
     }
 
     private func providerBaseURL(for providerID: String, settings: SettingsStore) -> String {

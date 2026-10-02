@@ -3,14 +3,15 @@ import Foundation
 
 nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Sendable {
     case local
-    case openRouter
+    /// Audio is uploaded after recording stops. The raw value predates other cloud providers and is kept.
+    case cloud = "openRouter"
     case liveCloud
 
     var id: String { self.rawValue }
     var displayName: String {
         switch self {
         case .local: "Local"
-        case .openRouter: "OpenRouter"
+        case .cloud: "OpenRouter"
         case .liveCloud: "Live cloud"
         }
     }
@@ -23,11 +24,22 @@ nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Send
 }
 
 struct CloudTranscriptionPreferences {
+    static let defaultProviderID = "openrouter"
+
     let defaults: UserDefaults
 
     var source: SpeechExecutionSource {
         get { SpeechExecutionSource(rawValue: self.defaults.string(forKey: "SpeechExecutionSource") ?? "") ?? .local }
         set { self.defaults.set(newValue.rawValue, forKey: "SpeechExecutionSource") }
+    }
+
+    /// The provider the Cloud engine uses. OpenRouter until another provider is chosen.
+    var providerID: String {
+        get {
+            let stored = self.defaults.string(forKey: "CloudTranscriptionProvider")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return stored.isEmpty ? Self.defaultProviderID : stored
+        }
+        set { self.defaults.set(newValue, forKey: "CloudTranscriptionProvider") }
     }
 
     var modelID: String {
@@ -134,8 +146,6 @@ struct CloudTranscriptionPreferences {
 }
 
 extension SettingsStore {
-    static let openRouterTranscriptionKeyID = "openrouter-transcription"
-
     /// The engine dictation uses. A stored Live cloud choice that cannot run, because no provider is
     /// active or its key is missing, reads as Local so dictation keeps working.
     var speechExecutionSource: SpeechExecutionSource {
@@ -150,12 +160,29 @@ extension SettingsStore {
         }
     }
 
-    var usesCloudTranscription: Bool { self.speechExecutionSource == .openRouter }
+    /// True while Cloud is the dictation engine, whichever provider serves it.
+    var usesCloudTranscription: Bool { self.speechExecutionSource == .cloud }
 
-    /// With OpenRouter on, a Cleanup Style is applied by the style model in the same request that
-    /// hears the audio, never by a separate text provider. A dictation whose style resolves to Off
-    /// skips that model and goes to the speech model on the transcription endpoint.
-    var usesCombinedCloudDictation: Bool { self.usesCloudTranscription }
+    /// The provider the Cloud engine uses (`CloudTranscriptionProvider`), OpenRouter by default.
+    var cloudTranscriptionProviderID: String {
+        get { CloudTranscriptionPreferences(defaults: .standard).providerID }
+        set {
+            self.objectWillChange.send()
+            var preferences = CloudTranscriptionPreferences(defaults: .standard)
+            preferences.providerID = newValue
+        }
+    }
+
+    /// With OpenRouter as the Cloud engine, a Cleanup Style is applied by the style model in the same
+    /// request that hears the audio, never by a separate text provider. A dictation whose style resolves
+    /// to Off skips that model and goes to the speech model on the transcription endpoint.
+    var usesCombinedCloudDictation: Bool {
+        Self.usesCombinedCloudDictation(source: self.speechExecutionSource, cloudProviderID: self.cloudTranscriptionProviderID)
+    }
+
+    static func usesCombinedCloudDictation(source: SpeechExecutionSource, cloudProviderID: String) -> Bool {
+        source == .cloud && cloudProviderID == CloudTranscriptionPreferences.defaultProviderID
+    }
 
     /// What the Voice Engine picker shows: Automatic or a model the user picked.
     var cloudDictationModelSelection: String {
@@ -215,19 +242,5 @@ extension SettingsStore {
 
     var cloudDictationConfiguration: CloudTranscriptionConfiguration {
         CloudTranscriptionPreferences(defaults: .standard).dictationConfiguration
-    }
-
-    var openRouterTranscriptionAPIKey: String {
-        (try? KeychainService.shared.fetchKey(for: Self.openRouterTranscriptionKeyID)) ?? ""
-    }
-
-    func saveOpenRouterTranscriptionAPIKey(_ value: String) throws {
-        let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.isEmpty {
-            try KeychainService.shared.deleteKey(for: Self.openRouterTranscriptionKeyID)
-        } else {
-            try KeychainService.shared.storeKey(key, for: Self.openRouterTranscriptionKeyID)
-        }
-        self.objectWillChange.send()
     }
 }

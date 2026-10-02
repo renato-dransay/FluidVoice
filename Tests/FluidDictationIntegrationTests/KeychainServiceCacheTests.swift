@@ -196,11 +196,14 @@ final class KeychainServiceCacheTests: XCTestCase {
         )
         try service.storeKey("voice-openrouter", for: "openrouter-transcription")
         try service.storeKey("voice-soniox", for: "live-transcription.soniox")
+        try service.storeKey("voice-openai", for: "speech-key.openai")
         try service.storeAllKeys(["openai": "text-key"])
         XCTAssertEqual(try service.fetchKey(for: "openai"), "text-key")
         XCTAssertEqual(try service.fetchKey(for: "openrouter-transcription"), "voice-openrouter")
         XCTAssertEqual(try service.fetchKey(for: "live-transcription.soniox"), "voice-soniox")
+        XCTAssertEqual(try service.fetchKey(for: "speech-key.openai"), "voice-openai")
         XCTAssertEqual(storage["live-transcription.soniox"], "voice-soniox")
+        XCTAssertEqual(storage["speech-key.openai"], "voice-openai")
     }
 
     func testStoringAIProviderKeysStillRemovesAIProviderKeys() throws {
@@ -208,6 +211,7 @@ final class KeychainServiceCacheTests: XCTestCase {
             "openai": "old",
             "groq": "old",
             "live-transcription.deepgram": "stored",
+            "speech-key.openrouter": "voice",
         ]
         let service = KeychainService(
             testingLoad: { storage },
@@ -216,7 +220,7 @@ final class KeychainServiceCacheTests: XCTestCase {
 
         try service.storeAllKeys(["openai": "new"])
 
-        XCTAssertEqual(storage, ["openai": "new", "live-transcription.deepgram": "stored"])
+        XCTAssertEqual(storage, ["openai": "new", "live-transcription.deepgram": "stored", "speech-key.openrouter": "voice"])
     }
 
     func testStoringAIProviderKeysIgnoresStaleVoiceEngineValues() throws {
@@ -227,17 +231,22 @@ final class KeychainServiceCacheTests: XCTestCase {
         )
         try service.storeKey("rotated", for: "live-transcription.soniox")
         try service.storeKey("rotated-router", for: "openrouter-transcription")
+        try service.storeKey("rotated-speech", for: "speech-key.openai")
 
         try service.storeAllKeys([
             "openai": "text-key",
             "live-transcription.soniox": "stale",
             "openrouter-transcription": "stale",
             "live-transcription.deepgram": "never-saved-here",
+            "speech-key.openai": "stale",
+            "speech-key.openrouter": "never-saved-here",
         ])
 
         XCTAssertEqual(storage["live-transcription.soniox"], "rotated")
         XCTAssertEqual(storage["openrouter-transcription"], "rotated-router")
+        XCTAssertEqual(storage["speech-key.openai"], "rotated-speech")
         XCTAssertNil(storage["live-transcription.deepgram"])
+        XCTAssertNil(storage["speech-key.openrouter"])
         XCTAssertEqual(storage["openai"], "text-key")
     }
 
@@ -248,21 +257,49 @@ final class KeychainServiceCacheTests: XCTestCase {
             testingSave: { storage = $0 }
         )
         try service.storeKey("soon-removed", for: "live-transcription.soniox")
+        try service.storeKey("soon-removed", for: "speech-key.openai")
         try service.deleteKey(for: "live-transcription.soniox")
+        try service.deleteKey(for: "speech-key.openai")
 
-        try service.storeAllKeys(["openai": "text-key", "live-transcription.soniox": "stale"])
+        try service.storeAllKeys(["openai": "text-key", "live-transcription.soniox": "stale", "speech-key.openai": "stale"])
 
         XCTAssertNil(storage["live-transcription.soniox"])
         XCTAssertNil(try service.fetchKey(for: "live-transcription.soniox"))
         XCTAssertEqual(storage, ["openai": "text-key"])
     }
 
-    func testVoiceEngineKeyIDsAreRecognised() {
-        XCTAssertTrue(KeychainService.isVoiceEngineKey("openrouter-transcription"))
+    func testEntriesProtectedFromBulkSavesAreRecognised() {
+        XCTAssertTrue(KeychainService.isProtectedFromBulkSave("openrouter-transcription"))
         for provider in LiveTranscriptionProviderID.allCases {
-            XCTAssertTrue(KeychainService.isVoiceEngineKey(provider.keychainID), "\(provider)")
+            XCTAssertTrue(KeychainService.isProtectedFromBulkSave(provider.keychainID), "\(provider)")
         }
-        XCTAssertFalse(KeychainService.isVoiceEngineKey("openai"))
-        XCTAssertFalse(KeychainService.isVoiceEngineKey("openrouter"))
+        for descriptor in ProviderRegistry.all {
+            XCTAssertTrue(KeychainService.isProtectedFromBulkSave("speech-key.\(descriptor.id)"), descriptor.id)
+            XCTAssertFalse(KeychainService.isProtectedFromBulkSave(descriptor.id), descriptor.id)
+        }
+        XCTAssertFalse(KeychainService.isProtectedFromBulkSave("custom:local-server"))
+    }
+
+    func testUpdateKeysWritesOnceAndOnlyWhenSomethingChanged() throws {
+        var storage = ["openai": "old", "groq": "keep"]
+        var saves = 0
+        let service = KeychainService(
+            testingLoad: { storage },
+            testingSave: {
+                saves += 1
+                storage = $0
+            }
+        )
+
+        try service.updateKeys { entries in
+            entries["openai"] = "new"
+            entries["anthropic"] = "added"
+            entries.removeValue(forKey: "groq")
+        }
+        XCTAssertEqual(storage, ["openai": "new", "anthropic": "added"])
+        XCTAssertEqual(saves, 1)
+
+        try service.updateKeys { entries in entries["openai"] = "new" }
+        XCTAssertEqual(saves, 1)
     }
 }

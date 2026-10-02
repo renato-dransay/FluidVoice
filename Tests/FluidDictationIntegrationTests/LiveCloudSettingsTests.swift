@@ -57,15 +57,16 @@ final class LiveCloudSettingsTests: XCTestCase {
 
     func testOlderSourceValuesKeepTheirMeaning() {
         XCTAssertEqual(SpeechExecutionSource(rawValue: "local"), .local)
-        XCTAssertEqual(SpeechExecutionSource(rawValue: "openRouter"), .openRouter)
+        XCTAssertEqual(SpeechExecutionSource(rawValue: "openRouter"), .cloud)
         XCTAssertEqual(SpeechExecutionSource(rawValue: "liveCloud"), .liveCloud)
         XCTAssertEqual(SpeechExecutionSource.liveCloud.displayName, "Live cloud")
+        XCTAssertEqual(SpeechExecutionSource.cloud.displayName, "OpenRouter")
     }
 
     func testStoredLocalAndOpenRouterSourcesAreKept() throws {
         XCTAssertEqual(try self.effectiveSource(stored: .local, activeProvider: .soniox, apiKey: "key"), .local)
-        XCTAssertEqual(try self.effectiveSource(stored: .openRouter, activeProvider: nil, apiKey: ""), .openRouter)
-        XCTAssertEqual(try self.effectiveSource(stored: .openRouter, activeProvider: .soniox, apiKey: "key"), .openRouter)
+        XCTAssertEqual(try self.effectiveSource(stored: .cloud, activeProvider: nil, apiKey: ""), .cloud)
+        XCTAssertEqual(try self.effectiveSource(stored: .cloud, activeProvider: .soniox, apiKey: "key"), .cloud)
     }
 
     func testLiveCloudWithoutAnActiveProviderReadsAsLocal() throws {
@@ -83,22 +84,35 @@ final class LiveCloudSettingsTests: XCTestCase {
 
     func testNoLiveProviderIsUsableUnlessLiveCloudIsTheStoredSource() throws {
         XCTAssertNil(try self.usableProvider(stored: .local, activeProvider: .soniox, apiKey: "key"))
-        XCTAssertNil(try self.usableProvider(stored: .openRouter, activeProvider: .soniox, apiKey: "key"))
+        XCTAssertNil(try self.usableProvider(stored: .cloud, activeProvider: .soniox, apiKey: "key"))
         XCTAssertNil(try self.usableProvider(stored: .liveCloud, activeProvider: nil, apiKey: "key"))
         XCTAssertNil(try self.usableProvider(stored: .liveCloud, activeProvider: .soniox, apiKey: ""))
     }
 
+    /// Live keys are the providers' own entries, looked up by registry ID like every other key.
     func testTheKeyIsLookedUpForTheActiveProviderOnly() throws {
         let (defaults, cleanup) = try self.defaults()
         defer { cleanup() }
         var preferences = LiveTranscriptionPreferences(defaults: defaults)
         preferences.activeProvider = .assemblyAI
-        let keys: [LiveTranscriptionProviderID: String] = [.soniox: "soniox-key"]
+        var stored = ["soniox": "soniox-key"]
+        let store = ProviderKeyStore(
+            defaults: defaults,
+            keychain: KeychainService(testingLoad: { stored }, testingSave: { stored = $0 })
+        )
+        let speechKey: (LiveTranscriptionProviderID) -> String = { store.speechAPIKey(for: ProviderRegistry.providerID(for: $0)) }
         XCTAssertNil(SettingsStore.usableLiveProvider(
             storedSource: .liveCloud,
             activeProvider: preferences.activeProvider,
-            apiKey: { keys[$0] ?? "" }
+            apiKey: speechKey
         ))
+        stored["assemblyai"] = "assembly-key"
+        try store.keychain.refreshCachedKeys()
+        XCTAssertEqual(SettingsStore.usableLiveProvider(
+            storedSource: .liveCloud,
+            activeProvider: preferences.activeProvider,
+            apiKey: speechKey
+        ), .assemblyAI)
     }
 
     func testTheEngineBadgeNamesTheEngineThatReceivesTheAudio() {

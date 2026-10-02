@@ -30,7 +30,7 @@ TYPES
 EXECUTOR
 func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {}
 struct ASRTranscriptionResult { let text: String; let confidence: Float }
-enum SpeechExecutionSource { case local, openRouter, liveCloud }
+enum SpeechExecutionSource { case local, cloud, liveCloud }
 struct CloudTranscriptionConfiguration: Equatable {
     var modelID: String
     var languageCode: String?
@@ -51,7 +51,7 @@ struct LiveTranscriptionConfiguration: Equatable {
     var cloudDictationLanguageCode: String?
     var usesCombinedCloudDictation: Bool { usesCloudTranscription }
     var openRouterTranscriptionAPIKey = "fixture-credential"
-    var usesCloudTranscription: Bool { speechExecutionSource == .openRouter }
+    var usesCloudTranscription: Bool { speechExecutionSource == .cloud }
     /// Set only while Live cloud is the effective engine, as in the app.
     var liveDictationConfiguration: LiveTranscriptionConfiguration?
     var usesLiveCloudDictation: Bool { liveDictationConfiguration != nil }
@@ -170,7 +170,7 @@ final class CloudTranscriptionProvider: Provider {
     func endLiveCloudStream() { endedLiveStreams += 1 }
     var transcriptionProvider: Provider { frozenTranscriptionProvider ?? localProvider }
     var isUsingCloudTranscription: Bool {
-        (frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
+        (frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .cloud
     }
     static var formattingCalls = 0
     private let transcriptionExecutor = TranscriptionExecutor()
@@ -262,7 +262,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
         }
         do {
             let settings = SettingsStore.shared
-            settings.speechExecutionSource = .openRouter
+            settings.speechExecutionSource = .cloud
             let originalConfiguration = CloudTranscriptionConfiguration(modelID: "original", languageCode: "en")
             settings.cloudTranscriptionConfiguration = originalConfiguration
             let service = ASRService()
@@ -287,7 +287,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(ASRService.formattingCalls == 0, "Cloud API must bypass local transcript transformations")
             check(service.frozenTranscriptionProvider == nil && service.frozenSpeechExecutionSource == nil && service.frozenCloudConfiguration == nil, "Lease release clears all frozen state")
             CloudTranscriptionProvider.nextGate = nil
-            settings.speechExecutionSource = .openRouter
+            settings.speechExecutionSource = .cloud
             for activity in [ASRExclusiveActivity.dictation, .fileTranscription, .localAPI] {
                 let lease = try service.acquireExclusiveActivity(activity)
                 guard let next = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else { fatalError("Expected cloud provider") }
@@ -380,7 +380,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             // Provider test: an armed test replaces the active engine for dictation only, and the stop path reads it after release.
             let settings = SettingsStore.shared
             let test = LiveProviderTestCoordinator.shared
-            settings.speechExecutionSource = .openRouter
+            settings.speechExecutionSource = .cloud
             test.overrideConfiguration = LiveTranscriptionConfiguration(provider: "deepgram", modelID: "nova-3")
             defer {
                 settings.speechExecutionSource = .local

@@ -10,7 +10,7 @@ struct DictationProviderRoute: Equatable {
     var usesPrivateAI: Bool {
         self.providerID == PrivateAIProviderFeature.shared.providerID ||
             self.providerKey == PrivateAIProviderFeature.shared.providerID ||
-            self.providerKey == "custom:\(PrivateAIProviderFeature.shared.providerID)"
+            self.providerKey == ProviderRegistry.providerKey(for: PrivateAIProviderFeature.shared.providerID)
     }
 
     /// Every style uses the provider selected on the AI Providers card with the model chosen there.
@@ -47,7 +47,7 @@ struct DictationProviderRoute: Equatable {
         let providerKeys = settings.providerAPIKeys
 
         if let saved = settings.savedProviders.first(where: { $0.id == selectedProviderID }) {
-            let key = "custom:\(saved.id)"
+            let key = ModelRepository.shared.providerKey(for: saved.id)
             return Self(
                 providerID: selectedProviderID,
                 providerKey: key,
@@ -122,7 +122,7 @@ struct DictationProviderRoute: Equatable {
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let providerKeys = settings.providerAPIKeys
         if let saved = settings.savedProviders.first(where: { $0.id == trimmedProviderID }) {
-            let key = "custom:\(saved.id)"
+            let key = ModelRepository.shared.providerKey(for: saved.id)
             return Self(
                 providerID: trimmedProviderID,
                 providerKey: key,

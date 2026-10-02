@@ -80,7 +80,9 @@ struct OnboardingCloudTranscriptionSetupView: View {
                     self.errorMessage = "The selected style model is unavailable on OpenRouter. Choose another model."
                     return
                 }
-                self.settings.speechExecutionSource = .openRouter
+                self.settings.recordSpeechVerification(for: CloudTranscriptionPreferences.defaultProviderID)
+                self.settings.cloudTranscriptionProviderID = CloudTranscriptionPreferences.defaultProviderID
+                self.settings.speechExecutionSource = .cloud
                 self.viewModel.asr.resetTranscriptionProvider()
                 self.dismiss()
             } catch is CancellationError {

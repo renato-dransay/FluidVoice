@@ -103,11 +103,28 @@ final class KeychainService {
         _ = try self.loadStoredKeys(forceRefresh: true)
     }
 
-    /// Voice Engine keys are written one at a time by their own screens. AI Providers saves a snapshot
-    /// it loaded earlier, which may be stale, so a bulk save never takes a voice key from the caller:
-    /// it keeps the current stored value, or none if the key was removed.
-    static func isVoiceEngineKey(_ id: String) -> Bool {
-        id == "openrouter-transcription" || id.hasPrefix("live-transcription.")
+    /// Reads the latest aggregate, applies `transform` and writes the result in one Keychain write, so a
+    /// change to several entries is never seen half done. Nothing is written when nothing changed.
+    @discardableResult
+    func updateKeys(_ transform: (inout [String: String]) throws -> Void) throws -> [String: String] {
+        self.ioLock.lock()
+        defer { self.ioLock.unlock() }
+        // Read the latest aggregate, as `storeKey` does, so keys changed elsewhere are not overwritten.
+        let current = try self.loadStoredKeys(forceRefresh: true)
+        var updated = current
+        try transform(&updated)
+        guard updated != current else { return current }
+        try self.saveStoredKeys(updated)
+        return updated
+    }
+
+    /// Entries a bulk save must never take from its caller: the old Voice Engine entries, kept for a
+    /// downgraded build, and the `speech-key.<id>` entries that hold a second key for one provider.
+    /// Both are written only by `SettingsStore.setProviderAPIKey` and the key migration. AI Providers
+    /// may save a snapshot it loaded earlier, which may be stale, so a bulk save keeps the current
+    /// stored value, or none if the entry was removed.
+    static func isProtectedFromBulkSave(_ id: String) -> Bool {
+        ProviderKeyMigration.isOldVoiceEntry(id) || ProviderKeyMigration.isSpeechKeyEntry(id)
     }
 
     func storeAllKeys(_ values: [String: String]) throws {
@@ -115,8 +132,8 @@ final class KeychainService {
         defer { self.ioLock.unlock() }
         // Read the latest aggregate, as `storeKey` does, so keys changed elsewhere are not overwritten.
         let current = try self.loadStoredKeys(forceRefresh: true)
-        var merged = values.filter { !Self.isVoiceEngineKey($0.key) }
-        for (id, value) in current where Self.isVoiceEngineKey(id) {
+        var merged = values.filter { !Self.isProtectedFromBulkSave($0.key) }
+        for (id, value) in current where Self.isProtectedFromBulkSave(id) {
             merged[id] = value
         }
         try self.saveStoredKeys(merged)

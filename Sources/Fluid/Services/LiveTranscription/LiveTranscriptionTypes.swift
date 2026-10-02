@@ -12,7 +12,8 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
     case gladia
 
     var id: String { self.rawValue }
-    /// Voice engine keys live under their own ids and are never shared with AI Providers keys.
+    /// The old Voice Engine Keychain entry for this provider. Keys now live under the provider's own
+    /// ID (`ProviderRegistry.providerID(for:)`); this entry is only migrated and mirrored for downgrades.
     var keychainID: String { "live-transcription.\(self.rawValue)" }
 }
 

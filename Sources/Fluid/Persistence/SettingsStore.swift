@@ -38,6 +38,8 @@ final class SettingsStore: ObservableObject {
     private init() {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
+        // Before any other key work; retried before each key read while it has not succeeded.
+        self.providerKeyStore.migrateIfNeeded()
         self.migrateProviderAPIKeysIfNeeded()
         self.scrubSavedProviderAPIKeys()
         self.migrateExplicitDictationPromptsIfNeeded()
@@ -785,7 +787,7 @@ final class SettingsStore: ObservableObject {
 
     func dictationOverlayLabel(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
         let selection = self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID)
-        guard selection != .off else { return self.usesCloudTranscription ? "No cleanup" : "Basic" }
+        guard selection != .off else { return self.usesCombinedCloudDictation ? "No cleanup" : "Basic" }
         if self.usesCombinedCloudDictation {
             let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
             let model = CloudAudioDictationModel.listed(self.cloudDictationModelID)?.name ?? self.cloudDictationModelID
@@ -1583,34 +1585,14 @@ final class SettingsStore: ObservableObject {
         return self.selectedModelByProvider[openRouterID]
     }
 
-    var providerAPIKeys: [String: String] {
-        get { (try? self.keychain.fetchAllKeys()) ?? [:] }
-        set {
-            objectWillChange.send()
-            do {
-                _ = try self.saveProviderAPIKeys(newValue)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
-            }
-        }
-    }
-
+    /// Bulk save, used only by the one-time migration of keys stored before the single Keychain item.
+    /// It can never drop the old Voice Engine entries or `speech-key.*` (`KeychainService.storeAllKeys`).
+    /// Every other key change goes through `setProviderAPIKey(_:for:)`.
     @discardableResult
     func saveProviderAPIKeys(_ values: [String: String]) throws -> [String: String] {
         let trimmed = self.sanitizeAPIKeys(values)
         try self.keychain.storeAllKeys(trimmed)
         return try self.keychain.fetchAllKeys()
-    }
-
-    /// Securely retrieve API key for a provider, handling custom prefix logic
-    func getAPIKey(for providerID: String) -> String? {
-        let keys = self.providerAPIKeys
-        // Try exact match first
-        if let key = keys[providerID] { return key }
-
-        // Try canonical key format (custom:ID)
-        let canonical = self.canonicalProviderKey(for: providerID)
-        return keys[canonical]
     }
 
     var selectedProviderID: String {
@@ -1652,9 +1634,10 @@ final class SettingsStore: ObservableObject {
             fingerprints.removeValue(forKey: providerID)
             availableModels.removeValue(forKey: providerID)
             selectedModels.removeValue(forKey: providerID)
-            fingerprints.removeValue(forKey: "custom:\(providerID)")
-            availableModels.removeValue(forKey: "custom:\(providerID)")
-            selectedModels.removeValue(forKey: "custom:\(providerID)")
+            let customKey = ProviderRegistry.providerKey(for: providerID)
+            fingerprints.removeValue(forKey: customKey)
+            availableModels.removeValue(forKey: customKey)
+            selectedModels.removeValue(forKey: customKey)
         }
         if fingerprints != self.verifiedProviderFingerprints {
             self.verifiedProviderFingerprints = fingerprints
@@ -2057,15 +2040,21 @@ final class SettingsStore: ObservableObject {
     /// selection loudly rather than quietly transcribing with a different backend than the one
     /// that was chosen. An explicit legacy selection therefore remains a reliable rollback switch.
     var meetingTranscriptionBackendID: MeetingBackendID {
-        get {
-            guard let raw = self.defaults.string(forKey: Keys.meetingTranscriptionBackendID)
-            else { return .productionDefault }
-            return MeetingBackendID(rawValue: raw)
-        }
+        get { Self.meetingTranscriptionBackendID(in: self.defaults) }
         set {
             objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.meetingTranscriptionBackendID)
+            Self.setMeetingTranscriptionBackendID(newValue, in: self.defaults)
         }
+    }
+
+    static func meetingTranscriptionBackendID(in defaults: UserDefaults) -> MeetingBackendID {
+        guard let raw = defaults.string(forKey: Keys.meetingTranscriptionBackendID)
+        else { return .productionDefault }
+        return MeetingBackendID(rawValue: raw)
+    }
+
+    static func setMeetingTranscriptionBackendID(_ backendID: MeetingBackendID, in defaults: UserDefaults) {
+        defaults.set(backendID.rawValue, forKey: Keys.meetingTranscriptionBackendID)
     }
 
     /// Tier 1 native (Zoom/Teams/Webex) meeting auto-detection (default: ON).
@@ -3400,21 +3389,28 @@ final class SettingsStore: ObservableObject {
 
     /// Stored verification fingerprints per provider key (hash of baseURL + apiKey).
     var verifiedProviderFingerprints: [String: String] {
-        get {
-            guard let data = self.defaults.data(forKey: Keys.verifiedProviderFingerprints),
-                  let decoded = try? JSONDecoder().decode([String: String].self, from: data)
-            else {
-                return [:]
-            }
-            return decoded
-        }
+        get { Self.verifiedProviderFingerprints(in: self.defaults) }
         set {
             objectWillChange.send()
-            if let encoded = try? JSONEncoder().encode(newValue) {
-                self.defaults.set(encoded, forKey: Keys.verifiedProviderFingerprints)
-            } else {
-                self.defaults.removeObject(forKey: Keys.verifiedProviderFingerprints)
-            }
+            Self.setVerifiedProviderFingerprints(newValue, in: self.defaults)
+        }
+    }
+
+    /// The text verification record (`verifiedProviderFingerprints`) read from any defaults store.
+    static func verifiedProviderFingerprints(in defaults: UserDefaults) -> [String: String] {
+        guard let data = defaults.data(forKey: Keys.verifiedProviderFingerprints),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+        else {
+            return [:]
+        }
+        return decoded
+    }
+
+    static func setVerifiedProviderFingerprints(_ fingerprints: [String: String], in defaults: UserDefaults) {
+        if let encoded = try? JSONEncoder().encode(fingerprints) {
+            defaults.set(encoded, forKey: Keys.verifiedProviderFingerprints)
+        } else {
+            defaults.removeObject(forKey: Keys.verifiedProviderFingerprints)
         }
     }
 
@@ -4257,17 +4253,7 @@ final class SettingsStore: ObservableObject {
     }
 
     private func canonicalProviderKey(for providerID: String) -> String {
-        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        // Built-in providers use their ID directly
-        if ModelRepository.shared.isBuiltIn(trimmed) {
-            return trimmed
-        }
-        if trimmed.hasPrefix("custom:") {
-            return trimmed
-        }
-        return "custom:\(trimmed)"
+        ModelRepository.shared.providerKey(for: providerID)
     }
 
     private func verifiedProviderIDsForCurrentConfiguration() -> [String] {
@@ -4305,8 +4291,7 @@ final class SettingsStore: ObservableObject {
     }
 
     private func providerBaseURLForVerification(for providerID: String) -> String {
-        let savedProviderID = providerID.hasPrefix("custom:") ?
-            String(providerID.dropFirst("custom:".count)) : providerID
+        let savedProviderID = ProviderRegistry.savedProviderID(fromProviderKey: providerID)
         if let saved = self.savedProviders.first(where: { $0.id == savedProviderID }) {
             return saved.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -4363,8 +4348,7 @@ final class SettingsStore: ObservableObject {
             return selected
         }
 
-        let savedProviderID = providerID.hasPrefix("custom:") ?
-            String(providerID.dropFirst("custom:".count)) : providerID
+        let savedProviderID = ProviderRegistry.savedProviderID(fromProviderKey: providerID)
         if let savedModel = self.savedProviders.first(where: { $0.id == savedProviderID })?.models.first,
            !savedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
@@ -4386,8 +4370,7 @@ final class SettingsStore: ObservableObject {
             return configured
         }
 
-        let savedProviderID = providerID.hasPrefix("custom:") ?
-            String(providerID.dropFirst("custom:".count)) : providerID
+        let savedProviderID = ProviderRegistry.savedProviderID(fromProviderKey: providerID)
         if let configured = self.savedProviders.first(where: { $0.id == savedProviderID })?.models,
            !configured.isEmpty
         {
@@ -4444,8 +4427,7 @@ final class SettingsStore: ObservableObject {
             return providerID
         }
 
-        let savedProviderID = providerID.hasPrefix("custom:") ?
-            String(providerID.dropFirst("custom:".count)) : providerID
+        let savedProviderID = ProviderRegistry.savedProviderID(fromProviderKey: providerID)
         if self.savedProviders.contains(where: { $0.id == savedProviderID }) {
             return savedProviderID
         }

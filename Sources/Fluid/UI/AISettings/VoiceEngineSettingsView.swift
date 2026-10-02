@@ -37,12 +37,18 @@ struct VoiceEngineSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             switch self.viewModel.browsedSpeechExecutionSource {
-            case .openRouter: OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
+            case .cloud: OpenRouterTranscriptionSettingsView(settings: self.settings, viewModel: self.viewModel)
             case .liveCloud: LiveCloudSettingsView(settings: self.settings, viewModel: self.viewModel)
             case .local: self.speechRecognitionCard
             }
         }
-            .onAppear { self.viewModel.onAppear() }
+            .onAppear { self.viewModel.onAppear(requestedTab: AppNavigationRouter.shared.consumeRequestedVoiceEngineTab()) }
+            // Already on Voice Engine: a request for one of its tabs switches the browsed tab.
+            .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
+                if let tab = AppNavigationRouter.shared.consumeRequestedVoiceEngineTab() {
+                    self.viewModel.browsedSpeechExecutionSource = tab
+                }
+            }
             .onChange(of: self.settings.speechExecutionSource) { _, _ in
                 self.viewModel.asr.resetTranscriptionProvider()
             }

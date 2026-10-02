@@ -100,6 +100,8 @@
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
 		C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */; };
 		CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */; };
+		51AB0E0100000000000000B2 /* ProviderKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */; };
+		51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */; };
 		FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
@@ -223,6 +225,8 @@
 		B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIDictationTokenBudgetTests.swift; sourceTree = "<group>"; };
 		C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperLanguageSelectionTests.swift; sourceTree = "<group>"; };
 		CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceCacheTests.swift; sourceTree = "<group>"; };
+		51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderKeyStoreTests.swift; sourceTree = "<group>"; };
+		51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRegistryTests.swift; sourceTree = "<group>"; };
 		FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteDeliveryCoordinatorTests.swift; sourceTree = "<group>"; };
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
@@ -449,6 +453,8 @@
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
+				51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */,
+				51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */,
 				FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */,
 				DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */,
 				1DE0C10000000000000000A1 /* LiveCloudSettingsTests.swift */,
@@ -816,6 +822,8 @@
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
+				51AB0E0100000000000000B2 /* ProviderKeyStoreTests.swift in Sources */,
+				51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */,
 				B11ABB5737781D49446C9472 /* FileCloudSpeakerAlignmentTests.swift in Sources */,
 				309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */,
 				1DE0C10000000000000000A2 /* LiveCloudSettingsTests.swift in Sources */,

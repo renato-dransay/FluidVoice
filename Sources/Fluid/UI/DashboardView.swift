@@ -235,7 +235,7 @@ struct DashboardView: View {
             voiceModelReady: self.settings.storedLiveProvider != nil
                 ? self.settings.usesLiveCloudDictation
                 : self.settings.usesCloudTranscription
-                ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
+                ? !self.settings.cloudTranscriptionAPIKey.isEmpty
                 : self.asr.modelsExistOnDisk || self.asr.isAsrReady,
             microphoneReady: self.asr.micStatus == .authorized,
             typingAccessReady: self.accessibilityEnabled

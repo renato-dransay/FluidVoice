@@ -12,8 +12,20 @@ trap 'rm -rf "$task_test_dir"' EXIT
 # Keep the actual model metadata/key rules; network model fetching is unavailable in this harness.
 sed '/^    \/\/ MARK: - Fetch Models from API/,$d' Sources/Fluid/Services/ModelRepository.swift > "$task_test_dir/ModelRepository.swift"
 echo '}' >> "$task_test_dir/ModelRepository.swift"
+# ModelRepository's provider keys come from the provider registry, which reads only names and links from the live catalog.
+cat > "$task_test_dir/LiveTranscriptionCatalogStub.swift" <<'SWIFT'
+import Foundation
+enum LiveTranscriptionCatalog {
+    static func info(for id: LiveTranscriptionProviderID) -> LiveTranscriptionProviderInfo {
+        LiveTranscriptionProviderInfo(id: id, name: id.rawValue, models: [], detectsLanguageAutomatically: true, languageCodes: nil, keyURL: nil, usageURL: nil)
+    }
+}
+SWIFT
 xcrun swiftc -parse-as-library \
     "$task_test_dir/ModelRepository.swift" \
+    Sources/Fluid/Services/Providers/ProviderRegistry.swift \
+    Sources/Fluid/Services/LiveTranscription/LiveTranscriptionTypes.swift \
+    "$task_test_dir/LiveTranscriptionCatalogStub.swift" \
     Sources/Fluid/UI/ModelDisplayName.swift \
     Sources/Fluid/Views/CommandModelCatalog.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \

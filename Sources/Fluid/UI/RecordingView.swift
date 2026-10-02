@@ -21,7 +21,7 @@ struct RecordingView: View {
     private var isReadyToRecord: Bool {
         if self.settings.storedLiveProvider != nil { return self.settings.usesLiveCloudDictation }
         return self.settings.usesCloudTranscription
-            ? !self.settings.openRouterTranscriptionAPIKey.isEmpty
+            ? !self.settings.cloudTranscriptionAPIKey.isEmpty
             : self.asr.isAsrReady
     }
 

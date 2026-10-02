@@ -889,7 +889,7 @@ struct NotchExpandedView: View {
     private func promptMenuContent() -> some View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
-        let isCloudDictation = promptMode.normalized == .dictate && self.settings.usesCloudTranscription
+        let isCloudDictation = promptMode.normalized == .dictate && self.settings.usesCombinedCloudDictation
         return VStack(alignment: .leading, spacing: 2) {
             Text(isCloudDictation ? "OpenRouter cleanup style" : "AI Prompt")
                 .font(.fluidSystem(size: 8, weight: .semibold))

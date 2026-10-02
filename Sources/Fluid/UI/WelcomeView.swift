@@ -271,7 +271,7 @@ struct OnboardingFlowView: View {
     private var isVoiceModelReady: Bool {
         if self.settings.usesLiveCloudDictation { return true }
         if self.settings.usesCloudTranscription {
-            return !self.settings.openRouterTranscriptionAPIKey.isEmpty
+            return !self.settings.cloudTranscriptionAPIKey.isEmpty
         }
         guard let route = self.selectedOnboardingRoute else {
             return false

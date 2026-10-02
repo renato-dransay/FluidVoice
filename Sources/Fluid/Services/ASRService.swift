@@ -637,12 +637,12 @@ final class ASRService: ObservableObject {
     private var frozenCloudDictationModelID: String?
     private var lastCompletedCloudDictationOutput: CloudAudioDictationOutput?
     enum FailedRemoteDictation {
-        case openRouter(samples: [Float], configuration: CloudTranscriptionConfiguration)
+        case cloud(samples: [Float], configuration: CloudTranscriptionConfiguration)
         case live(samples: [Float], configuration: LiveTranscriptionConfiguration)
 
         var samples: [Float] {
             switch self {
-            case .openRouter(let samples, _), .live(let samples, _): samples
+            case .cloud(let samples, _), .live(let samples, _): samples
             }
         }
     }
@@ -1010,6 +1010,7 @@ final class ASRService: ObservableObject {
     private var settingsBackupRestoreObserver: NSObjectProtocol?
     private var clamshellStateChangeObserver: NSObjectProtocol?
     private var inputDeviceAvailabilityChangeObserver: NSObjectProtocol?
+    private var providerAPIKeyChangeObserver: NSObjectProtocol?
 
     // MARK: - Error Handling
 
@@ -1364,7 +1365,7 @@ final class ASRService: ObservableObject {
     }
 
     var isUsingCloudTranscription: Bool {
-        (self.frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .openRouter
+        (self.frozenSpeechExecutionSource ?? SettingsStore.shared.speechExecutionSource) == .cloud
     }
 
     var isUsingLiveCloudDictation: Bool {
@@ -2412,6 +2413,16 @@ final class ASRService: ObservableObject {
                 self?.handleInputDeviceAvailabilityChanged(deviceID: deviceID)
             }
         }
+        self.providerAPIKeyChangeObserver = NotificationCenter.default.addObserver(
+            forName: .providerAPIKeyChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let change = ProviderAPIKeyChange(notification) else { return }
+            Task { @MainActor [weak self] in
+                self?.handleProviderAPIKeyChanged(change)
+            }
+        }
     }
 
     deinit {
@@ -2430,6 +2441,18 @@ final class ASRService: ObservableObject {
         if let observer = self.inputDeviceAvailabilityChangeObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = self.providerAPIKeyChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// A provider built with the old key, or for an engine that a key removal ended, is rebuilt. A key
+    /// change for a provider the engine does not use leaves the loaded model alone.
+    private func handleProviderAPIKeyChanged(_ change: ProviderAPIKeyChange) {
+        let cachedCloudProviderUsesKey = self.cloudSpeechProvider != nil
+            && change.providerID == CloudTranscriptionPreferences.defaultProviderID
+        guard change.affectedActiveEngine || cachedCloudProviderUsesKey else { return }
+        self.resetTranscriptionProvider()
     }
 
     private func handleClamshellStateChanged(isClosed: Bool) {
@@ -3986,7 +4009,7 @@ final class ASRService: ObservableObject {
             if self.retainFailedLiveDictationIfNeeded(samples: pcm, error: error) { return "" }
             if self.isUsingCloudTranscription {
                 if !Task.isCancelled, !(error is CancellationError), let configuration = self.frozenCloudConfiguration {
-                    self.failedRemoteDictation = .openRouter(samples: pcm, configuration: configuration)
+                    self.failedRemoteDictation = .cloud(samples: pcm, configuration: configuration)
                     self.failedLiveProvider = nil
                     self.hasFailedCloudDictation = true
                     self.errorTitle = "OpenRouter transcription failed"
@@ -4048,7 +4071,8 @@ final class ASRService: ObservableObject {
             provider = self.getProvider(for: SettingsStore.shared.selectedSpeechModel)
         } else {
             switch failed {
-            case .openRouter(_, let configuration):
+            case .cloud(_, let configuration):
+                // The only Cloud client is OpenRouter's, so the retry sends OpenRouter's speech key.
                 provider = CloudTranscriptionProvider(
                     configuration: configuration,
                     apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,

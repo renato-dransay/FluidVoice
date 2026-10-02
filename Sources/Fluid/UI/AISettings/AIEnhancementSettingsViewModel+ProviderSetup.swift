@@ -43,7 +43,7 @@ extension AIEnhancementSettingsViewModel {
         let apiKey = draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !apiKey.isEmpty {
             self.updateProviderAPIKey(apiKey, for: id)
-            guard self.saveProviderAPIKeys(invalidating: id) else {
+            guard self.saveProviderAPIKey(for: id) else {
                 self.providerAPIKeys = previousKeys
                 self.refreshProviderItems()
                 return false

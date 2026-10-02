@@ -4,8 +4,9 @@ import Foundation
 struct LiveTranscriptionPreferences {
     let defaults: UserDefaults
 
-    /// Providers the user added, in the order they were added. Unknown stored values are skipped
-    /// so a downgrade or a retired vendor never breaks the list.
+    /// Providers the user added, in the order they were added. Saving a provider's key adds it and removing
+    /// the key removes it (`SettingsStore.setProviderAPIKey`). Unknown stored values are skipped so a
+    /// downgrade or a retired vendor never breaks the list.
     var addedProviders: [LiveTranscriptionProviderID] {
         get {
             var seen = Set<LiveTranscriptionProviderID>()
@@ -42,20 +43,6 @@ struct LiveTranscriptionPreferences {
 }
 
 extension SettingsStore {
-    func liveTranscriptionAPIKey(for provider: LiveTranscriptionProviderID) -> String {
-        (try? KeychainService.shared.fetchKey(for: provider.keychainID)) ?? ""
-    }
-
-    func saveLiveTranscriptionAPIKey(_ value: String, for provider: LiveTranscriptionProviderID) throws {
-        let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if key.isEmpty {
-            try KeychainService.shared.deleteKey(for: provider.keychainID)
-        } else {
-            try KeychainService.shared.storeKey(key, for: provider.keychainID)
-        }
-        self.objectWillChange.send()
-    }
-
     /// The live provider dictation uses, or nil when Live cloud is not the effective engine.
     var activeLiveProvider: LiveTranscriptionProviderID? {
         Self.usableLiveProvider(

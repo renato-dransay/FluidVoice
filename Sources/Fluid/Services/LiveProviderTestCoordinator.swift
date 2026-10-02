@@ -20,9 +20,20 @@ final class LiveProviderTestCoordinator: ObservableObject {
     @Published private(set) var lastError = ""
     private let defaults: UserDefaults
     private static let passedKey = "LiveTranscriptionTestedProviders"
+    private var keyChangeObservation: AnyCancellable?
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, notificationCenter: NotificationCenter = .default) {
         self.defaults = defaults
+        self.keyChangeObservation = notificationCenter.publisher(for: .providerAPIKeyChanged)
+            .compactMap(ProviderAPIKeyChange.init)
+            .sink { [weak self] change in self?.handleProviderAPIKeyChange(change) }
+    }
+
+    /// A pass describes the key that was tested. A test without a key could only fail, so it stops with the key.
+    func handleProviderAPIKeyChange(_ change: ProviderAPIKeyChange) {
+        guard let provider = ProviderRegistry.liveProviderID(for: change.providerID) else { return }
+        self.forgetPassedTest(for: provider)
+        if change.removed, self.armedProvider == provider { self.disarm() }
     }
 
     var overrideConfiguration: LiveTranscriptionConfiguration? {
