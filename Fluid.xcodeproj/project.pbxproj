@@ -30,6 +30,8 @@
 		CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */; };
 		7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */; };
 		F0A50C0000000000000000A2 /* SpeechExecutionSourceTestPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A50C0000000000000000A1 /* SpeechExecutionSourceTestPin.swift */; };
+		F0A50C0000000000000000B2 /* TestDefaultsGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A50C0000000000000000B1 /* TestDefaultsGuard.swift */; };
+		F0A50C0000000000000000C2 /* TestDefaultsGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A50C0000000000000000C1 /* TestDefaultsGuardTests.swift */; };
 		86CAA2D4EF18433096185602 /* LLMClientRequestBodyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */; };
 		272BFB5CB271489892CAE50C /* TemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */; };
 		A11A00000000000000000002 /* AnalyticsDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */; };
@@ -286,6 +288,8 @@
 		E5EC000000000000000000D1 /* MeetingSCKPairedHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSCKPairedHardwareTests.swift; sourceTree = "<group>"; };
 		7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFixtureLoader.swift; sourceTree = "<group>"; };
 		F0A50C0000000000000000A1 /* SpeechExecutionSourceTestPin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechExecutionSourceTestPin.swift; sourceTree = "<group>"; };
+		F0A50C0000000000000000B1 /* TestDefaultsGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDefaultsGuard.swift; sourceTree = "<group>"; };
+		F0A50C0000000000000000C1 /* TestDefaultsGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestDefaultsGuardTests.swift; sourceTree = "<group>"; };
 		7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = dictation_fixture.wav; sourceTree = "<group>"; };
 		7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework; sourceTree = DEVELOPER_DIR; };
 		A5B000000000000000000005 /* FluidASRBaselineHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FluidASRBaselineHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -425,6 +429,7 @@
 				C0DE89000000000000000001 /* SettingsNavigationStateTests.swift */,
 				343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */,
 				980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */,
+				F0A50C0000000000000000C1 /* TestDefaultsGuardTests.swift */,
 				A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */,
 				2E9B00000000000000000006 /* ZeppelinDataLayerTests.swift */,
 				2E9B00000000000000000008 /* SearchIndexTests.swift */,
@@ -532,6 +537,7 @@
 			children = (
 				7CDB0A2A2F3C4D5600FB7CAD /* AudioFixtureLoader.swift */,
 				F0A50C0000000000000000A1 /* SpeechExecutionSourceTestPin.swift */,
+				F0A50C0000000000000000B1 /* TestDefaultsGuard.swift */,
 			);
 			path = Helpers;
 			sourceTree = "<group>";
@@ -798,6 +804,8 @@
 			files = (
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
 				F0A50C0000000000000000A2 /* SpeechExecutionSourceTestPin.swift in Sources */,
+				F0A50C0000000000000000B2 /* TestDefaultsGuard.swift in Sources */,
+				F0A50C0000000000000000C2 /* TestDefaultsGuardTests.swift in Sources */,
 				7CDB0A2D2F3C4D5600FB7CAD /* DictationE2ETests.swift in Sources */,
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
@@ -1192,6 +1200,7 @@
 				DEVELOPMENT_TEAM = V4J43B279J;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = FluidDictationIntegrationTests;
+				INFOPLIST_KEY_NSPrincipalClass = FluidDictationIntegrationTestsPrincipal;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -1217,6 +1226,7 @@
 				DEVELOPMENT_TEAM = V4J43B279J;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = FluidDictationIntegrationTests;
+				INFOPLIST_KEY_NSPrincipalClass = FluidDictationIntegrationTestsPrincipal;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

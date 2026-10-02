@@ -481,27 +481,14 @@ final class LLMClientRequestBodyTests: XCTestCase {
     }
 
     private func withPromptSettingsRestored(run: () -> Void) {
-        let settings = SettingsStore.shared
-        let profiles = settings.dictationPromptProfiles
-        let appBindings = settings.appPromptBindings
-        let selectedDictationPromptID = settings.selectedDictationPromptID
-        let isDictationPromptOff = settings.isDictationPromptOff
-        let dictationPromptRoutingScope = settings.dictationPromptRoutingScope
-        let defaultDictationPromptOverride = settings.defaultDictationPromptOverride
-        // The test host shares the installed personal app's preferences, where OpenRouter may be
-        // the active engine; these expectations describe local dictation.
-        let speechSource = CloudTranscriptionPreferences(defaults: .standard).source
-        settings.speechExecutionSource = .local
-
-        defer {
-            settings.speechExecutionSource = speechSource
-            settings.dictationPromptProfiles = profiles
-            settings.appPromptBindings = appBindings
-            settings.selectedDictationPromptID = selectedDictationPromptID
-            settings.isDictationPromptOff = isDictationPromptOff
-            settings.dictationPromptRoutingScope = dictationPromptRoutingScope
-            settings.defaultDictationPromptOverride = defaultDictationPromptOverride
-        }
+        // The test host is the installed personal app, so these writes land in the owner's real
+        // settings. Put the whole domain back afterwards: restoring through the typed setters was
+        // lossy, since an absent routing scope came back as an explicit "allApps" and an absent
+        // speech source as an explicit "local", and keys written as side effects were never restored.
+        let preferences = AppPreferencesSnapshot()
+        defer { preferences.restore() }
+        // OpenRouter may be the owner's active engine; these expectations describe local dictation.
+        SettingsStore.shared.speechExecutionSource = .local
 
         run()
     }

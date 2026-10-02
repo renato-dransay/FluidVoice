@@ -630,6 +630,8 @@ final class HotkeyShortcutTests: XCTestCase {
 
     @MainActor
     func testLegacySystemModeBackupQueuesMicrophonePriorityMigration() async throws {
+        // Restoring a backup writes almost every setting in the owner's real domain.
+        self.preserveAppPreferences()
         let document = try await BackupService.shared.makeBackupDocument()
 
         try self.withRestoredDefaults(keys: [
@@ -657,6 +659,8 @@ final class HotkeyShortcutTests: XCTestCase {
 
     @MainActor
     func testPriorityBackupKeepsCompletedMicrophoneMigration() async throws {
+        // Restoring a backup writes almost every setting in the owner's real domain.
+        self.preserveAppPreferences()
         let document = try await BackupService.shared.makeBackupDocument()
 
         self.withRestoredDefaults(keys: [self.microphoneSelectionMigrationVersionKey]) {
@@ -670,6 +674,8 @@ final class HotkeyShortcutTests: XCTestCase {
 
     @MainActor
     func testPriorityBackupRoundTripsRemovedConnectedMicrophones() async throws {
+        // Restoring a backup writes almost every setting in the owner's real domain.
+        self.preserveAppPreferences()
         let originalPriority = SettingsStore.shared.microphonePriority
         let originalSuppressedUIDs = SettingsStore.shared.suppressedMicrophoneUIDs
         defer {
@@ -2244,6 +2250,8 @@ final class HotkeyShortcutTests: XCTestCase {
 
     @MainActor
     func testSelectingOrRestoringMicrophoneClearsRemovalSuppression() async throws {
+        // Restoring a backup writes almost every setting in the owner's real domain.
+        self.preserveAppPreferences()
         let originalSuppressedUIDs = SettingsStore.shared.suppressedMicrophoneUIDs
         SettingsStore.shared.suppressedMicrophoneUIDs = []
         let document = try await BackupService.shared.makeBackupDocument()

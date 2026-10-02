@@ -1401,20 +1401,11 @@ private final class ASRRecoveryFixture {
         builtInStartDelay: TimeInterval
     ) {
         let settings = SettingsStore.shared
-        let priority = settings.microphonePriority
-        let preferred = settings.preferredInputDeviceUID
-        let suppressed = settings.suppressedMicrophoneUIDs
-        let version = settings.microphoneSelectionMigrationVersion
-        let alerts = settings.showMicrophoneChangeAlerts
-        let pauseMedia = settings.pauseMediaDuringTranscription
-        self.restore = {
-            settings.microphonePriority = priority
-            settings.preferredInputDeviceUID = preferred
-            settings.suppressedMicrophoneUIDs = suppressed
-            settings.microphoneSelectionMigrationVersion = version
-            settings.showMicrophoneChangeAlerts = alerts
-            settings.pauseMediaDuringTranscription = pauseMedia
-        }
+        // The test host is the installed personal app, so the fake microphones below land in the
+        // owner's real settings. Put the whole domain back exactly: the typed setters normalize the
+        // priority list and rewrite the preferred microphone as a side effect.
+        let preferences = AppPreferencesSnapshot()
+        self.restore = { preferences.restore() }
         settings.microphoneSelectionMigrationVersion = 4
         settings.microphonePriority = [
             .init(uid: "recovery-test-external", name: "Test External"),

@@ -87,6 +87,11 @@ final class VoiceEngineSettingsTests: XCTestCase {
         XCTAssertNil(VoiceEngineStatus.make(storedSource: .cloud, cloudProviderID: "openrouter", storedLiveProvider: nil, speechKey: { _ in "k" }).missingKeyMessage)
     }
 
+    func testLiveRowShowsTestedOnlyAfterAPassedTest() {
+        XCTAssertEqual(LiveCloudSettingsView.modelStatusLine(model: "Nova-3", testPassed: true), "Nova-3 · Tested")
+        XCTAssertEqual(LiveCloudSettingsView.modelStatusLine(model: "Nova-3", testPassed: false), "Nova-3")
+    }
+
     func testTheMissingLiveKeyStillBrowsesLiveCloudUnlessATabWasRequested() {
         let status = VoiceEngineStatus.make(storedSource: .liveCloud, cloudProviderID: "openrouter", storedLiveProvider: .deepgram, speechKey: { _ in "" })
         XCTAssertEqual(VoiceEngineSettingsViewModel.tabToBrowse(requested: nil, activeEngine: status.tab), .liveCloud)

@@ -206,7 +206,7 @@ struct LiveCloudSettingsView: View {
         return "Use this provider for dictation. The key is checked first."
     }
 
-    /// The icon the status badge uses for the matching state: a problem, tested, or not tested yet.
+    /// The icon the status badge uses for the matching state: a problem, tested, or no test yet.
     private func statusIcon(for provider: LiveTranscriptionProviderID, hasKey: Bool) -> String {
         if !hasKey || self.settings.liveProviderNeedsPrimaryLanguage(provider) { return "exclamationmark.circle" }
         if self.viewModel.liveRejectedKeys.contains(provider) { return "exclamationmark.circle.fill" }
@@ -222,7 +222,13 @@ struct LiveCloudSettingsView: View {
         let model = info.models.first { $0.id == modelID }?.name ?? modelID
         if self.viewModel.liveProviderBeingChecked == provider { return "\(model) · Checking…" }
         if self.viewModel.liveRejectedKeys.contains(provider) { return "\(model) · Key rejected" }
-        return "\(model) · \(self.test.hasPassed(provider) ? "Tested" : "Not tested")"
+        return Self.modelStatusLine(model: model, testPassed: self.test.hasPassed(provider))
+    }
+
+    /// The model, followed by "Tested" once a test passed with the current key. Without a passed
+    /// test the row shows only the model.
+    static func modelStatusLine(model: String, testPassed: Bool) -> String {
+        testPassed ? "\(model) · Tested" : model
     }
 }
 
