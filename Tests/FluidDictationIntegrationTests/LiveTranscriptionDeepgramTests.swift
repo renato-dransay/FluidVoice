@@ -20,7 +20,7 @@ final class LiveTranscriptionDeepgramTests: XCTestCase {
         XCTAssertEqual(items["interim_results"], "true")
         XCTAssertEqual(items["smart_format"], "true")
         XCTAssertEqual(items["language"], "multi")
-        XCTAssertEqual(items["mip_opt_out"], "true")
+        XCTAssertNil(items["mip_opt_out"], "Opting out of the Model Improvement Program would forfeit Deepgram's discount")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Token k")
     }
 

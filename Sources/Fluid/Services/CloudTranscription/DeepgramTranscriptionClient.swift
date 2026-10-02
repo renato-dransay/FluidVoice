@@ -15,11 +15,10 @@ import Foundation
 /// EVIDENCE: https://developers.deepgram.com/docs/models-languages-overview (checked 2026-10-02): `nova-3` is the
 /// current general model for pre-recorded audio.
 /// EVIDENCE: https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program (checked
-/// 2026-10-02): `mip_opt_out=true` on a `/v1/listen` request excludes it from the Model Improvement Program, and
-/// "Data from opted-out requests is retained only for the duration necessary to process the request". The
-/// pre-recorded reference says to check the pricing impact first: listed rates assume participation, and a
-/// Deepgram staff answer (https://github.com/orgs/deepgram/discussions/1292, 2025-06-18) says opting out
-/// "forgoes a 50% discount". The Live adapter already opts out; Cloud does the same for the same audio.
+/// 2026-10-02): requests take part in the Model Improvement Program unless they send `mip_opt_out=true`. Listed
+/// rates assume participation, and a Deepgram staff answer (https://github.com/orgs/deepgram/discussions/1292,
+/// 2025-06-18) says opting out "forgoes a 50% discount", so the app does not opt out (owner's decision,
+/// 2026-10-02). The Live adapter does the same.
 nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
     static let id = "deepgram"
     static let name = "Deepgram"
@@ -83,14 +82,13 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
     }
 
     /// The model always; the chosen language, otherwise automatic detection; punctuation and
-    /// formatting so the words read as written text; and the Model Improvement Program opt-out.
+    /// formatting so the words read as written text. No Model Improvement Program opt-out, which would forfeit
+    /// Deepgram's discount.
     static func listenURL(configuration: CloudTranscriptionConfiguration) -> URL? {
         var components = URLComponents(string: self.listenEndpoint)
         var items = [
             URLQueryItem(name: "model", value: configuration.modelID),
             URLQueryItem(name: "smart_format", value: "true"),
-            // Opt out of Deepgram's Model Improvement Program for dictated audio, as Live cloud does.
-            URLQueryItem(name: "mip_opt_out", value: "true"),
         ]
         if let language = configuration.languageCode {
             items.append(URLQueryItem(name: "language", value: language))

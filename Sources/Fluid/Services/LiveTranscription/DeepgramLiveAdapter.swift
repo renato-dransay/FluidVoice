@@ -20,8 +20,7 @@ nonisolated struct DeepgramLiveAdapter: LiveTranscriptionAdapter {
             // Code-switching works best with short endpointing (Deepgram multilingual guide).
             URLQueryItem(name: "endpointing", value: "100"),
             URLQueryItem(name: "language", value: configuration.languageCode ?? "multi"),
-            // Opt out of Deepgram's model improvement program for dictated audio.
-            URLQueryItem(name: "mip_opt_out", value: "true"),
+            // No `mip_opt_out`: opting out of Deepgram's Model Improvement Program forfeits its discount.
         ]
         guard let url = components?.url else { throw LiveTranscriptionError.connectionFailed }
         var request = URLRequest(url: url)
