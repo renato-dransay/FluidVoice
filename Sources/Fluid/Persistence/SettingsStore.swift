@@ -38,7 +38,8 @@ final class SettingsStore: ObservableObject {
     private init() {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
-        // Before any other key work; retried before each key read while it has not succeeded.
+        // Before any other key work. While it has not succeeded it is retried when the app becomes active
+        // and before each key write; readers see its result in memory meanwhile.
         self.providerKeyStore.migrateIfNeeded()
         self.migrateProviderAPIKeysIfNeeded()
         self.scrubSavedProviderAPIKeys()

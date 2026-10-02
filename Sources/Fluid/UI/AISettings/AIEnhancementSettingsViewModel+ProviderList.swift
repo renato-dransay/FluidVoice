@@ -27,15 +27,20 @@ enum SpeechProviderVerification {
         }
         do {
             try await check(live, apiKey)
-            store.recordSpeechVerification(for: providerID)
+            // The check speaks only for the key it sent; a key replaced meanwhile is not verified.
+            guard store.recordSpeechVerification(for: providerID, checkedKey: apiKey) else {
+                return .failure(Self.keyChangedMessage)
+            }
             return .success("Verified.")
         } catch let error as LiveTranscriptionError {
-            if error == .authentication { store.clearSpeechVerification(for: providerID) }
+            if error == .authentication { store.clearSpeechVerification(for: providerID, rejectedKey: apiKey) }
             return .failure(error.message(providerName: name))
         } catch {
             return .failure(error.localizedDescription)
         }
     }
+
+    static let keyChangedMessage = "The key changed during the check. Verify again."
 }
 
 /// The AI Providers rows and the actions of providers without Text, which use only the key store:

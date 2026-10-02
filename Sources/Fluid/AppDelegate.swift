@@ -243,6 +243,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DispatchQueue.global(qos: .utility).async {
             try? KeychainService.shared.refreshCachedKeys()
         }
+        // A key migration a locked Keychain deferred at launch is retried here, never on a key read.
+        SettingsStore.shared.retryProviderKeyMigrationIfDue()
         if let deadline = self.analyticsActivationSuppressionDeadline, Date() <= deadline {
             self.analyticsActivationSuppressionDeadline = nil
         } else {

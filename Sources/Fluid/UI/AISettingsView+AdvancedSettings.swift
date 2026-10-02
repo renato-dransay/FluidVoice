@@ -496,6 +496,10 @@ extension AIEnhancementSettingsView {
     }
 
     private func preparePromptEditorConfigurationDraft(mode: PromptEditorMode) {
+        if let resumed = self.viewModel.consumeResumedPromptEditor(for: mode) {
+            self.resumePromptEditorConfigurationDraft(resumed)
+            return
+        }
         self.promptEditorPrimarySelectionDraft = self.viewModel.dictationPromptSelection(for: .primary)
 
         if case .newPrompt = mode {
@@ -512,6 +516,22 @@ extension AIEnhancementSettingsView {
         if mode.isDefault, let promptMode = mode.mode {
             self.viewModel.draftPromptMode = promptMode.normalized
         }
+    }
+
+    /// A reopened editor gets back the drafts it had, and the shortcut recorded in it is live again, as
+    /// it was before the editor was set aside. Cancel still returns to the configuration it opened with.
+    private func resumePromptEditorConfigurationDraft(_ editor: SuspendedPromptEditor) {
+        self.promptEditorPrimarySelectionDraft = editor.primarySelectionDraft
+        self.promptEditorShortcutDraft = editor.shortcutDraft
+        self.promptEditorOriginalConfiguration = editor.originalConfiguration
+        guard let selection = self.promptEditorSelection(for: editor.mode),
+              editor.shortcutDraft != editor.originalConfiguration?.shortcut
+        else { return }
+        self.settings.setDictationPromptConfiguration(
+            SettingsStore.DictationPromptConfiguration(shortcut: editor.shortcutDraft),
+            for: selection
+        )
+        NotificationCenter.default.post(name: .dictationPromptShortcutsChanged, object: nil)
     }
 
     private func applyPromptEditorConfigurationDraft(mode: PromptEditorMode) {
@@ -785,10 +805,28 @@ extension AIEnhancementSettingsView {
     }
 
     /// Opens AI Providers on the default text provider, or on the Add sheet for text providers when
-    /// there is none, instead of a second copy of the provider list in a sheet. The style editor closes.
+    /// there is none, instead of a second copy of the provider list in a sheet. The style editor is set
+    /// aside with its draft and reopens when Cleanup Styles shows again (`Back to Cleanup Styles`). A
+    /// shortcut recorded in it goes back to the stored one meanwhile, so nothing is half saved.
     private func openAIProvidersForCleanupStyles() {
         let providerID = self.defaultExternalPromptProviderID
-        self.viewModel.closePromptEditor()
+        if let mode = self.viewModel.promptEditorMode {
+            let editor = SuspendedPromptEditor(
+                mode: mode,
+                name: self.viewModel.draftPromptName,
+                text: self.viewModel.draftPromptText,
+                promptMode: self.viewModel.draftPromptMode,
+                includeContext: self.viewModel.draftIncludeContext,
+                pendingNewPromptConfiguration: self.viewModel.pendingNewPromptConfiguration,
+                primarySelectionDraft: self.promptEditorPrimarySelectionDraft,
+                shortcutDraft: self.promptEditorShortcutDraft,
+                originalConfiguration: self.promptEditorOriginalConfiguration
+            )
+            self.restorePromptEditorConfigurationDraft(mode: mode)
+            self.viewModel.suspendPromptEditor(editor)
+        } else {
+            self.viewModel.closePromptEditor()
+        }
         AppNavigationRouter.shared.request(
             providerID.isEmpty
                 ? .addProvider(capability: .text, origin: .cleanupStyles)

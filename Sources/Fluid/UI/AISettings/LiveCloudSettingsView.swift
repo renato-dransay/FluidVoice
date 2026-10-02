@@ -173,7 +173,7 @@ struct LiveCloudSettingsView: View {
                     Task { await self.viewModel.activateLiveProvider(provider) }
                 }
                 .fluidGlassAction(quiet: true)
-                .disabled(!hasKey || needsLanguage || self.viewModel.areSpeechModelActionsBlocked || self.viewModel.liveProviderBeingChecked != nil)
+                .disabled(!hasKey || needsLanguage || self.viewModel.areSpeechModelActionsBlocked || self.viewModel.isEngineCheckRunning)
                 .help(self.activateHelp(hasKey: hasKey, needsLanguage: needsLanguage))
             }
             Button("Manage") { self.managedProvider = provider }

@@ -49,7 +49,7 @@ struct CloudEngineActivation {
         } catch {
             let rejected = (error as? CloudTranscriptionError) == .authentication
             if rejected {
-                self.keyStore.clearSpeechVerification(for: providerID)
+                self.keyStore.clearSpeechVerification(for: providerID, rejectedKey: apiKey)
             }
             return .failed(message: Self.failure(name, CloudTranscriptionError.message(for: error, providerName: name)), keyRejected: rejected)
         }
@@ -60,7 +60,7 @@ struct CloudEngineActivation {
         guard self.keyStore.speechAPIKey(for: providerID) == apiKey else {
             return .failed(message: Self.failure(name, CloudActivationError.settingsChanged.localizedDescription), keyRejected: false)
         }
-        self.keyStore.recordSpeechVerification(for: providerID)
+        self.keyStore.recordSpeechVerification(for: providerID, checkedKey: apiKey)
         var live = LiveTranscriptionPreferences(defaults: self.keyStore.defaults)
         live.activeProvider = nil
         var cloud = CloudTranscriptionPreferences(defaults: self.keyStore.defaults)

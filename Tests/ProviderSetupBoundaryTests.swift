@@ -19,6 +19,25 @@ struct ModelRepository {
     static let shared = ModelRepository()
     func isBuiltIn(_ id: String) -> Bool { ["openai", "ollama", "fluid"].contains(id) }
     func defaultModels(for id: String) -> [String] { ["default-model"] }
+    func isLocalEndpoint(_ url: String) -> Bool { url.hasPrefix("http://localhost") || url.hasPrefix("http://127.0.0.1") }
+}
+
+/// Built-in OpenAI requires a key; Ollama and custom providers take an optional one.
+enum AIProviderCatalog {
+    static func requiresAPIKey(_ id: String) -> Bool { id == "openai" }
+}
+
+enum ProviderAPIKeySaveError: Error {
+    case readbackMismatch
+}
+
+struct KeychainFailure: Error {}
+
+enum AIConnectionStatus: Equatable {
+    case unknown
+    case testing
+    case success
+    case failed
 }
 
 final class SettingsStore {
@@ -45,6 +64,29 @@ final class SettingsStore {
     var selectedModelByProvider: [String: String] = [:]
     var dictationPromptConfigurations: [String: Configuration] = [:]
     var verifiedProviderFingerprints: [String: String] = [:]
+
+    /// The Keychain behind the single write path: each provider's own entry, plus the providers that
+    /// also have another entry (a separate speech key or an old voice entry).
+    var storedKeys: [String: String] = [:]
+    var otherKeyEntries: Set<String> = []
+    var failKeychain = false
+    var keyWrites = 0
+    var providerAPIKeys: [String: String] { self.storedKeys }
+
+    func setProviderAPIKey(_ key: String?, for id: String) throws {
+        self.keyWrites += 1
+        if self.failKeychain { throw KeychainFailure() }
+        if let key, !key.isEmpty {
+            self.storedKeys[id] = key
+        } else {
+            self.storedKeys.removeValue(forKey: id)
+        }
+        self.otherKeyEntries.remove(id)
+    }
+
+    func hasAnyProviderKeyEntry(for id: String) -> Bool {
+        self.storedKeys[id] != nil || self.otherKeyEntries.contains(id)
+    }
 }
 
 final class AIEnhancementSettingsViewModel {
@@ -57,7 +99,14 @@ final class AIEnhancementSettingsViewModel {
     let settings = SettingsStore()
     var isTestingConnection = false
     var isFetchingModels = false
-    var selectedProviderID = "openai"
+    private var persistsSelectedProvider = true
+    /// Persisted to the settings like production's, except while a provider is only configured.
+    var selectedProviderID = "openai" {
+        didSet {
+            if self.persistsSelectedProvider { self.settings.selectedProviderID = self.selectedProviderID }
+        }
+    }
+
     var managedOriginalKey: String?
     var fetchedModelsProviders: Set<String> = []
     var providerAPIKeys: [String: String] = [:]
@@ -65,25 +114,44 @@ final class AIEnhancementSettingsViewModel {
     var availableModelsByProvider: [String: [String]] = [:]
     var selectedModelByProvider: [String: String] = ["fluid": "mini"]
     var cachedAddedProviderItems: [ProviderItemData] = []
-    var failKeychain = false
+    var connectionStatus: AIConnectionStatus = .unknown
+    var connectionStatusByProvider: [String: AIConnectionStatus] = [:]
+    /// What the stubbed text check answers, and how many it sent.
+    var verificationPasses = false
+    var verificationRequests = 0
     var saves = 0
-    var keySaves = 0
-    var persistedKeys: [String: String] = [:]
+    var failKeychain: Bool {
+        get { self.settings.failKeychain }
+        set { self.settings.failKeychain = newValue }
+    }
+
+    /// Keychain writes attempted through the single write path.
+    var keySaves: Int { self.settings.keyWrites }
+    var persistedKeys: [String: String] { self.settings.storedKeys }
     func providerKey(for id: String) -> String { id }
     func providerAPIKey(for id: String) -> String { self.providerAPIKeys[id] ?? "" }
     func updateProviderAPIKey(_ value: String, for id: String) { self.providerAPIKeys[id] = value }
-    /// Mirrors the production save: one provider's entry goes through the single write path; an empty
-    /// draft removes it. Other providers' drafts are never written by it.
-    func saveProviderAPIKey(for id: String? = nil, allowsRemoval: Bool = false) -> Bool {
-        self.keySaves += 1
-        guard !self.failKeychain else { return false }
-        let key = id ?? self.selectedProviderID
-        if let value = self.providerAPIKeys[key], !value.isEmpty {
-            self.persistedKeys[key] = value
-        } else {
-            self.persistedKeys.removeValue(forKey: key)
-        }
-        return true
+    func textProviderBaseURL(for id: String) -> String {
+        if let saved = self.savedProviders.first(where: { $0.id == id }) { return saved.baseURL }
+        return ["openai": "https://api.openai.com/v1", "ollama": "http://localhost:11434/v1"][id] ?? ""
+    }
+
+    func invalidateVerification(for id: String) { self.settings.verifiedProviderFingerprints.removeValue(forKey: id) }
+    func invalidateVerificationIfNeeded(for id: String) {}
+    func showKeychainPersistenceFailure(_ error: Error) {}
+    func isSpeechOnlyProvider(_ id: String) -> Bool { id == "deepgram" }
+    func canUseProviderWithoutVerification(_ id: String) -> Bool { true }
+    func connectionStatus(for id: String) -> AIConnectionStatus { self.connectionStatusByProvider[id] ?? .unknown }
+    func configureProvider(_ id: String) {
+        self.persistsSelectedProvider = false
+        self.selectedProviderID = id
+        self.persistsSelectedProvider = true
+    }
+
+    func handleProviderChange(_ id: String) {}
+    func testAPIConnection() async {
+        self.verificationRequests += 1
+        self.connectionStatusByProvider[self.selectedProviderID] = self.verificationPasses ? .success : .failed
     }
 
     func hasProviderAPIKeyDraft(for id: String) -> Bool { self.providerAPIKeys[id] != nil }
@@ -99,13 +167,18 @@ final class AIEnhancementSettingsViewModel {
 
     func saveSavedProviders() { self.saves += 1; self.refreshProviderItems() }
     func clearEditProviderDraft() {}
-    func finishConfiguringProvider() { self.selectedProviderID = self.settings.selectedProviderID }
+    func finishConfiguringProvider() {
+        self.persistsSelectedProvider = false
+        self.selectedProviderID = self.settings.selectedProviderID
+        self.persistsSelectedProvider = true
+    }
+
     func refreshVerifiedProviders() {}
     func selectSoleVerifiedProviderIfNeeded() {}
 }
 
 @main enum ProviderSetupBoundaryTests {
-    static func main() throws {
+    static func main() async throws {
         var count = 0
         func check(_ value: Bool, _ message: String) {
             precondition(value, message)
@@ -239,6 +312,7 @@ final class AIEnhancementSettingsViewModel {
         )
         let removal = AIEnhancementSettingsViewModel()
         removal.providerAPIKeys = ["openai": "remove-key", "other": "keep-key"]
+        removal.settings.storedKeys = ["openai": "remove-key", "other": "keep-key"]
         removal.settings.dictationPromptConfigurations = [
             "affected": .init(providerID: "openai"),
             "unrelated": .init(providerID: "other"),
@@ -305,6 +379,70 @@ final class AIEnhancementSettingsViewModel {
         closing.isTestingConnection = true
         check(!closing.saveManagedProviderBeforeClosing("ollama"), "Busy editor cannot dismiss")
         check(manager.contains(".interactiveDismissDisabled()"), "Interactive dismissal cannot bypass failed persistence")
+
+        // KEY-6: emptying the key field removes nothing for a provider that needs a key.
+        let key6 = AIEnhancementSettingsViewModel()
+        key6.settings.storedKeys = ["openai": "kept-key"]
+        key6.providerAPIKeys["openai"] = ""
+        check(
+            key6.saveProviderAPIKey(for: "openai") && key6.persistedKeys["openai"] == "kept-key" && key6.providerAPIKeys["openai"] == "kept-key",
+            "Emptying a required key's field keeps the saved key"
+        )
+        check(key6.keySaves == 0, "Keeping the saved key writes nothing")
+        let remote = SettingsStore.SavedProvider(name: "Remote", baseURL: "https://llm.example.com/v1", models: [])
+        key6.savedProviders.append(remote)
+        key6.settings.storedKeys[remote.id] = "remote-key"
+        key6.providerAPIKeys[remote.id] = ""
+        check(
+            key6.saveProviderAPIKey(for: remote.id) && key6.persistedKeys[remote.id] == "remote-key",
+            "A custom provider on a remote server keeps its key when the field is emptied"
+        )
+        let local = SettingsStore.SavedProvider(name: "Local", baseURL: "http://localhost:1234/v1", models: [])
+        key6.savedProviders.append(local)
+        key6.settings.storedKeys[local.id] = "local-key"
+        key6.providerAPIKeys[local.id] = ""
+        check(
+            key6.saveProviderAPIKey(for: local.id) && key6.persistedKeys[local.id] == nil,
+            "A local server's optional key goes with an emptied field"
+        )
+        // `Remove key` empties the draft first, as `removeProviderAPIKey` does.
+        key6.providerAPIKeys.removeValue(forKey: "openai")
+        check(
+            key6.saveProviderAPIKey(for: "openai", allowsRemoval: true) && key6.persistedKeys["openai"] == nil,
+            "Remove key still removes a required key"
+        )
+        key6.settings.otherKeyEntries = ["openrouter"]
+        let writesBeforeSpeechOnlyEntry = key6.keySaves
+        check(
+            key6.saveProviderAPIKey(for: "openrouter", allowsRemoval: true) && key6.keySaves == writesBeforeSpeechOnlyEntry + 1
+                && key6.settings.otherKeyEntries.isEmpty,
+            "Removal writes when only a separate speech key or an old voice entry exists"
+        )
+        let writesBeforeNothing = key6.keySaves
+        check(
+            key6.saveProviderAPIKey(for: "groq", allowsRemoval: true) && key6.keySaves == writesBeforeNothing,
+            "Removal of a provider with no entry at all writes nothing"
+        )
+
+        // VER-4 and AIP-7, through the production makeDefaultTextProvider.
+        let defaults = AIEnhancementSettingsViewModel()
+        defaults.settings.selectedProviderID = "anthropic"
+        defaults.selectedProviderID = "anthropic"
+        let stylesBefore = defaults.settings.dictationPromptConfigurations
+        defaults.verificationPasses = false
+        let failedDefault = await defaults.makeDefaultTextProvider("openai")
+        check(!failedDefault && defaults.settings.selectedProviderID == "anthropic", "A failed check leaves the default text provider")
+        check(defaults.connectionStatus(for: "openai") == .failed && defaults.verificationRequests == 1, "The unverified provider was checked once and shows the failure")
+        check(defaults.selectedProviderID == "anthropic", "The list goes back to the default after a row's check")
+        defaults.verificationPasses = true
+        let passedDefault = await defaults.makeDefaultTextProvider("openai")
+        check(passedDefault && defaults.settings.selectedProviderID == "openai", "A passed check makes the provider the default")
+        defaults.connectionStatusByProvider["ollama"] = .success
+        let verifiedDefault = await defaults.makeDefaultTextProvider("ollama")
+        check(verifiedDefault && defaults.settings.selectedProviderID == "ollama" && defaults.verificationRequests == 2, "A verified provider becomes the default without a request")
+        check(defaults.settings.dictationPromptConfigurations == stylesBefore, "Changing the default text provider leaves every Cleanup Style alone")
+        let speechOnlyDefault = await defaults.makeDefaultTextProvider("deepgram")
+        check(!speechOnlyDefault && defaults.settings.selectedProviderID == "ollama", "A speech-only provider never becomes the text default")
         let historySource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
         // Inspect only the request type and its inputs. Unrelated properties may
         // legitimately sit between these declarations and the filtered list.

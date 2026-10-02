@@ -41,11 +41,19 @@ struct VoiceEngineSettingsView: View {
             case .local: self.speechRecognitionCard
             }
         }
-            .onAppear { self.viewModel.onAppear(requestedTab: AppNavigationRouter.shared.consumeRequestedVoiceEngineTab()) }
+            .onAppear {
+                self.viewModel.onAppear(
+                    requestedTab: AppNavigationRouter.shared.consumeRequestedVoiceEngineTab(),
+                    requestedCloudProviderID: AppNavigationRouter.shared.consumeRequestedCloudProviderID()
+                )
+            }
             // Already on Voice Engine: a request for one of its tabs switches the browsed tab.
             .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
                 if let tab = AppNavigationRouter.shared.consumeRequestedVoiceEngineTab() {
                     self.viewModel.browsedSpeechExecutionSource = tab
+                }
+                if let providerID = AppNavigationRouter.shared.consumeRequestedCloudProviderID() {
+                    self.viewModel.browsedCloudProviderID = providerID
                 }
             }
             .onChange(of: self.settings.speechExecutionSource) { _, _ in

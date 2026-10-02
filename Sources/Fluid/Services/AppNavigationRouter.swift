@@ -29,6 +29,15 @@ enum ProviderSetupOrigin: Equatable {
         case .fileTranscription: .fileTranscription
         }
     }
+
+    /// Where `Back to …` goes after `providerID` was set up or managed. Back on the Cloud tab, that
+    /// provider is the one shown, not the stored Cloud provider.
+    func returnDestination(providerID: String?) -> AppNavigationDestination {
+        if case .voiceEngine(tab: .cloud) = self, let providerID, !providerID.isEmpty {
+            return .voiceEngine(tab: .cloud, cloudProviderID: providerID)
+        }
+        return self.returnDestination
+    }
 }
 
 enum AppNavigationDestination: Equatable {
@@ -43,8 +52,9 @@ enum AppNavigationDestination: Equatable {
     case aiProvider(id: String, origin: ProviderSetupOrigin?)
     /// AI Providers, adding a provider, optionally limited to one capability.
     case addProvider(capability: ProviderCapability?, origin: ProviderSetupOrigin?)
-    /// Voice Engine, browsing the given tab, or the active engine's tab when nil.
-    case voiceEngine(tab: SpeechExecutionSource?)
+    /// Voice Engine, browsing the given tab, or the active engine's tab when nil. On the Cloud tab,
+    /// `cloudProviderID` is the provider shown when one is given.
+    case voiceEngine(tab: SpeechExecutionSource?, cloudProviderID: String? = nil)
 
     /// The app page the destination opens, or nil for a destination inside Settings.
     var sidebarItem: SidebarItem? {
@@ -87,16 +97,19 @@ enum ProviderSheetRoute: Equatable {
 struct AppNavigationRequests: Equatable {
     private var pendingDestination: AppNavigationDestination?
     private var pendingVoiceEngineTab: SpeechExecutionSource?
+    private var pendingCloudProviderID: String?
     private var pendingProviderSetup: AppNavigationDestination?
 
     mutating func request(_ destination: AppNavigationDestination) {
         self.pendingDestination = destination
         // A later request to another page drops a tab or a provider request nobody read.
         self.pendingVoiceEngineTab = nil
+        self.pendingCloudProviderID = nil
         self.pendingProviderSetup = nil
         switch destination {
-        case let .voiceEngine(tab):
+        case let .voiceEngine(tab, cloudProviderID):
             self.pendingVoiceEngineTab = tab
+            self.pendingCloudProviderID = cloudProviderID
         case .aiProvider, .addProvider:
             self.pendingProviderSetup = destination
         default:
@@ -118,6 +131,11 @@ struct AppNavigationRequests: Equatable {
     mutating func consumeVoiceEngineTab() -> SpeechExecutionSource? {
         defer { self.pendingVoiceEngineTab = nil }
         return self.pendingVoiceEngineTab
+    }
+
+    mutating func consumeCloudProviderID() -> String? {
+        defer { self.pendingCloudProviderID = nil }
+        return self.pendingCloudProviderID
     }
 }
 
@@ -141,6 +159,11 @@ final class AppNavigationRouter {
     /// The Voice Engine tab a request asked for, once; the page browses it instead of the active engine's tab.
     func consumeRequestedVoiceEngineTab() -> SpeechExecutionSource? {
         self.requests.consumeVoiceEngineTab()
+    }
+
+    /// The Cloud provider a request asked the Cloud tab to show, once.
+    func consumeRequestedCloudProviderID() -> String? {
+        self.requests.consumeCloudProviderID()
     }
 
     /// The provider request AI Providers should open as a sheet, once.

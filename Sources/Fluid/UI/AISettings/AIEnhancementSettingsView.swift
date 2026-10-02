@@ -86,18 +86,17 @@ struct AIEnhancementSettingsView: View {
                 self.privateAIController.refreshPrivateAILoadState()
                 self.privateAIController.refreshPrivateAIModelUpdateStatus(self.privateAIController.selectedPrivateAIModel)
                 self.openRequestedProviderSheet()
+                self.resumeSuspendedPromptEditorIfNeeded()
             }
             // Already on AI Providers: a provider request opens its sheet here.
             .onReceive(NotificationCenter.default.publisher(for: .appNavigationRequested)) { _ in
                 self.openRequestedProviderSheet()
             }
-            // Arriving from Cleanup Styles, whose editor sheet is still closing: macOS drops a sheet
-            // presented while another dismisses, so the provider sheet opens a moment later.
+            // Arriving from Cleanup Styles: the request waited while that section was shown.
             .onChange(of: self.selectedConfigurationSection) { _, section in
-                guard section == .providers else { return }
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(400))
-                    self.openRequestedProviderSheet()
+                switch section {
+                case .providers: self.openRequestedProviderSheet()
+                case .advancedPrompts: self.resumeSuspendedPromptEditorIfNeeded()
                 }
             }
             .onChange(of: self.viewModel.connectionStatus) { oldValue, newValue in
@@ -160,23 +159,66 @@ struct PendingProviderRemoval: Equatable {
 }
 
 extension AIEnhancementSettingsView {
-    /// Opens the sheet a navigation request asked for, once (NAV-2, NAV-3). Waits while another page
-    /// of this view is shown; the section change brings it back here.
+    /// Opens the sheet a navigation request asked for, once (NAV-2, NAV-3). The request waits while
+    /// another section of this view is shown; the section change brings it back here. Otherwise it is
+    /// consumed at once: while a provider sheet is already open here it expires instead of opening later
+    /// unprompted. The sheet is presented once no other sheet is shown (the request often comes from a
+    /// sheet that is still closing, and macOS drops a sheet presented meanwhile); a presentation that
+    /// was dropped anyway resets the state, so it never blocks a later request, and is tried once more.
     func openRequestedProviderSheet() {
         guard self.selectedConfigurationSection == .providers,
-              self.addProviderRequest == nil, self.managedExternalProviderID == nil,
-              let destination = AppNavigationRouter.shared.consumeRequestedProviderSetup(),
+              let destination = AppNavigationRouter.shared.consumeRequestedProviderSetup()
+        else { return }
+        guard !self.isProviderSheetOpen,
               let route = ProviderSheetRoute.route(
                   for: destination,
                   connectedProviderIDs: Set(self.viewModel.cachedAddedProviderItems.map(\.id))
               )
         else { return }
+        Task { @MainActor in
+            for _ in 0 ..< 2 {
+                _ = await SheetPresentationGate.waitUntilNoSheet()
+                guard self.selectedConfigurationSection == .providers, !self.isProviderSheetOpen else { return }
+                self.presentProviderSheet(route)
+                if await SheetPresentationGate.waitForSheet() { return }
+                self.resetDroppedProviderSheet()
+            }
+        }
+    }
+
+    /// Back on Cleanup Styles, the style editor "Set up AI provider" set aside reopens with its draft,
+    /// once the provider sheet has closed.
+    func resumeSuspendedPromptEditorIfNeeded() {
+        guard self.selectedConfigurationSection == .advancedPrompts, self.viewModel.suspendedPromptEditor != nil else { return }
+        Task { @MainActor in
+            _ = await SheetPresentationGate.waitUntilNoSheet()
+            guard self.selectedConfigurationSection == .advancedPrompts else { return }
+            self.viewModel.resumeSuspendedPromptEditor()
+        }
+    }
+
+    var isProviderSheetOpen: Bool {
+        self.addProviderRequest != nil || self.managedExternalProviderID != nil
+    }
+
+    private func presentProviderSheet(_ route: ProviderSheetRoute) {
         switch route {
         case let .manage(providerID, origin):
             self.openProviderManager(providerID, origin: origin)
         case let .add(capability, providerID, origin):
             self.addProviderRequest = AddProviderRequest(capability: capability, providerID: providerID, origin: origin)
         }
+    }
+
+    /// A sheet macOS never showed leaves no state behind: no configured text provider, no open request.
+    private func resetDroppedProviderSheet() {
+        if let providerID = self.managedExternalProviderID, !self.viewModel.isSpeechOnlyProvider(providerID) {
+            self.viewModel.finishConfiguringProvider()
+        }
+        self.managedExternalProviderID = nil
+        self.managedProviderOrigin = nil
+        self.managedProviderResult = nil
+        self.addProviderRequest = nil
     }
 
     func openProviderManager(_ providerID: String, origin: ProviderSetupOrigin?) {

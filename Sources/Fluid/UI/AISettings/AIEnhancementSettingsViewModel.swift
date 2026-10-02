@@ -126,6 +126,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var draftIncludeContext: Bool = false
     @Published var promptEditorSessionID: UUID = .init()
     @Published var pendingNewPromptConfiguration: SettingsStore.DictationPromptConfiguration?
+    /// The Cleanup Style editor "Set up AI provider" set aside, reopened with its draft when Cleanup
+    /// Styles shows again.
+    private(set) var suspendedPromptEditor: SuspendedPromptEditor?
+    /// The set-aside editor just reopened; its sheet takes its configuration drafts once.
+    private var resumedPromptEditor: SuspendedPromptEditor?
 
     // Prompt Deletion UI
     @Published var showingDeletePromptConfirm: Bool = false
@@ -454,6 +459,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func configureProvider(_ providerID: String) {
+        // A model refresh error belongs to the provider it was fetched for.
+        self.fetchModelsError = nil
         self.managedOriginalKey = self.providerAPIKey(for: providerID)
         self.persistsSelectedProvider = false
         self.selectProviderForUse(providerID)
@@ -462,6 +469,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func finishConfiguringProvider() {
+        self.fetchModelsError = nil
         self.persistsSelectedProvider = false
         self.selectProviderForUse(self.settings.selectedProviderID)
         self.persistsSelectedProvider = true
@@ -501,8 +509,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     /// Persists one provider's key draft through `SettingsStore.setProviderAPIKey`, the single write
     /// path. Other providers' drafts are not written. An unchanged key is not written again, so saving
     /// before a model refresh or a check keeps its verification. An empty draft removes the key only
-    /// when `allowsRemoval` is set (`Remove key`, `Remove provider`) or the provider's key is optional:
-    /// emptying the field of a provider that requires a key keeps the saved key.
+    /// when `allowsRemoval` is set (`Remove key`, `Remove provider`) or the provider is reached at a
+    /// local server: emptying the field of any other provider keeps the saved key (KEY-6). A removal
+    /// writes whenever the provider has any entry (its key, a separate speech key or an old voice entry).
     @discardableResult
     func saveProviderAPIKey(for providerID: String? = nil, allowsRemoval: Bool = false) -> Bool {
         let target = providerID ?? self.selectedProviderID
@@ -511,14 +520,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let draft = self.providerAPIKey(for: target).trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let stored = (self.settings.providerAPIKeys[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if draft.isEmpty, !stored.isEmpty, !allowsRemoval, AIProviderCatalog.requiresAPIKey(target) {
+            let keepsSavedKey = Self.keepsSavedKeyWhenFieldIsEmptied(
+                requiresAPIKey: AIProviderCatalog.requiresAPIKey(target),
+                isLocalServer: ModelRepository.shared.isLocalEndpoint(self.textProviderBaseURL(for: target))
+            )
+            if draft.isEmpty, !stored.isEmpty, !allowsRemoval, keepsSavedKey {
                 self.providerAPIKeys[key] = stored
                 if target == self.selectedProviderID, self.managedOriginalKey != nil {
                     self.managedOriginalKey = stored
                 }
                 return true
             }
-            if draft != stored {
+            let removesOtherEntries = draft.isEmpty && allowsRemoval && self.settings.hasAnyProviderKeyEntry(for: key)
+            if draft != stored || removesOtherEntries {
                 try self.settings.setProviderAPIKey(draft.isEmpty ? nil : draft, for: key)
                 guard (self.settings.providerAPIKeys[key] ?? "") == draft else {
                     throw ProviderAPIKeySaveError.readbackMismatch
@@ -541,6 +555,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.showKeychainPersistenceFailure(error)
             return false
         }
+    }
+
+    /// KEY-6: emptying the key field keeps the saved key for every provider that needs one: a registry
+    /// provider that requires a key, and any provider whose server is not local (a custom remote provider
+    /// too). Only a local server's optional key goes with an emptied field.
+    static func keepsSavedKeyWhenFieldIsEmptied(requiresAPIKey: Bool, isLocalServer: Bool) -> Bool {
+        requiresAPIKey || !isLocalServer
     }
 
     func createDraftProvider(named name: String) -> String? {
@@ -1166,6 +1187,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let previousKeys = self.providerAPIKeys
         let persistedKey = self.managedOriginalKey ?? self.providerAPIKey(for: deletedProviderID)
         let hadPersistedKey = !persistedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || self.settings.hasAnyProviderKeyEntry(for: key)
         self.providerAPIKeys.removeValue(forKey: key)
         if key != deletedProviderID {
             self.providerAPIKeys.removeValue(forKey: deletedProviderID)
@@ -1454,13 +1476,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func fingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         // Only require baseURL - API key can be empty for local providers (Ollama, LM Studio, etc.)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        TextVerificationRecord.fingerprint(baseURL: baseURL, apiKey: apiKey)
     }
 
     private func privateAIFingerprint(for modelID: String) -> String {
@@ -1477,11 +1494,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func storeVerificationFingerprint(for providerID: String, baseURL: String, apiKey: String) {
-        guard let fingerprint = self.fingerprint(baseURL: baseURL, apiKey: apiKey) else { return }
-        let key = self.providerKey(for: providerID)
-        var fingerprints = self.settings.verifiedProviderFingerprints
-        fingerprints[key] = fingerprint
-        self.settings.verifiedProviderFingerprints = fingerprints
+        guard self.fingerprint(baseURL: baseURL, apiKey: apiKey) != nil else { return }
+        self.settings.verifiedProviderFingerprints = TextVerificationRecord.recording(
+            self.settings.verifiedProviderFingerprints,
+            providerKey: self.providerKey(for: providerID),
+            baseURL: baseURL,
+            apiKey: apiKey
+        )
         self.updateConnectionStatus(.success, for: providerID)
         self.clearConnectionError(for: providerID)
     }
@@ -1501,9 +1520,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     /// True when the text verification record matches this provider's current server and key.
     func isTextVerified(_ providerID: String) -> Bool {
-        let key = self.providerKey(for: providerID)
-        guard let stored = self.settings.verifiedProviderFingerprints[key] else { return false }
-        return self.fingerprint(baseURL: self.providerBaseURL(for: providerID), apiKey: self.providerAPIKey(for: providerID)) == stored
+        TextVerificationRecord.isVerified(
+            self.settings.verifiedProviderFingerprints,
+            providerKey: self.providerKey(for: providerID),
+            baseURL: self.providerBaseURL(for: providerID),
+            apiKey: self.providerAPIKey(for: providerID)
+        )
     }
 
     static func connectionStatusAfterModelChange(isTextVerified: Bool) -> AIConnectionStatus {
@@ -1709,6 +1731,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func openDefaultPromptViewer(for mode: SettingsStore.PromptMode) {
+        self.suspendedPromptEditor = nil
+        self.resumedPromptEditor = nil
         let normalizedMode = mode.normalized
         self.draftPromptMode = normalizedMode
         self.draftIncludeContext = (normalizedMode == .edit)
@@ -1723,6 +1747,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func openNewPromptEditor(prefillMode: SettingsStore.PromptMode = .edit) {
+        self.suspendedPromptEditor = nil
+        self.resumedPromptEditor = nil
         self.draftPromptMode = prefillMode.normalized
         self.draftIncludeContext = (self.draftPromptMode == .edit)
         self.draftPromptName = ""
@@ -1733,6 +1759,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func openPrivateAIPromptEditor() {
+        self.suspendedPromptEditor = nil
+        self.resumedPromptEditor = nil
         self.draftPromptMode = .dictate
         self.draftPromptName = PrivateAIProviderFeature.displayName
         self.draftPromptText = ""
@@ -1741,12 +1769,45 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func openEditor(for profile: SettingsStore.DictationPromptProfile) {
+        self.suspendedPromptEditor = nil
+        self.resumedPromptEditor = nil
         self.draftPromptMode = profile.mode.normalized
         self.draftIncludeContext = (self.draftPromptMode == .edit) ? true : profile.includeContext
         self.draftPromptName = profile.name
         self.draftPromptText = SettingsStore.customPromptBody(profile.prompt, mode: self.draftPromptMode)
         self.promptEditorSessionID = UUID()
         self.promptEditorMode = .edit(promptID: profile.id)
+    }
+
+    /// Closes the editor but keeps its draft, to reopen it after a provider is set up. The caller has
+    /// already put the style's stored configuration back, so nothing is half saved meanwhile.
+    func suspendPromptEditor(_ editor: SuspendedPromptEditor) {
+        self.suspendedPromptEditor = editor
+        self.promptEditorMode = nil
+        self.promptTest.deactivate()
+    }
+
+    /// Reopens the editor "Set up AI provider" set aside, with its draft. False when there is none.
+    @discardableResult
+    func resumeSuspendedPromptEditor() -> Bool {
+        guard let editor = self.suspendedPromptEditor, self.promptEditorMode == nil else { return false }
+        self.suspendedPromptEditor = nil
+        self.draftPromptName = editor.name
+        self.draftPromptText = editor.text
+        self.draftPromptMode = editor.promptMode
+        self.draftIncludeContext = editor.includeContext
+        self.pendingNewPromptConfiguration = editor.pendingNewPromptConfiguration
+        self.resumedPromptEditor = editor
+        self.promptEditorSessionID = UUID()
+        self.promptEditorMode = editor.mode
+        return true
+    }
+
+    /// The reopened editor's configuration drafts, once, for the sheet of that editor.
+    func consumeResumedPromptEditor(for mode: PromptEditorMode) -> SuspendedPromptEditor? {
+        guard let editor = self.resumedPromptEditor, editor.mode == mode else { return nil }
+        self.resumedPromptEditor = nil
+        return editor
     }
 
     func closePromptEditor() {
@@ -2204,4 +2265,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         return SettingsStore.defaultPromptBodyText(for: mode)
     }
+}
+
+/// A Cleanup Style editor set aside while the user sets up a provider: the view model's drafts and the
+/// sheet's configuration drafts.
+struct SuspendedPromptEditor: Equatable {
+    let mode: PromptEditorMode
+    let name: String
+    let text: String
+    let promptMode: SettingsStore.PromptMode
+    let includeContext: Bool
+    let pendingNewPromptConfiguration: SettingsStore.DictationPromptConfiguration?
+    let primarySelectionDraft: SettingsStore.DictationPromptSelection?
+    let shortcutDraft: HotkeyShortcut?
+    /// The style's stored configuration when the editor opened, which Cancel goes back to.
+    let originalConfiguration: SettingsStore.DictationPromptConfiguration?
 }

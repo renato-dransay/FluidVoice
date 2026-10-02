@@ -71,14 +71,17 @@ nonisolated enum ProviderKeyMigration {
 extension ProviderKeyMigration {
     /// Runs the migration once. The flag is set only after the Keychain write succeeds, so a locked
     /// Keychain delays the migration to a later attempt instead of losing it. Returns true when the
-    /// flag is set afterwards.
+    /// flag is set afterwards. Callers attempt it on events only (launch, the app becoming active, a key
+    /// write), never on the read path: readers compute the migrated view in memory meanwhile.
     @MainActor
     @discardableResult
     static func runIfNeeded(defaults: UserDefaults, keychain: KeychainService) -> Bool {
         guard !defaults.bool(forKey: self.flagKey) else { return true }
         var received: [String] = []
+        var entriesBefore: [String: String] = [:]
         do {
             try keychain.updateKeys { entries in
+                entriesBefore = entries
                 let result = self.migrate(entries)
                 entries = result.entries
                 received = result.providersThatReceivedAKey
@@ -88,6 +91,7 @@ extension ProviderKeyMigration {
             return false
         }
         defaults.set(true, forKey: self.flagKey)
+        self.keepKeylessLiveEnginesLocal(entriesBefore: entriesBefore, defaults: defaults)
         // A text provider that gained a key is listed in AI Providers, like one the user added.
         let textProviders = received.filter { ProviderRegistry.descriptor(for: $0)?.capabilities.contains(.text) == true }
         if !textProviders.isEmpty {
@@ -98,6 +102,48 @@ extension ProviderKeyMigration {
             }
             defaults.set(added, forKey: key)
         }
+        return true
+    }
+
+    /// Before the migration, a live provider was usable only with its old voice entry: dictation with a
+    /// keyless live provider ran Local (`SpeechExecutionSource.effective`). After it, speech readers fall
+    /// back to the provider's text key, which would silently start streaming with an AI Providers key.
+    /// So a live provider that had no old voice entry is cleared, and the engine stays what it effectively
+    /// was: dictation on Local, FluidMeet on its local model.
+    static func keepKeylessLiveEnginesLocal(entriesBefore: [String: String], defaults: UserDefaults) {
+        func hadVoiceKey(_ provider: LiveTranscriptionProviderID) -> Bool {
+            !self.trimmed(entriesBefore[self.liveEntry(for: provider)]).isEmpty
+        }
+
+        var live = LiveTranscriptionPreferences(defaults: defaults)
+        if let active = live.activeProvider, !hadVoiceKey(active) {
+            var cloud = CloudTranscriptionPreferences(defaults: defaults)
+            if cloud.source == .liveCloud {
+                cloud.source = .local
+            }
+            live.activeProvider = nil
+        }
+
+        if let meetingProvider = SettingsStore.meetingLiveCloudProvider(in: defaults), !hadVoiceKey(meetingProvider) {
+            if SettingsStore.meetingTranscriptionBackendID(in: defaults) == .liveCloudNemotron {
+                SettingsStore.setMeetingTranscriptionBackendID(.parakeetNemotron, in: defaults)
+            }
+            SettingsStore.setMeetingLiveCloudProvider(nil, in: defaults)
+        }
+    }
+}
+
+/// Spaces the migration retries the app makes when it becomes active, so switching apps never runs a
+/// Keychain read and write more than once per interval.
+struct ProviderKeyMigrationRetryThrottle {
+    static let minimumInterval: TimeInterval = 30
+
+    private(set) var lastAttempt: Date?
+
+    /// True when an attempt may run now; records it as the last attempt.
+    mutating func shouldAttempt(at now: Date) -> Bool {
+        if let lastAttempt, now.timeIntervalSince(lastAttempt) < Self.minimumInterval { return false }
+        self.lastAttempt = now
         return true
     }
 }

@@ -11,13 +11,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     var asr: ASRService { self.appServices.asr }
 
     var areSpeechModelActionsBlocked: Bool {
-        self.asr.isRunning
-            || self.asr.activeExclusiveActivity != nil
-            || self.downloadingModel != nil
-            || self.asr.hasActiveModelDownload
-            || self.asr.hasActiveModelPreparation
-            || self.asr.isCancellingModelPreparation
-            || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
+        self.asr.blocksSpeechEngineChanges
     }
 
     @Published var modelSortOption: ModelSortOption = .provider
@@ -69,7 +63,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.asr.isCancellingModelDownload
     }
 
-    init(settings: SettingsStore, appServices: AppServices) {
+    /// The live key check Activate runs. Replaced only by tests, which must never contact a provider.
+    var liveKeyCheck: LiveEngineActivation.KeyCheck = { try await LiveTranscriptionKeyChecker.check(provider: $0, apiKey: $1) }
+
+    init(settings: SettingsStore, appServices: AppServices, notificationCenter: NotificationCenter = .default) {
         self.settings = settings
         self.appServices = appServices
         self.browsedSpeechExecutionSource = settings.speechExecutionSource
@@ -82,16 +79,20 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 }
             }
             .store(in: &self.cancellables)
-        NotificationCenter.default.publisher(for: .providerAPIKeyChanged)
+        notificationCenter.publisher(for: .providerAPIKeyChanged)
             .compactMap(ProviderAPIKeyChange.init)
             .sink { [weak self] change in self?.handleProviderAPIKeyChange(change) }
             .store(in: &self.cancellables)
     }
 
     /// Browses the active engine's tab, or the tab a navigation request asked for. A live provider selected
-    /// without its key browses Live cloud, where the missing key is shown (VE-2).
-    func onAppear(requestedTab: SpeechExecutionSource? = nil) {
+    /// without its key browses Live cloud, where the missing key is shown (VE-2). A requested Cloud provider
+    /// (one just set up from the Cloud tab) is the one the Cloud tab shows.
+    func onAppear(requestedTab: SpeechExecutionSource? = nil, requestedCloudProviderID: String? = nil) {
         self.browsedSpeechExecutionSource = Self.tabToBrowse(requested: requestedTab, activeEngine: self.settings.voiceEngineStatus.tab)
+        if let requestedCloudProviderID {
+            self.browsedCloudProviderID = requestedCloudProviderID
+        }
         self.previewSpeechModel = self.settings.selectedSpeechModel
         self.selectedSpeechProvider = self.settings.selectedSpeechModel.provider
 
@@ -107,15 +108,40 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     /// Status that described the old key no longer applies once a provider's key changes.
     func handleProviderAPIKeyChange(_ change: ProviderAPIKeyChange) {
-        if let live = ProviderRegistry.liveProviderID(for: change.providerID) {
-            self.liveActivationStatus[live] = nil
-            self.liveRejectedKeys.remove(live)
-        }
-        self.cloudActivationStatus[change.providerID] = nil
-        self.cloudRejectedKeys.remove(change.providerID)
-        if change.providerID == CloudTranscriptionPreferences.defaultProviderID {
+        var checks = EngineCheckResults(
+            liveActivationStatus: self.liveActivationStatus,
+            liveRejectedKeys: self.liveRejectedKeys,
+            cloudActivationStatus: self.cloudActivationStatus,
+            cloudRejectedKeys: self.cloudRejectedKeys
+        )
+        let clearsOpenRouterCatalogs = checks.forget(after: change)
+        self.liveActivationStatus = checks.liveActivationStatus
+        self.liveRejectedKeys = checks.liveRejectedKeys
+        self.cloudActivationStatus = checks.cloudActivationStatus
+        self.cloudRejectedKeys = checks.cloudRejectedKeys
+        if clearsOpenRouterCatalogs {
             self.clearValidatedOpenRouterCatalogs()
             self.cloudRefreshResult = nil
+        }
+    }
+
+    /// What the activation checks said about each provider's key, as the rows show it.
+    struct EngineCheckResults: Equatable {
+        var liveActivationStatus: [LiveTranscriptionProviderID: String]
+        var liveRejectedKeys: Set<LiveTranscriptionProviderID>
+        var cloudActivationStatus: [String: String]
+        var cloudRejectedKeys: Set<String>
+
+        /// Forgets what the checks said about the changed provider's old key. Returns true when the
+        /// provider is OpenRouter, whose listed (validated) catalogs then no longer apply either.
+        mutating func forget(after change: ProviderAPIKeyChange) -> Bool {
+            if let live = ProviderRegistry.liveProviderID(for: change.providerID) {
+                self.liveActivationStatus[live] = nil
+                self.liveRejectedKeys.remove(live)
+            }
+            self.cloudActivationStatus[change.providerID] = nil
+            self.cloudRejectedKeys.remove(change.providerID)
+            return change.providerID == CloudTranscriptionPreferences.defaultProviderID
         }
     }
 
@@ -325,7 +351,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         Self.cloudActivationBlocker(
             hasKey: !self.settings.speechAPIKey(for: providerID).isEmpty,
             hasModel: !self.settings.cloudTranscriptionModelID(for: providerID).isEmpty,
-            isBusy: self.areSpeechModelActionsBlocked || self.cloudProviderBeingChecked != nil || self.liveProviderBeingChecked != nil
+            isBusy: self.areSpeechModelActionsBlocked || self.isEngineCheckRunning
         )
     }
 
@@ -382,16 +408,30 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             )
             return
         }
-        let speechModelID = self.settings.cloudTranscriptionModelID
-        let styleModelID = self.settings.cloudDictationModelID
-        let listed = try await self.listOpenRouterModels(apiKey: apiKey)
+        try await Self.checkOpenRouter(
+            apiKey: apiKey,
+            selectedModels: { (self.settings.cloudTranscriptionModelID, self.settings.cloudDictationModelID) },
+            list: { try await self.listOpenRouterModels(apiKey: $0) }
+        )
+    }
+
+    /// OpenRouter's activation check (VE-5a): both catalogs are listed with the key, and the speech and
+    /// style models chosen when the check started must be on them and still chosen when it ends.
+    static func checkOpenRouter(
+        apiKey: String,
+        selectedModels: () -> (speech: String, style: String),
+        list: (String) async throws -> (speech: Set<String>, style: Set<String>)
+    ) async throws {
+        let chosen = selectedModels()
+        let listed = try await list(apiKey)
         try Task.checkCancellation()
-        guard self.settings.cloudTranscriptionModelID == speechModelID, self.settings.cloudDictationModelID == styleModelID else {
+        let current = selectedModels()
+        guard current.speech == chosen.speech, current.style == chosen.style else {
             throw CloudActivationError.settingsChanged
         }
-        let name = VoiceEngineStatus.providerName(providerID)
-        guard listed.speech.contains(speechModelID) else { throw CloudActivationError.speechModelUnavailable(providerName: name) }
-        guard listed.style.contains(styleModelID) else { throw CloudActivationError.styleModelUnavailable(providerName: name) }
+        let name = VoiceEngineStatus.providerName(CloudTranscriptionPreferences.defaultProviderID)
+        guard listed.speech.contains(chosen.speech) else { throw CloudActivationError.speechModelUnavailable(providerName: name) }
+        guard listed.style.contains(chosen.style) else { throw CloudActivationError.styleModelUnavailable(providerName: name) }
     }
 
     /// The check of a Cloud provider other than OpenRouter (VE-5a): the model locally, then one request
@@ -430,7 +470,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func refreshOpenRouterModels() async {
         let providerID = CloudTranscriptionPreferences.defaultProviderID
         let apiKey = self.settings.speechAPIKey(for: providerID)
-        guard !apiKey.isEmpty, self.cloudProviderBeingChecked == nil else { return }
+        guard !apiKey.isEmpty, !self.isEngineCheckRunning else { return }
         self.cloudProviderBeingChecked = providerID
         self.cloudRefreshResult = nil
         defer { self.cloudProviderBeingChecked = nil }
@@ -438,9 +478,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         do {
             let listed = try await self.listOpenRouterModels(apiKey: apiKey)
             // The key passed a speech check, unless it was replaced while the check ran.
-            if self.settings.speechAPIKey(for: providerID) == apiKey {
-                self.settings.recordSpeechVerification(for: providerID)
-            }
+            self.settings.recordSpeechVerification(for: providerID, checkedKey: apiKey)
             self.cloudRejectedKeys.remove(providerID)
             self.cloudRefreshResult = .success(
                 "\(listed.speech.count) speech models and \(listed.style.count) style models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
@@ -450,7 +488,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         } catch {
             if (error as? CloudTranscriptionError) == .authentication {
                 self.cloudRejectedKeys.insert(providerID)
-                self.settings.clearSpeechVerification(for: providerID)
+                self.settings.clearSpeechVerification(for: providerID, rejectedKey: apiKey)
             }
             self.cloudRefreshResult = .failure(error.localizedDescription)
         }
@@ -481,9 +519,28 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     // MARK: - Live cloud
 
+    /// True while a Cloud or Live cloud activation check (or a Cloud model refresh) runs. Neither engine
+    /// can be activated meanwhile, so two checks never race to switch the engine.
+    var isEngineCheckRunning: Bool {
+        Self.isEngineCheckRunning(cloudProviderBeingChecked: self.cloudProviderBeingChecked, liveProviderBeingChecked: self.liveProviderBeingChecked)
+    }
+
+    static func isEngineCheckRunning(cloudProviderBeingChecked: String?, liveProviderBeingChecked: LiveTranscriptionProviderID?) -> Bool {
+        cloudProviderBeingChecked != nil || liveProviderBeingChecked != nil
+    }
+
+    /// Why `Activate` on a live provider cannot run now, or nil. A Cloud or Live check already running
+    /// blocks it, like a recording.
+    static func liveActivationBlocker(isBusy: Bool, isEngineCheckRunning: Bool) -> String? {
+        if isBusy { return "Finish the current recording first." }
+        if isEngineCheckRunning { return "Wait for the running check to finish." }
+        return nil
+    }
+
     /// Checks the key with one REST request and switches the engine only when it passes.
     func activateLiveProvider(_ provider: LiveTranscriptionProviderID) async {
-        guard !self.areSpeechModelActionsBlocked, self.liveProviderBeingChecked == nil else { return }
+        guard Self.liveActivationBlocker(isBusy: self.areSpeechModelActionsBlocked, isEngineCheckRunning: self.isEngineCheckRunning) == nil
+        else { return }
         let name = LiveTranscriptionCatalog.info(for: provider).name
         guard !self.settings.liveProviderNeedsPrimaryLanguage(provider) else {
             self.liveActivationStatus[provider] = "Couldn't activate \(name): \(LiveTranscriptionError.languageRequired.message(providerName: name))"
@@ -492,27 +549,24 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.liveProviderBeingChecked = provider
         self.liveActivationStatus[provider] = nil
         defer { self.liveProviderBeingChecked = nil }
-        do {
-            try await LiveTranscriptionKeyChecker.check(provider: provider, apiKey: self.settings.liveTranscriptionAPIKey(for: provider))
-            // A recording may have started while the check ran; the engine never changes under it.
-            guard !self.areSpeechModelActionsBlocked else {
-                self.liveActivationStatus[provider] = "Couldn't activate \(name): finish the current recording first."
-                return
-            }
-            var preferences = LiveTranscriptionPreferences(defaults: .standard)
-            preferences.activeProvider = provider
+        let outcome = await LiveEngineActivation(keyStore: self.settings.providerKeyStore).activate(
+            provider,
+            check: self.liveKeyCheck,
+            canSwitch: { !self.areSpeechModelActionsBlocked }
+        )
+        switch outcome {
+        case .activated:
             self.liveRejectedKeys.remove(provider)
-            self.settings.recordSpeechVerification(for: ProviderRegistry.providerID(for: provider))
-            self.settings.speechExecutionSource = .liveCloud
+            self.settings.objectWillChange.send()
             self.asr.resetTranscriptionProvider()
-        } catch let error as LiveTranscriptionError {
-            if error == .authentication {
+        case let .failed(message, keyRejected):
+            if keyRejected {
                 self.liveRejectedKeys.insert(provider)
-                self.settings.clearSpeechVerification(for: ProviderRegistry.providerID(for: provider))
+                self.settings.objectWillChange.send()
             }
-            self.liveActivationStatus[provider] = "Couldn't activate \(name): \(error.message(providerName: name))"
-        } catch {
-            self.liveActivationStatus[provider] = "Couldn't activate \(name): \(error.localizedDescription)"
+            self.liveActivationStatus[provider] = message
+        case .cancelled:
+            break
         }
     }
 
@@ -562,5 +616,20 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func openExternalModelSource(for model: SettingsStore.SpeechModel) {
         guard let url = model.externalCoreMLSpec?.sourceURL else { return }
         NSWorkspace.shared.open(url)
+    }
+}
+
+extension ASRService {
+    /// True while the speech engine must not change: a recording, a FluidMeet meeting or a file
+    /// transcription (`activeExclusiveActivity`), or a model download or preparation. Voice Engine's
+    /// model and engine actions and the provider removals in AI Providers all wait for it.
+    var blocksSpeechEngineChanges: Bool {
+        self.isRunning
+            || self.activeExclusiveActivity != nil
+            || self.downloadingModelId != nil
+            || self.hasActiveModelDownload
+            || self.hasActiveModelPreparation
+            || self.isCancellingModelPreparation
+            || (!self.isAsrReady && (self.isDownloadingModel || self.isLoadingModel))
     }
 }

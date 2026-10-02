@@ -156,6 +156,69 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(requests.consumeDestination(), .aiProvider(id: "openrouter", origin: .voiceEngine(tab: .cloud)))
     }
 
+    func testReturningToTheCloudTabShowsTheProviderJustSetUp() {
+        let origin = ProviderSetupOrigin.voiceEngine(tab: .cloud)
+        XCTAssertEqual(origin.returnDestination(providerID: "deepgram"), .voiceEngine(tab: .cloud, cloudProviderID: "deepgram"))
+        XCTAssertEqual(origin.returnDestination(providerID: nil), .voiceEngine(tab: .cloud))
+        XCTAssertEqual(origin.returnDestination(providerID: ""), .voiceEngine(tab: .cloud), "A custom provider has no ID before it is added")
+        XCTAssertEqual(ProviderSetupOrigin.voiceEngine(tab: .liveCloud).returnDestination(providerID: "soniox"), .voiceEngine(tab: .liveCloud))
+        XCTAssertEqual(ProviderSetupOrigin.fluidMeet.returnDestination(providerID: "openrouter"), .meetingTranscription)
+
+        var requests = AppNavigationRequests()
+        requests.request(origin.returnDestination(providerID: "deepgram"))
+        XCTAssertEqual(requests.consumeVoiceEngineTab(), .cloud)
+        XCTAssertEqual(requests.consumeCloudProviderID(), "deepgram")
+        XCTAssertNil(requests.consumeCloudProviderID(), "Read once")
+
+        requests.request(origin.returnDestination(providerID: "deepgram"))
+        requests.request(.history)
+        XCTAssertNil(requests.consumeCloudProviderID(), "Another page drops an unread provider")
+        XCTAssertEqual(
+            VoiceEngineSettingsViewModel.shownCloudProviderID(browsed: "deepgram", stored: "openrouter", connected: ["deepgram", "openrouter"]),
+            "deepgram"
+        )
+    }
+
+    // MARK: - Routed sheets (NAV-2)
+
+    func testARoutedSheetWaitsUntilNoOtherSheetIsShown() async {
+        var polls = 0
+        let cleared = await SheetPresentationGate.waitUntilNoSheet(
+            isSheetShown: {
+                polls += 1
+                return polls < 4
+            },
+            pollInterval: .milliseconds(1),
+            settle: .milliseconds(5),
+            timeout: .seconds(2)
+        )
+        XCTAssertTrue(cleared)
+        XCTAssertGreaterThanOrEqual(polls, 4, "It kept waiting while the closing sheet was still shown")
+
+        let stuck = await SheetPresentationGate.waitUntilNoSheet(
+            isSheetShown: { true },
+            pollInterval: .milliseconds(1),
+            settle: .milliseconds(5),
+            timeout: .milliseconds(30)
+        )
+        XCTAssertFalse(stuck, "A sheet that never closes ends the wait at the timeout")
+    }
+
+    func testADroppedPresentationIsDetected() async {
+        let dropped = await SheetPresentationGate.waitForSheet(isSheetShown: { false }, pollInterval: .milliseconds(1), timeout: .milliseconds(20))
+        XCTAssertFalse(dropped)
+        var polls = 0
+        let shown = await SheetPresentationGate.waitForSheet(
+            isSheetShown: {
+                polls += 1
+                return polls > 2
+            },
+            pollInterval: .milliseconds(1),
+            timeout: .seconds(1)
+        )
+        XCTAssertTrue(shown)
+    }
+
     func testInactiveSettingsSearchResignsFirstResponder() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 240, height: 80),

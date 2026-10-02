@@ -58,6 +58,9 @@ struct VoiceEngineStatus: Equatable {
 }
 
 extension SettingsStore {
+    /// What the Voice Engine header shows. Its `description` is the header text ("Local",
+    /// "OpenRouter · Cloud", "Soniox · Live cloud" or a missing-key state, VE-2); the header reads it
+    /// from here, so the tested `VoiceEngineStatus.make` is the code the header runs.
     var voiceEngineStatus: VoiceEngineStatus {
         VoiceEngineStatus.make(
             storedSource: CloudTranscriptionPreferences(defaults: .standard).source,
@@ -65,12 +68,6 @@ extension SettingsStore {
             storedLiveProvider: self.storedLiveProvider,
             speechKey: { self.speechAPIKey(for: $0) }
         )
-    }
-
-    /// The header of the Voice Engine page: "Local", "OpenRouter · Cloud" or "Soniox · Live cloud", or a
-    /// missing-key state (VE-2).
-    var activeVoiceEngineDescription: String {
-        self.voiceEngineStatus.description
     }
 
     /// "OpenRouter key required" while the stored Cloud or Live cloud provider has no key; otherwise nil.

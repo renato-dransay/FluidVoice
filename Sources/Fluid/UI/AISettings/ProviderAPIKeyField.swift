@@ -45,8 +45,8 @@ struct ProviderAPIKeyField: View {
     }
 }
 
-/// Re-renders only its content when a recording starts or stops, so a settings page does not
-/// follow every change the recognizer publishes.
+/// Gives its content `ASRService.blocksSpeechEngineChanges`: true during a recording, a FluidMeet meeting,
+/// a file transcription or a model download, the times a provider's key must not be removed.
 struct RecordingStateReader<Content: View>: View {
     @ObservedObject var asr: ASRService
     @ViewBuilder let content: (_ isRecording: Bool) -> Content
@@ -58,6 +58,6 @@ struct RecordingStateReader<Content: View>: View {
     }
 
     var body: some View {
-        self.content(self.asr.isRunning)
+        self.content(self.asr.blocksSpeechEngineChanges)
     }
 }

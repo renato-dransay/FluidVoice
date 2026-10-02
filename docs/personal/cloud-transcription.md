@@ -25,7 +25,11 @@ A provider is one record with one key. A provider that offers several capabiliti
 
 Earlier versions kept the Voice Engine keys in their own Keychain entries (`openrouter-transcription` and `live-transcription.<provider>`). On the first launch of this version each of them is copied to its provider's entry in AI Providers when that entry is empty, so nothing has to be typed again and each feature keeps the key it used. When AI Providers already held a different key for the same provider (possible for OpenRouter and OpenAI), both are kept: text features keep the AI Providers key and Voice Engine keeps its own. The provider's row then shows **Two keys**, and its Manage sheet says that Voice Engine uses a different key, with **Use this key everywhere** and **Use the Voice Engine key everywhere** to settle on one. Saving a new key for that provider also replaces both.
 
+A Live cloud provider chosen in an earlier version without a Voice Engine key never streamed: dictation ran on the selected local model. Its AI Providers key would now serve it, so the first launch of this version clears that choice instead, and dictation stays on the local model; the same applies to FluidMeet's Live cloud provider, and FluidMeet stays on Local. Activate the provider in Voice Engine to stream with it.
+
 The old entries are left in the Keychain so that an older build still works after a downgrade, and a key saved later in AI Providers for such a provider is written to its old entry too. The new build never reads the old entries again once the copy has run: a key changed in an older build after that point is ignored, and has to be entered again in AI Providers. Keys for providers first connected in this version are not visible to an older build.
+
+An older build knows only OpenRouter as a Cloud provider. With Cloud active on any other provider, an older build reads the setting as OpenRouter Cloud: it sends dictation to OpenRouter with OpenRouter's speech model and key, and fails with OpenRouter's missing-key error when it has no OpenRouter Voice Engine key (the `openrouter-transcription` entry). Activate a local model or Live cloud before downgrading to avoid this.
 
 ## Activating Cloud
 

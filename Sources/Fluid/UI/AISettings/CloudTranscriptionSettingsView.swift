@@ -110,7 +110,7 @@ struct CloudTranscriptionSettingsView: View {
             HStack(spacing: 8) {
                 Button("Refresh models") { Task { await self.viewModel.refreshOpenRouterModels() } }
                     .fluidGlassAction(quiet: true)
-                    .disabled(self.viewModel.cloudProviderBeingChecked != nil || self.settings.openRouterTranscriptionAPIKey.isEmpty)
+                    .disabled(self.viewModel.isEngineCheckRunning || self.settings.openRouterTranscriptionAPIKey.isEmpty)
                     .help("Fetch OpenRouter's models again and check which ones this key can use.")
                     .accessibilityIdentifier("openrouter-refresh-models")
                 if self.viewModel.cloudProviderBeingChecked == CloudTranscriptionPreferences.defaultProviderID {

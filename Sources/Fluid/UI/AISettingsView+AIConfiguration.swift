@@ -107,8 +107,8 @@ extension AIEnhancementSettingsView {
         .sheet(item: self.$addProviderRequest) { request in
             AddProviderSheet(viewModel: self.viewModel, request: request) { id, name in
                 self.providerLogoView(for: ProviderItem(id: id, name: name, isBuiltIn: true))
-            } goBack: { origin in
-                self.navigate(to: origin.returnDestination)
+            } goBack: { origin, providerID in
+                self.navigate(to: origin.returnDestination(providerID: providerID))
             }
             .appTheme(self.theme)
         }
@@ -120,9 +120,15 @@ extension AIEnhancementSettingsView {
         }
     }
 
+    /// True while a check or model refresh runs for the Manage sheet: Done and Remove wait for it.
+    var isManagedProviderBusy: Bool {
+        self.viewModel.isFetchingModels || self.viewModel.isTestingConnection
+            || self.managedExternalProviderID.map { self.viewModel.speechCheckStates[$0] == .verifying } == true
+    }
+
     @discardableResult
     func closeExternalProviderManager() -> Bool {
-        guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return false }
+        guard !self.isManagedProviderBusy else { return false }
         if let providerID = self.managedExternalProviderID {
             if self.viewModel.isSpeechOnlyProvider(providerID) {
                 // Done saves a typed key, like the text providers' fields; an empty field removes nothing.
@@ -159,19 +165,19 @@ extension AIEnhancementSettingsView {
             title: name,
             subtitle: self.viewModel.isSpeechOnlyProvider(providerID) ? "Connection." : "Connection and models.",
             symbol: "network",
-            dismissDisabled: self.viewModel.isFetchingModels || self.viewModel.isTestingConnection,
+            dismissDisabled: self.isManagedProviderBusy,
             height: 620,
             returnAction: self.managedProviderOrigin.map { origin in
                 FluidManagementSheetAction(title: "Back to \(origin.title)") {
                     guard self.closeExternalProviderManager() else { return }
-                    self.navigate(to: origin.returnDestination)
+                    self.navigate(to: origin.returnDestination(providerID: providerID))
                 }
             },
             close: { self.closeExternalProviderManager() }
         ) {
             if !providerID.isEmpty {
                 self.providerManagementContent(for: providerID)
-                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .disabled(self.isManagedProviderBusy)
             }
         }
         .interactiveDismissDisabled()

@@ -191,7 +191,7 @@ final class VoiceEngineSettingsTests: XCTestCase {
     func testARejectedKeyClearsTheSpeechRecordAndSaysWhereToUpdateIt() async {
         let keychain = FakeKeychain(["openrouter": "or-key"])
         let store = self.store(keychain)
-        store.recordSpeechVerification(for: "openrouter")
+        store.recordSpeechVerification(for: "openrouter", checkedKey: store.speechAPIKey(for: "openrouter"))
         XCTAssertTrue(store.isSpeechVerified("openrouter"))
 
         let outcome = await CloudEngineActivation(keyStore: store).activate(
@@ -318,6 +318,169 @@ final class VoiceEngineSettingsTests: XCTestCase {
         let after = CloudTranscriptionPreferences(defaults: self.defaults)
         XCTAssertEqual(after.source, .local)
         XCTAssertEqual(after.providerID, "openrouter")
+    }
+
+    func testACloudKeyReplacedDuringTheCheckIsNotActivated() async {
+        let keychain = FakeKeychain(["openrouter": "or-key"])
+        let store = self.store(keychain)
+
+        let outcome = await CloudEngineActivation(keyStore: store).activate(
+            "openrouter",
+            check: { _ in try store.setProviderAPIKey("or-new", for: "openrouter") },
+            canSwitch: { true }
+        )
+
+        XCTAssertEqual(outcome, .failed(message: "Couldn't activate OpenRouter: Voice settings changed during the check. Try again.", keyRejected: false))
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+        XCTAssertFalse(store.isSpeechVerified("openrouter"), "The new key was never checked")
+    }
+
+    // MARK: - OpenRouter check (VE-5a)
+
+    func testOpenRouterActivationNeedsBothChosenModelsListed() async {
+        let listed: (String) async throws -> (speech: Set<String>, style: Set<String>) = { _ in (["speech-a"], ["style-a"]) }
+        let chosen: () -> (speech: String, style: String) = { ("speech-a", "style-a") }
+        do {
+            try await VoiceEngineSettingsViewModel.checkOpenRouter(apiKey: "k", selectedModels: chosen, list: listed)
+        } catch {
+            XCTFail("Both models are listed: \(error)")
+        }
+
+        do {
+            try await VoiceEngineSettingsViewModel.checkOpenRouter(apiKey: "k", selectedModels: { ("speech-b", "style-a") }, list: listed)
+            XCTFail("An unlisted speech model must fail")
+        } catch {
+            XCTAssertEqual(error as? CloudActivationError, .speechModelUnavailable(providerName: "OpenRouter"))
+        }
+
+        do {
+            try await VoiceEngineSettingsViewModel.checkOpenRouter(apiKey: "k", selectedModels: { ("speech-a", "style-b") }, list: listed)
+            XCTFail("An unlisted style model must fail")
+        } catch {
+            XCTAssertEqual(error as? CloudActivationError, .styleModelUnavailable(providerName: "OpenRouter"))
+        }
+    }
+
+    func testOpenRouterActivationListsWithTheCheckedKeyAndRefusesAModelChangedMeanwhile() async {
+        var calls = 0
+        var listedKeys: [String] = []
+        do {
+            try await VoiceEngineSettingsViewModel.checkOpenRouter(
+                apiKey: "or-key",
+                selectedModels: {
+                    calls += 1
+                    return calls == 1 ? ("speech-a", "style-a") : ("speech-b", "style-a")
+                },
+                list: { key in
+                    listedKeys.append(key)
+                    return (["speech-a", "speech-b"], ["style-a"])
+                }
+            )
+            XCTFail("A model changed during the check must fail")
+        } catch {
+            XCTAssertEqual(error as? CloudActivationError, .settingsChanged)
+        }
+        XCTAssertEqual(listedKeys, ["or-key"])
+    }
+
+    // MARK: - Live activation (VE-5a)
+
+    func testAPassedLiveCheckActivatesLiveCloudAndRecordsTheCheckedKey() async {
+        let store = self.store(FakeKeychain(["soniox": "soniox-key", "openrouter": "or-key"]))
+        var cloud = CloudTranscriptionPreferences(defaults: self.defaults)
+        cloud.source = .cloud
+        var checked: [String] = []
+
+        let outcome = await LiveEngineActivation(keyStore: store).activate(.soniox, check: { _, key in checked.append(key) }, canSwitch: { true })
+
+        XCTAssertEqual(outcome, .activated)
+        XCTAssertEqual(checked, ["soniox-key"])
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .liveCloud)
+        XCTAssertEqual(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider, .soniox)
+        XCTAssertTrue(store.isSpeechVerified("soniox"))
+        XCTAssertTrue(SettingsStore.verifiedProviderFingerprints(in: self.defaults).isEmpty)
+    }
+
+    func testALiveKeyReplacedOrRemovedDuringTheCheckIsNotActivated() async throws {
+        let keychain = FakeKeychain(["soniox": "soniox-key"])
+        let store = self.store(keychain)
+
+        let replaced = await LiveEngineActivation(keyStore: store).activate(
+            .soniox,
+            check: { _, _ in try store.setProviderAPIKey("soniox-new", for: "soniox") },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(replaced, .failed(message: "Couldn't activate Soniox: Voice settings changed during the check. Try again.", keyRejected: false))
+        XCTAssertFalse(store.isSpeechVerified("soniox"), "The new key was never checked")
+        XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
+
+        let removed = await LiveEngineActivation(keyStore: store).activate(
+            .soniox,
+            check: { _, _ in try store.setProviderAPIKey(nil, for: "soniox") },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(removed, .failed(message: "Couldn't activate Soniox: Voice settings changed during the check. Try again.", keyRejected: false))
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+        XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
+    }
+
+    func testARejectedLiveKeyClearsItsRecordOnlyWhileItIsStillSaved() async throws {
+        let store = self.store(FakeKeychain(["deepgram": "dg-key"]))
+        XCTAssertTrue(store.recordSpeechVerification(for: "deepgram", checkedKey: "dg-key"))
+
+        let rejected = await LiveEngineActivation(keyStore: store).activate(
+            .deepgram,
+            check: { _, _ in throw LiveTranscriptionError.authentication },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(rejected, .failed(
+            message: "Couldn't activate Deepgram: Deepgram rejected the API key. Update it in AI Providers and retry.",
+            keyRejected: true
+        ))
+        XCTAssertFalse(store.isSpeechVerified("deepgram"))
+
+        let missing = await LiveEngineActivation(keyStore: store).activate(.gladia, check: { _, _ in XCTFail("No request without a key") }, canSwitch: { true })
+        XCTAssertEqual(missing, .failed(message: "Couldn't activate Gladia: Add a Gladia API key in AI Providers.", keyRejected: false))
+
+        let busy = await LiveEngineActivation(keyStore: store).activate(.deepgram, check: { _, _ in }, canSwitch: { false })
+        XCTAssertEqual(busy, .failed(message: "Couldn't activate Deepgram: finish the current recording first.", keyRejected: false))
+        XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
+    }
+
+    func testNeitherEngineActivatesWhileTheOtherEnginesCheckRuns() {
+        typealias Model = VoiceEngineSettingsViewModel
+        let cloudRunning = Model.isEngineCheckRunning(cloudProviderBeingChecked: "openrouter", liveProviderBeingChecked: nil)
+        let liveRunning = Model.isEngineCheckRunning(cloudProviderBeingChecked: nil, liveProviderBeingChecked: .soniox)
+        XCTAssertTrue(cloudRunning)
+        XCTAssertTrue(liveRunning)
+        XCTAssertFalse(Model.isEngineCheckRunning(cloudProviderBeingChecked: nil, liveProviderBeingChecked: nil))
+
+        XCTAssertNotNil(Model.liveActivationBlocker(isBusy: false, isEngineCheckRunning: cloudRunning), "A Cloud check blocks Live activation")
+        XCTAssertNotNil(Model.cloudActivationBlocker(hasKey: true, hasModel: true, isBusy: liveRunning), "A Live check blocks Cloud activation")
+        XCTAssertNotNil(Model.liveActivationBlocker(isBusy: true, isEngineCheckRunning: false))
+        XCTAssertNil(Model.liveActivationBlocker(isBusy: false, isEngineCheckRunning: false))
+    }
+
+    // MARK: - Key changes (KEY-5)
+
+    func testAKeyChangeForgetsWhatTheChecksSaidAboutThatProviderOnly() {
+        var checks = VoiceEngineSettingsViewModel.EngineCheckResults(
+            liveActivationStatus: [.openAI: "Couldn't activate OpenAI", .soniox: "Couldn't activate Soniox"],
+            liveRejectedKeys: [.openAI, .soniox],
+            cloudActivationStatus: ["openai": "x", "deepgram": "y"],
+            cloudRejectedKeys: ["openai", "deepgram"]
+        )
+
+        let clearsCatalogs = checks.forget(after: ProviderAPIKeyChange(providerID: "openai", removed: true, affectedActiveEngine: false))
+
+        XCTAssertFalse(clearsCatalogs)
+        XCTAssertEqual(checks, VoiceEngineSettingsViewModel.EngineCheckResults(
+            liveActivationStatus: [.soniox: "Couldn't activate Soniox"],
+            liveRejectedKeys: [.soniox],
+            cloudActivationStatus: ["deepgram": "y"],
+            cloudRejectedKeys: ["deepgram"]
+        ))
+        XCTAssertTrue(checks.forget(after: ProviderAPIKeyChange(providerID: "openrouter", removed: false, affectedActiveEngine: false)))
     }
 
     // MARK: - FluidMeet and key messages (FM-3, COPY-2)

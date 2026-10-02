@@ -6,7 +6,7 @@ struct AddProviderSheet<Logo: View>: View {
         case grid
         case form
         /// After a successful Add opened from another screen: the way back.
-        case connected(name: String)
+        case connected(name: String, providerID: String)
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -14,7 +14,8 @@ struct AddProviderSheet<Logo: View>: View {
     @ObservedObject var viewModel: AIEnhancementSettingsViewModel
     let request: AddProviderRequest
     @ViewBuilder let logo: (String, String) -> Logo
-    let goBack: (ProviderSetupOrigin) -> Void
+    /// Leaves for the origin after the provider with this ID was connected.
+    let goBack: (ProviderSetupOrigin, String) -> Void
     @State private var draft = ProviderSetupDraft()
     @State private var step: Step = .grid
     @State private var didOpenRequestedProvider = false
@@ -53,8 +54,8 @@ struct AddProviderSheet<Logo: View>: View {
                     self.reassurance
                 case .form:
                     self.form
-                case let .connected(name):
-                    self.connected(name: name)
+                case let .connected(name, providerID):
+                    self.connected(name: name, providerID: providerID)
                 }
             }
         }
@@ -253,13 +254,13 @@ struct AddProviderSheet<Logo: View>: View {
             return
         }
         if self.request.origin != nil {
-            self.step = .connected(name: name)
+            self.step = .connected(name: name, providerID: self.draft.providerID)
         } else {
             self.dismiss()
         }
     }
 
-    private func connected(name: String) -> some View {
+    private func connected(name: String, providerID: String) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             Label("\(name) is connected.", systemImage: "checkmark.circle.fill")
                 .font(self.theme.typography.bodyStrong)
@@ -270,7 +271,7 @@ struct AddProviderSheet<Logo: View>: View {
                 if let origin = self.request.origin {
                     Button("Back to \(origin.title)") {
                         self.dismiss()
-                        self.goBack(origin)
+                        self.goBack(origin, providerID)
                     }
                     .fluidGlassAction(prominent: true)
                     .accessibilityIdentifier("add-provider-back")

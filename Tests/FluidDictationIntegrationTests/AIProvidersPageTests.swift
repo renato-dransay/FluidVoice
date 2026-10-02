@@ -229,7 +229,7 @@ final class AIProvidersPageTests: XCTestCase {
             "live-transcription.openAI": "voice-key",
         ])
         let store = self.store(keychain)
-        store.recordSpeechVerification(for: "openai")
+        store.recordSpeechVerification(for: "openai", checkedKey: store.speechAPIKey(for: "openai"))
         SettingsStore.setVerifiedProviderFingerprints(["openai": "text"], in: self.defaults)
         XCTAssertTrue(store.hasSeparateSpeechKey("openai"))
         var received: [ProviderAPIKeyChange] = []
@@ -256,7 +256,7 @@ final class AIProvidersPageTests: XCTestCase {
         ])
         let store = self.store(keychain)
         SettingsStore.setVerifiedProviderFingerprints(["openrouter": "text", "groq": "text"], in: self.defaults)
-        store.recordSpeechVerification(for: "openrouter")
+        store.recordSpeechVerification(for: "openrouter", checkedKey: store.speechAPIKey(for: "openrouter"))
         let speechRecord = store.verifiedSpeechProviders
 
         try store.useSpeechKeyEverywhere(for: "openrouter")
@@ -289,7 +289,7 @@ final class AIProvidersPageTests: XCTestCase {
     func testARejectedKeyClearsTheSpeechRecordAndOtherFailuresKeepIt() async {
         let keychain = FakeKeychain(["deepgram": "deepgram-key"])
         let store = self.store(keychain)
-        store.recordSpeechVerification(for: "deepgram")
+        store.recordSpeechVerification(for: "deepgram", checkedKey: store.speechAPIKey(for: "deepgram"))
 
         let offline = await SpeechProviderVerification.verify(providerID: "deepgram", store: store) { _, _ in throw CheckFailure() }
         guard case .failure = offline else { return XCTFail("A failed check is a failure") }
@@ -308,8 +308,37 @@ final class AIProvidersPageTests: XCTestCase {
     }
 
     func testChoosingAnotherModelKeepsAVerifiedProviderVerified() {
-        XCTAssertEqual(AIEnhancementSettingsViewModel.connectionStatusAfterModelChange(isTextVerified: true), .success)
-        XCTAssertEqual(AIEnhancementSettingsViewModel.connectionStatusAfterModelChange(isTextVerified: false), .unknown)
+        typealias Record = TextVerificationRecord
+        let server = "https://api.openai.com/v1"
+        let record = Record.recording([:], providerKey: "openai", baseURL: server, apiKey: "openai-key")
+        func statusAfterModelChange(baseURL: String = server, apiKey: String = "openai-key", record: [String: String] = record) -> AIConnectionStatus {
+            AIEnhancementSettingsViewModel.connectionStatusAfterModelChange(
+                isTextVerified: Record.isVerified(record, providerKey: "openai", baseURL: baseURL, apiKey: apiKey)
+            )
+        }
+
+        // The record holds server and key, not the model: a model change keeps the provider verified.
+        XCTAssertEqual(statusAfterModelChange(), .success)
+        XCTAssertEqual(statusAfterModelChange(apiKey: " openai-key "), .success, "Whitespace is not a different key")
+        XCTAssertEqual(statusAfterModelChange(apiKey: "rotated-key"), .unknown)
+        XCTAssertEqual(statusAfterModelChange(baseURL: "https://proxy.example.com/v1"), .unknown)
+        XCTAssertEqual(statusAfterModelChange(record: [:]), .unknown)
+        XCTAssertEqual(Record.recording([:], providerKey: "openai", baseURL: " ", apiKey: "k"), [:], "No server, no record")
+        XCTAssertNotNil(Record.recording([:], providerKey: "ollama", baseURL: "http://localhost:11434/v1", apiKey: "")["ollama"],
+                        "A local server verifies without a key")
+    }
+
+    func testASpeechVerifyWhoseKeyChangedDuringTheCheckRecordsNothing() async throws {
+        let keychain = FakeKeychain(["deepgram": "dg-key"])
+        let store = self.store(keychain)
+
+        let result = await SpeechProviderVerification.verify(providerID: "deepgram", store: store) { _, _ in
+            try store.setProviderAPIKey("dg-new", for: "deepgram")
+        }
+
+        XCTAssertEqual(result, .failure(SpeechProviderVerification.keyChangedMessage))
+        XCTAssertFalse(store.isSpeechVerified("deepgram"), "Neither the old nor the new key is verified by it")
+        XCTAssertEqual(store.verifiedSpeechProviders, [:])
     }
 
     func testSetAsDefaultVerifiesFirstAndAFailedCheckLeavesTheDefault() async {

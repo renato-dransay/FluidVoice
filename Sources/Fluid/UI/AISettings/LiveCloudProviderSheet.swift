@@ -15,7 +15,7 @@ struct LiveCloudProviderSheet: View {
     private var info: LiveTranscriptionProviderInfo { LiveTranscriptionCatalog.info(for: self.provider) }
     private var hasKey: Bool { !self.settings.liveTranscriptionAPIKey(for: self.provider).isEmpty }
     private var isActive: Bool { self.settings.activeLiveProvider == self.provider }
-    private var isChecking: Bool { self.viewModel.liveProviderBeingChecked != nil }
+    private var isChecking: Bool { self.viewModel.isEngineCheckRunning }
     private var isTestArmed: Bool { self.test.armedProvider == self.provider }
     private var providerID: String { ProviderRegistry.providerID(for: self.provider) }
     private var needsLanguage: Bool { self.settings.liveProviderNeedsPrimaryLanguage(self.provider) }

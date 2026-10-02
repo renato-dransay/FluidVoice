@@ -56,6 +56,31 @@ final class LiveProviderTestCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.hasPassed(.deepgram))
     }
 
+    func testAKeyChangeForgetsThePassAndARemovalDisarms() throws {
+        let center = NotificationCenter()
+        let coordinator = LiveProviderTestCoordinator(defaults: try self.defaults(), notificationCenter: center)
+        for provider in [LiveTranscriptionProviderID.soniox, .deepgram] {
+            coordinator.arm(provider)
+            coordinator.record(transcript: "hello", latencyMilliseconds: 300, error: nil)
+        }
+        func post(_ providerID: String, removed: Bool) {
+            let change = ProviderAPIKeyChange(providerID: providerID, removed: removed, affectedActiveEngine: false)
+            center.post(name: .providerAPIKeyChanged, object: nil, userInfo: change.userInfo)
+        }
+
+        post("deepgram", removed: false)
+        XCTAssertFalse(coordinator.hasPassed(.deepgram), "A replaced key is untested again")
+        XCTAssertTrue(coordinator.hasPassed(.soniox))
+        XCTAssertEqual(coordinator.armedProvider, .deepgram, "A replaced key keeps the test armed")
+
+        post("groq", removed: true)
+        XCTAssertEqual(coordinator.armedProvider, .deepgram, "A provider without Live changes nothing")
+
+        post("deepgram", removed: true)
+        XCTAssertNil(coordinator.armedProvider, "A test without a key could only fail")
+        XCTAssertTrue(coordinator.hasPassed(.soniox))
+    }
+
     private func defaults() throws -> UserDefaults {
         let suite = "LiveProviderTestCoordinatorTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

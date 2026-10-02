@@ -42,10 +42,12 @@ struct ProviderAPIKeyChange: Equatable {
 
 enum ProviderAPIKeyError: LocalizedError {
     case missingProviderID
+    case noSavedKey
 
     var errorDescription: String? {
         switch self {
         case .missingProviderID: "No provider was given for this API key."
+        case .noSavedKey: "No key is saved here to use everywhere."
         }
     }
 }
@@ -65,19 +67,25 @@ struct ProviderKeyStore {
 
     // MARK: - Reading
 
-    /// Attempts the key migration while its flag is unset. Returns true once it has been written.
+    /// Attempts the key migration while its flag is unset. Returns true once it has been written. Run on
+    /// events only (launch, the app becoming active, before a key write), never by a reader: an attempt
+    /// forces a Keychain read and write.
     @discardableResult
     func migrateIfNeeded() -> Bool {
-        guard self.writesMigration else { return self.defaults.bool(forKey: ProviderKeyMigration.flagKey) }
+        guard self.writesMigration else { return self.isMigrated }
         return ProviderKeyMigration.runIfNeeded(defaults: self.defaults, keychain: self.keychain)
     }
 
-    /// The stored entries as this build reads them. Until the migration could be written, its result is
-    /// computed in memory, so a failed write never hides or swaps a key.
+    var isMigrated: Bool {
+        self.defaults.bool(forKey: ProviderKeyMigration.flagKey)
+    }
+
+    /// The stored entries as this build reads them, from the Keychain cache. Until the migration could
+    /// be written, its result is computed in memory, so a failed write never hides or swaps a key and a
+    /// read never writes.
     func entries() -> [String: String] {
-        let isMigrated = self.migrateIfNeeded()
         let stored = (try? self.keychain.fetchAllKeys()) ?? [:]
-        return isMigrated ? stored : ProviderKeyMigration.migrated(stored)
+        return self.isMigrated ? stored : ProviderKeyMigration.migrated(stored)
     }
 
     /// The text key: the exact entry, else the canonical provider key (a custom provider's prefixed key).
@@ -120,11 +128,21 @@ struct ProviderKeyStore {
         return stored == Self.speechFingerprint(providerID: providerID, apiKey: key)
     }
 
-    /// Records that a speech key check passed with the current speech key. Never touches the text record.
-    func recordSpeechVerification(for providerID: String) {
-        let key = self.speechAPIKey(for: providerID)
-        guard !key.isEmpty else { return }
-        self.verifiedSpeechProviders[providerID] = Self.speechFingerprint(providerID: providerID, apiKey: key)
+    /// Records that a speech key check passed with `checkedKey`, the key the check sent. Nothing is
+    /// recorded when that key is no longer the saved speech key (it changed while the check ran). Never
+    /// touches the text record. Returns true when it recorded.
+    @discardableResult
+    func recordSpeechVerification(for providerID: String, checkedKey: String) -> Bool {
+        guard !checkedKey.isEmpty, self.speechAPIKey(for: providerID) == checkedKey else { return false }
+        self.verifiedSpeechProviders[providerID] = Self.speechFingerprint(providerID: providerID, apiKey: checkedKey)
+        return true
+    }
+
+    /// Clears the speech record after the provider rejected `checkedKey`, unless the key was replaced while
+    /// the check ran (the rejection then says nothing about the saved key).
+    func clearSpeechVerification(for providerID: String, rejectedKey: String) {
+        guard self.speechAPIKey(for: providerID) == rejectedKey else { return }
+        self.clearSpeechVerification(for: providerID)
     }
 
     func clearSpeechVerification(for providerID: String) {
@@ -136,7 +154,8 @@ struct ProviderKeyStore {
 
     /// The single write path for provider keys. A non-empty key is saved; nil or an empty key removes it.
     /// Each call reads and writes the Keychain aggregate once, then posts `.providerAPIKeyChanged`.
-    /// It makes no network request.
+    /// Saving the key the provider already has, with no separate speech key, changes nothing: no write,
+    /// no lost verification or passed live test, no notification. It makes no network request.
     @discardableResult
     func setProviderAPIKey(_ key: String?, for providerID: String) throws -> ProviderAPIKeyChange {
         let id = ModelRepository.shared.providerKey(for: providerID)
@@ -145,6 +164,10 @@ struct ProviderKeyStore {
         let removed = value.isEmpty
         self.migrateIfNeeded()
         let affectedActiveEngine = self.isActiveEngineProvider(id)
+        if !removed, self.isSavedKey(value, for: id) {
+            self.addToLiveProviders(id)
+            return ProviderAPIKeyChange(providerID: id, removed: false, affectedActiveEngine: affectedActiveEngine)
+        }
         let oldVoiceEntries = ProviderKeyMigration.oldVoiceEntries(for: id)
         let speechKeyEntry = ProviderKeyMigration.speechKeyEntry(for: id)
 
@@ -170,19 +193,38 @@ struct ProviderKeyStore {
         }
         self.clearSpeechVerification(for: id)
 
-        if let live = ProviderRegistry.liveProviderID(for: id) {
-            var preferences = LiveTranscriptionPreferences(defaults: self.defaults)
-            if removed {
+        if removed {
+            if let live = ProviderRegistry.liveProviderID(for: id) {
+                var preferences = LiveTranscriptionPreferences(defaults: self.defaults)
                 preferences.addedProviders.removeAll { $0 == live }
-            } else if !preferences.addedProviders.contains(live) {
-                preferences.addedProviders.append(live)
             }
+            self.applyRemovalEffects(for: id)
+        } else {
+            self.addToLiveProviders(id)
         }
-        if removed { self.applyRemovalEffects(for: id) }
 
         let change = ProviderAPIKeyChange(providerID: id, removed: removed, affectedActiveEngine: affectedActiveEngine)
         self.notificationCenter.post(name: .providerAPIKeyChanged, object: nil, userInfo: change.userInfo)
         return change
+    }
+
+    /// True when `key` (trimmed) is already the provider's key for text and speech alike, so saving it
+    /// again would change nothing.
+    func isSavedKey(_ key: String, for providerID: String) -> Bool {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entries = self.entries()
+        return !value.isEmpty && entries[id] == value && entries[ProviderKeyMigration.speechKeyEntry(for: id)] == nil
+    }
+
+    /// A live-capable provider with a key is listed in `LiveTranscriptionProviders`, which a downgraded
+    /// build reads.
+    private func addToLiveProviders(_ providerID: String) {
+        guard let live = ProviderRegistry.liveProviderID(for: providerID) else { return }
+        var preferences = LiveTranscriptionPreferences(defaults: self.defaults)
+        if !preferences.addedProviders.contains(live) {
+            preferences.addedProviders.append(live)
+        }
     }
 
     /// True when the stored dictation engine runs on this provider: Cloud with it as the Cloud provider,
@@ -248,12 +290,29 @@ struct ProviderKeyStore {
         return !value.isEmpty
     }
 
+    /// True when the provider has a non-empty key of its own (`<id>`), the one "Use this key everywhere" uses.
+    func hasTextKey(_ providerID: String) -> Bool {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        return !(self.entries()[id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+    }
+
+    /// True when any Keychain entry of this provider exists: its key, a separate speech key or an old
+    /// voice entry. Removing the provider's key must then write, even when the key field shows nothing.
+    func hasAnyKeyEntry(for providerID: String) -> Bool {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        let entries = self.entries()
+        let names = [id, ProviderKeyMigration.speechKeyEntry(for: id)] + ProviderKeyMigration.oldVoiceEntries(for: id)
+        return names.contains { entries[$0] != nil }
+    }
+
     /// "Use this key everywhere": speech features switch to the key AI Providers saved. One aggregate write;
-    /// the speech verification of the old Voice Engine key is cleared.
+    /// the speech verification of the old Voice Engine key is cleared. Refused while no key is saved
+    /// here: it would delete the only key the provider has.
     @discardableResult
     func useTextKeyEverywhere(for providerID: String) throws -> ProviderAPIKeyChange {
         let id = ModelRepository.shared.providerKey(for: providerID)
         guard !id.isEmpty else { throw ProviderAPIKeyError.missingProviderID }
+        guard self.hasTextKey(id) else { throw ProviderAPIKeyError.noSavedKey }
         self.migrateIfNeeded()
         let affectedActiveEngine = self.isActiveEngineProvider(id)
         let speechKeyEntry = ProviderKeyMigration.speechKeyEntry(for: id)
@@ -325,6 +384,17 @@ extension SettingsStore {
         ProviderKeyStore(defaults: .standard, keychain: .shared, writesMigration: !Self.isRunningInUnitTestHost)
     }
 
+    /// Retries a deferred key migration when the app becomes active, at most once per
+    /// `ProviderKeyMigrationRetryThrottle.minimumInterval`.
+    func retryProviderKeyMigrationIfDue(now: Date = Date()) {
+        guard !self.providerKeyStore.isMigrated,
+              Self.providerKeyMigrationRetryThrottle.shouldAttempt(at: now)
+        else { return }
+        self.providerKeyStore.migrateIfNeeded()
+    }
+
+    private static var providerKeyMigrationRetryThrottle = ProviderKeyMigrationRetryThrottle()
+
     /// The unit-test host is this app with the app's own Keychain item and defaults, so the key
     /// migration never writes them from there; readers still see the migrated keys in memory.
     nonisolated static var isRunningInUnitTestHost: Bool {
@@ -375,9 +445,16 @@ extension SettingsStore {
         self.providerKeyStore.isSpeechVerified(providerID)
     }
 
-    func recordSpeechVerification(for providerID: String) {
+    /// Records a passed speech check of `checkedKey`, only while it is still the saved speech key.
+    @discardableResult
+    func recordSpeechVerification(for providerID: String, checkedKey: String) -> Bool {
         self.objectWillChange.send()
-        self.providerKeyStore.recordSpeechVerification(for: providerID)
+        return self.providerKeyStore.recordSpeechVerification(for: providerID, checkedKey: checkedKey)
+    }
+
+    func clearSpeechVerification(for providerID: String, rejectedKey: String) {
+        self.objectWillChange.send()
+        self.providerKeyStore.clearSpeechVerification(for: providerID, rejectedKey: rejectedKey)
     }
 
     func clearSpeechVerification(for providerID: String) {
@@ -387,6 +464,14 @@ extension SettingsStore {
 
     func hasSeparateSpeechKey(_ providerID: String) -> Bool {
         self.providerKeyStore.hasSeparateSpeechKey(providerID)
+    }
+
+    func hasProviderTextKey(_ providerID: String) -> Bool {
+        self.providerKeyStore.hasTextKey(providerID)
+    }
+
+    func hasAnyProviderKeyEntry(for providerID: String) -> Bool {
+        self.providerKeyStore.hasAnyKeyEntry(for: providerID)
     }
 
     func useTextKeyEverywhere(for providerID: String) throws {

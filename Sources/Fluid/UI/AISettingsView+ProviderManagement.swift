@@ -199,24 +199,25 @@ extension AIEnhancementSettingsView {
             }
             self.speechKeyDraft = ""
         }
-        self.managedProviderResult = await self.viewModel.verifySpeechProvider(providerID)
+        let result = await self.viewModel.verifySpeechProvider(providerID)
+        // The sheet may have closed, or moved to another provider, while the check ran.
+        guard self.managedExternalProviderID == providerID else { return }
+        self.managedProviderResult = result
     }
 
     private func twoKeysNotice(for providerID: String, name: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Without a key saved or typed here, "Use this key everywhere" would delete the only key.
+        let hasKeyHere = self.viewModel.settings.hasProviderTextKey(providerID)
+            || (!self.viewModel.isSpeechOnlyProvider(providerID)
+                && !self.viewModel.providerAPIKey(for: providerID).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        return VStack(alignment: .leading, spacing: 10) {
             Label("Voice Engine uses a different \(name) key from the one saved here.", systemImage: "key")
                 .font(self.theme.typography.bodySmall)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button("Use this key everywhere") {
-                    // An edited key is saved first; saving a new key already ends the second key.
-                    guard self.viewModel.isSpeechOnlyProvider(providerID)
-                        || self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
-                    self.managedProviderResult = self.viewModel.hasSeparateSpeechKey(providerID)
-                        ? self.viewModel.useTextKeyEverywhere(for: providerID)
-                        : .success("Voice Engine now uses the key saved here.")
+                if hasKeyHere {
+                    self.useThisKeyEverywhereButton(for: providerID)
                 }
-                .fluidGlassAction()
                 Button("Use the Voice Engine key everywhere") {
                     self.managedProviderResult = self.viewModel.useSpeechKeyEverywhere(for: providerID)
                 }
@@ -227,6 +228,18 @@ extension AIEnhancementSettingsView {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityIdentifier("ai-provider-two-keys")
+    }
+
+    private func useThisKeyEverywhereButton(for providerID: String) -> some View {
+        Button("Use this key everywhere") {
+            // An edited key is saved first; saving a new key already ends the second key.
+            guard self.viewModel.isSpeechOnlyProvider(providerID)
+                || self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
+            self.managedProviderResult = self.viewModel.hasSeparateSpeechKey(providerID)
+                ? self.viewModel.useTextKeyEverywhere(for: providerID)
+                : .success("Voice Engine now uses the key saved here.")
+        }
+        .fluidGlassAction()
     }
 
     /// The legacy layout let a built-in provider's server be edited; it applies to this sheet's checks.
@@ -359,7 +372,7 @@ extension AIEnhancementSettingsView {
 
     func performProviderRemoval(_ removal: PendingProviderRemoval) {
         self.pendingProviderRemoval = nil
-        guard !AppServices.shared.asr.isRunning else {
+        guard !AppServices.shared.asr.blocksSpeechEngineChanges else {
             self.managedProviderResult = .failure("Finish the current recording first.")
             return
         }
