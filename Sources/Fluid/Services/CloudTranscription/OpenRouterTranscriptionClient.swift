@@ -2,7 +2,7 @@ import Foundation
 
 /// Contract verified against https://openrouter.ai/docs/guides/overview/multimodal/stt.
 /// Multipart supports verbose_json + timestamp_granularities[]=word, with a 25 MB cap.
-final nonisolated class OpenRouterTranscriptionClient: Sendable {
+final nonisolated class OpenRouterTranscriptionClient: CloudTranscriptionClient {
     private let session: URLSession
     private let recordsUsage: Bool
     private static let baseURL = URL(string: "https://openrouter.ai/api/v1/")
@@ -14,6 +14,11 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     private let lastSuccessLock = NSLock()
     nonisolated(unsafe) private var lastSuccessfulRequestUptime: TimeInterval?
     private static let warmConnectionWindow: TimeInterval = 60
+
+    var providerID: String { CloudTranscriptionCatalog.openRouterID }
+    var providerName: String { CloudTranscriptionCatalog.openRouterName }
+    /// Two-minute chunks keep each request well inside OpenRouter's 25 MB cap and its providers' limits.
+    var maximumRequestSeconds: Int { CloudAudioChunker.maximumSamples / CloudAudioChunker.sampleRate }
 
     init(session: URLSession? = nil, recordsUsage: Bool = true) {
         self.recordsUsage = recordsUsage
@@ -96,6 +101,11 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
         guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw CloudTranscriptionError.wordTimingCheckInconclusive
         }
+    }
+
+    /// The key endpoint answers only for a key OpenRouter accepts and carries no audio.
+    func checkKey(apiKey: String) async throws {
+        _ = try await self.send(self.request(path: "key", apiKey: apiKey))
     }
 
     func validate(apiKey: String) async throws -> [CloudTranscriptionModel] {
@@ -185,6 +195,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
 
     func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult {
         try Task.checkCancellation()
+        guard configuration.providerID == self.providerID else { throw CloudTranscriptionError.unsupportedModel }
         try configuration.validate(wordTimings: wordTimings)
         if let instructions = configuration.audioDictation {
             return try await self.transcribeAndStyle(samples: samples, configuration: configuration, instructions: instructions, apiKey: apiKey)

@@ -9,15 +9,16 @@ nonisolated struct CloudAudioChunk: Sendable {
 
 nonisolated enum CloudAudioChunker {
     static let sampleRate = 16_000
+    /// OpenRouter's request size. Other clients pass their own `maximumRequestSeconds`.
     static let maximumSamples = 120 * sampleRate
 
-    static func chunks(samples: [Float], wordTimings: Bool) -> [CloudAudioChunk] {
+    static func chunks(samples: [Float], wordTimings: Bool, maximumSamples: Int = maximumSamples) -> [CloudAudioChunk] {
         guard !samples.isEmpty else { return [] }
         let overlap = wordTimings ? self.sampleRate : 0
         var ranges: [(start: Int, end: Int)] = []
         var start = 0
         while start < samples.count {
-            let limit = min(start + self.maximumSamples, samples.count)
+            let limit = min(start + maximumSamples, samples.count)
             let end = limit == samples.count ? limit : self.silenceBoundary(samples: samples, limit: limit)
             ranges.append((start, end))
             if end == samples.count { break }

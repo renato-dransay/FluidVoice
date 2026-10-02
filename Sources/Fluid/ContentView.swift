@@ -1021,8 +1021,9 @@ struct ContentView: View {
         }
         if self.settings.usesCloudTranscription {
             // Styled dictation runs on the style model; plain dictation, command and rewrite use the speech model.
-            let model = usesStyleModel ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID
-            return (provider: "openrouter", model: model)
+            let providerID = self.asr.activeCloudProviderID
+            let model = usesStyleModel ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID(for: providerID)
+            return (provider: CloudTranscriptionClients.historyProviderName(for: providerID), model: model)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (

@@ -3,24 +3,27 @@ import Foundation
 
 /// Serializes chunk/cache access inside one operation and never persists API credentials.
 actor CloudTranscriptionEngine {
-    private let client: OpenRouterTranscriptionClient
+    private let client: any CloudTranscriptionClient
     private let cacheDirectory: URL?
 
-    init(client: OpenRouterTranscriptionClient, cacheDirectory: URL?) {
+    init(client: any CloudTranscriptionClient, cacheDirectory: URL?) {
         self.client = client
         self.cacheDirectory = cacheDirectory
     }
 
     func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult {
         try configuration.validate(wordTimings: wordTimings)
+        // A configuration only ever reaches its own provider's client, so a key never goes to another vendor.
+        guard configuration.providerID == self.client.providerID else { throw CloudTranscriptionError.unsupportedModel }
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CloudTranscriptionError.missingAPIKey }
         try Task.checkCancellation()
         if configuration.audioDictation != nil {
             // A single complete recording preserves style context and cannot resume partial AI output.
             return try await self.client.transcribe(samples: samples, configuration: configuration, apiKey: apiKey, wordTimings: wordTimings)
         }
-        let chunks = CloudAudioChunker.chunks(samples: samples, wordTimings: wordTimings)
-        let identity = try Self.audioIdentity(samples: samples, configuration: configuration, wordTimings: wordTimings)
+        let maximumSamples = self.client.maximumRequestSeconds * CloudAudioChunker.sampleRate
+        let chunks = CloudAudioChunker.chunks(samples: samples, wordTimings: wordTimings, maximumSamples: maximumSamples)
+        let identity = try Self.audioIdentity(samples: samples, configuration: configuration, wordTimings: wordTimings, maximumSamples: maximumSamples)
         var texts: [String] = []
         var words: [CloudTranscriptionWord] = []
         var totalCost = 0.0
@@ -101,13 +104,13 @@ actor CloudTranscriptionEngine {
         }
     }
 
-    private static func audioIdentity(samples: [Float], configuration: CloudTranscriptionConfiguration, wordTimings: Bool) throws -> String {
+    private static func audioIdentity(samples: [Float], configuration: CloudTranscriptionConfiguration, wordTimings: Bool, maximumSamples: Int) throws -> String {
         var hash = SHA256()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         hash.update(data: try encoder.encode(configuration))
         // Version covers PCM format, chunking rules, and cache schema; bump if any changes.
-        hash.update(data: Data("pcm-f32-16k-mono-chunks-v1-timed-\(wordTimings)".utf8))
+        hash.update(data: Data("pcm-f32-16k-mono-chunks-v1-timed-\(wordTimings)-max-\(maximumSamples)".utf8))
         samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }

@@ -24,7 +24,7 @@ nonisolated enum SpeechExecutionSource: String, CaseIterable, Identifiable, Send
 }
 
 struct CloudTranscriptionPreferences {
-    static let defaultProviderID = "openrouter"
+    static let defaultProviderID = CloudTranscriptionCatalog.openRouterID
 
     let defaults: UserDefaults
 
@@ -42,16 +42,30 @@ struct CloudTranscriptionPreferences {
         set { self.defaults.set(newValue, forKey: "CloudTranscriptionProvider") }
     }
 
+    /// OpenRouter's speech model, under the key it always had.
     var modelID: String {
-        get {
-            let stored = self.defaults.string(forKey: "CloudTranscriptionModel") ?? ""
-            return CloudTranscriptionModel.catalog.contains { $0.id == stored }
-                ? stored : CloudTranscriptionModel.defaultDictationID
-        }
-        set {
-            guard CloudTranscriptionModel.catalog.contains(where: { $0.id == newValue }) else { return }
-            self.defaults.set(newValue, forKey: "CloudTranscriptionModel")
-        }
+        get { self.modelID(for: Self.defaultProviderID) }
+        set { self.setModelID(newValue, for: Self.defaultProviderID) }
+    }
+
+    /// Where a provider's speech model is stored: `CloudTranscriptionModel` for OpenRouter, as before, and
+    /// `CloudTranscriptionModel.<providerID>` for the others.
+    static func modelDefaultsKey(for providerID: String) -> String {
+        providerID == self.defaultProviderID ? "CloudTranscriptionModel" : "CloudTranscriptionModel.\(providerID)"
+    }
+
+    /// The provider's chosen speech model when its catalog still offers it, otherwise its default model.
+    /// Empty for a provider without a catalog.
+    func modelID(for providerID: String) -> String {
+        let stored = self.defaults.string(forKey: Self.modelDefaultsKey(for: providerID)) ?? ""
+        if CloudTranscriptionCatalog.models(for: providerID).contains(where: { $0.id == stored }) { return stored }
+        return CloudTranscriptionCatalog.defaultModelID(for: providerID) ?? ""
+    }
+
+    /// Ignores a model the provider's catalog does not offer.
+    mutating func setModelID(_ modelID: String, for providerID: String) {
+        guard CloudTranscriptionCatalog.models(for: providerID).contains(where: { $0.id == modelID }) else { return }
+        self.defaults.set(modelID, forKey: Self.modelDefaultsKey(for: providerID))
     }
 
     var primaryLanguageCode: String? {
@@ -124,14 +138,23 @@ struct CloudTranscriptionPreferences {
             ? CloudAudioDictationModel.automaticModelID(inheriting: providerModel) : selection
     }
 
+    /// Imported files, voice commands and the local API: the active Cloud provider and its speech model.
     var configuration: CloudTranscriptionConfiguration {
-        CloudTranscriptionConfiguration(modelID: self.modelID, primaryLanguageCode: self.primaryLanguageCode, secondaryLanguageCode: self.secondaryLanguageCode)
+        let providerID = self.providerID
+        return CloudTranscriptionConfiguration(
+            providerID: providerID,
+            modelID: self.modelID(for: providerID),
+            primaryLanguageCode: self.primaryLanguageCode,
+            secondaryLanguageCode: self.secondaryLanguageCode
+        )
     }
 
     var dictationConfiguration: CloudTranscriptionConfiguration {
         let selectedLanguage = self.dictationLanguageCode
+        let providerID = self.providerID
         return CloudTranscriptionConfiguration(
-            modelID: self.modelID,
+            providerID: providerID,
+            modelID: self.modelID(for: providerID),
             languageCode: selectedLanguage,
             primaryLanguageCode: self.primaryLanguageCode,
             secondaryLanguageCode: self.secondaryLanguageCode
@@ -199,6 +222,7 @@ extension SettingsStore {
         CloudTranscriptionPreferences(defaults: .standard).dictationModelID(inheriting: self.openRouterAIProviderModel)
     }
 
+    /// OpenRouter's speech model, which its "Speech model" picker edits.
     var cloudTranscriptionModelID: String {
         get { CloudTranscriptionPreferences(defaults: .standard).modelID }
         set {
@@ -206,6 +230,22 @@ extension SettingsStore {
             var preferences = CloudTranscriptionPreferences(defaults: .standard)
             preferences.modelID = newValue
         }
+    }
+
+    /// The speech model of any Cloud provider.
+    func cloudTranscriptionModelID(for providerID: String) -> String {
+        CloudTranscriptionPreferences(defaults: .standard).modelID(for: providerID)
+    }
+
+    func setCloudTranscriptionModelID(_ modelID: String, for providerID: String) {
+        self.objectWillChange.send()
+        var preferences = CloudTranscriptionPreferences(defaults: .standard)
+        preferences.setModelID(modelID, for: providerID)
+    }
+
+    /// The speech model of the active Cloud provider.
+    var activeCloudTranscriptionModelID: String {
+        self.cloudTranscriptionModelID(for: self.cloudTranscriptionProviderID)
     }
 
     var cloudTranscriptionPrimaryLanguageCode: String? {

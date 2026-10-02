@@ -117,13 +117,23 @@ nonisolated struct CloudAudioDictationOutput: Codable, Equatable, Sendable {
 }
 
 nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable {
+    /// The Cloud provider whose client, catalog and key serve this configuration.
+    let providerID: String
     let modelID: String
     let languageCode: String?
     let audioDictation: CloudAudioDictationInstructions?
     let primaryLanguageCode: String?
     let secondaryLanguageCode: String?
 
-    init(modelID: String = CloudTranscriptionModel.defaultDictationID, languageCode: String? = nil, primaryLanguageCode: String? = nil, secondaryLanguageCode: String? = nil, audioDictation: CloudAudioDictationInstructions? = nil) {
+    init(
+        providerID: String = CloudTranscriptionCatalog.openRouterID,
+        modelID: String = CloudTranscriptionModel.defaultDictationID,
+        languageCode: String? = nil,
+        primaryLanguageCode: String? = nil,
+        secondaryLanguageCode: String? = nil,
+        audioDictation: CloudAudioDictationInstructions? = nil
+    ) {
+        self.providerID = providerID
         self.modelID = modelID
         self.audioDictation = audioDictation
         self.languageCode = Self.normalizedLanguageCode(languageCode)
@@ -132,23 +142,59 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         self.secondaryLanguageCode = secondary != self.primaryLanguageCode ? secondary : nil
     }
 
+    /// Configurations saved before other Cloud providers existed carry no provider and were OpenRouter's.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.providerID = try values.decodeIfPresent(String.self, forKey: .providerID) ?? CloudTranscriptionCatalog.openRouterID
+        self.modelID = try values.decode(String.self, forKey: .modelID)
+        self.languageCode = try values.decodeIfPresent(String.self, forKey: .languageCode)
+        self.audioDictation = try values.decodeIfPresent(CloudAudioDictationInstructions.self, forKey: .audioDictation)
+        self.primaryLanguageCode = try values.decodeIfPresent(String.self, forKey: .primaryLanguageCode)
+        self.secondaryLanguageCode = try values.decodeIfPresent(String.self, forKey: .secondaryLanguageCode)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerID, modelID, languageCode, audioDictation, primaryLanguageCode, secondaryLanguageCode
+    }
+
     static let meetingDefault = CloudTranscriptionConfiguration(modelID: CloudTranscriptionModel.defaultMeetingID)
 
+    /// The same request settings with another model or language, for the provider already chosen.
+    func with(
+        modelID: String? = nil,
+        languageCode: String?? = nil,
+        audioDictation: CloudAudioDictationInstructions?? = nil
+    ) -> CloudTranscriptionConfiguration {
+        CloudTranscriptionConfiguration(
+            providerID: self.providerID,
+            modelID: modelID ?? self.modelID,
+            languageCode: languageCode ?? self.languageCode,
+            primaryLanguageCode: self.primaryLanguageCode,
+            secondaryLanguageCode: self.secondaryLanguageCode,
+            audioDictation: audioDictation ?? self.audioDictation
+        )
+    }
+
+    /// The model and its word-timing support come from this provider's own catalog (CLD-4). Only
+    /// OpenRouter has the style model that hears the audio and applies a Cleanup Style in one request.
     func validate(wordTimings: Bool) throws {
         for code in [self.languageCode, self.primaryLanguageCode, self.secondaryLanguageCode].compactMap({ $0 }) where !Self.supportedLanguageCodes.contains(code) {
             throw CloudTranscriptionError.invalidLanguage
         }
         if let audioDictation {
-            guard CloudAudioDictationModel.isListed(audioDictation.modelID) else {
+            guard self.providerID == CloudTranscriptionCatalog.openRouterID, CloudAudioDictationModel.isListed(audioDictation.modelID) else {
                 throw CloudTranscriptionError.unsupportedModel
             }
             if wordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
             return
         }
-        guard let model = CloudTranscriptionModel.catalog.first(where: { $0.id == self.modelID }) else {
-            throw CloudTranscriptionError.unsupportedModel
-        }
+        guard let model = self.model else { throw CloudTranscriptionError.unsupportedModel }
         if wordTimings, !model.supportsWordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
+    }
+
+    /// The speech model in this provider's catalog, or nil when the provider does not offer it.
+    var model: CloudTranscriptionModel? {
+        CloudTranscriptionCatalog.models(for: self.providerID).first { $0.id == self.modelID }
     }
 
     var languageHintPrompt: String? {
@@ -260,31 +306,53 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
     case malformedResponse, invalidWordTimings, server(Int), catalogUnavailable, liveTranscriptionUnavailable
     case wordTimingCheckSpeechUnavailable, wordTimingCheckInconclusive
     case dictationTooLong, truncatedDictationResponse
+    /// A job vendor reported that the transcription job failed.
+    case jobFailed
 
-    var errorDescription: String? {
+    var errorDescription: String? { self.message(providerName: CloudTranscriptionCatalog.openRouterName) }
+
+    /// The message for a failure of the named provider. Messages never carry server text.
+    func message(providerName name: String) -> String {
         switch self {
-        case .missingAPIKey: ProviderKeyMessage.missing(providerName: "OpenRouter")
-        case .authentication: ProviderKeyMessage.rejected(providerName: "OpenRouter")
-        case .creditsExhausted: "OpenRouter has insufficient credits. Add credits or explicitly choose local transcription."
-        case .rateLimited: "OpenRouter is rate limiting requests. Wait before retrying, or choose local transcription."
-        case .timeout: "OpenRouter transcription timed out. Retry to resume completed chunks, or choose local transcription."
-        case .network: "Could not reach OpenRouter. Check your connection and retry, or choose local transcription."
+        case .missingAPIKey: ProviderKeyMessage.missing(providerName: name)
+        case .authentication: ProviderKeyMessage.rejected(providerName: name) + Self.authenticationDetail(providerName: name)
+        case .creditsExhausted: "\(name) has insufficient credits. Add credits or explicitly choose local transcription."
+        case .rateLimited: "\(name) is rate limiting requests. Wait before retrying, or choose local transcription."
+        case .timeout: "\(name) transcription timed out. Retry to resume completed chunks, or choose local transcription."
+        case .network: "Could not reach \(name). Check your connection and retry, or choose local transcription."
         case .unsupportedModel: "This transcription model is not supported by this build. Select a supported Voice Engine model."
-        case .modelUnavailable: "OpenRouter cannot route this model with your account settings. Check model availability and allowed providers at https://openrouter.ai/settings/privacy, or select another model."
-        case .unsupportedWordTimings: "This model has no verified word timings. Choose a Whisper model, or run the word-timing check in meeting settings."
+        case .modelUnavailable:
+            name == CloudTranscriptionCatalog.openRouterName
+                ? "OpenRouter cannot route this model with your account settings. Check model availability and allowed providers at https://openrouter.ai/settings/privacy, or select another model."
+                : "\(name) cannot use this model with your account. Select another model."
+        case .unsupportedWordTimings:
+            name == CloudTranscriptionCatalog.openRouterName
+                ? "This model has no verified word timings. Choose a Whisper model, or run the word-timing check in meeting settings."
+                : "This \(name) model returns no word timings. Choose another model."
         case .invalidLanguage: "Choose Automatic or a supported two-letter language code."
         case .invalidAudio: "The recording contains invalid audio samples or could not be decoded."
         case .oversizedAudio: "The audio chunk exceeds the cloud upload limit. Split the recording and retry."
-        case .malformedResponse: "OpenRouter returned an unreadable transcription response. Retry or choose local transcription."
-        case .invalidWordTimings: "OpenRouter returned missing or invalid word timings. Transcription is incomplete; retry or choose local transcription."
-        case .server(let status): "OpenRouter transcription failed (HTTP \(status)). Retry or choose local transcription."
-        case .catalogUnavailable: "OpenRouter did not list a supported transcription model. Try validation again later."
+        case .malformedResponse: "\(name) returned an unreadable transcription response. Retry or choose local transcription."
+        case .invalidWordTimings: "\(name) returned missing or invalid word timings. Transcription is incomplete; retry or choose local transcription."
+        case .server(let status): "\(name) transcription failed (HTTP \(status)). Retry or choose local transcription."
+        case .catalogUnavailable: "\(name) did not list a supported transcription model. Try validation again later."
         case .liveTranscriptionUnavailable: "Cloud transcription runs after recording stops. Select a local model for live captions."
         case .wordTimingCheckSpeechUnavailable: "Could not generate the spoken test clip for the word-timing check. Confirm a system voice is installed, then try again."
         case .wordTimingCheckInconclusive: "The model returned no text for the spoken test clip, so its word timings could not be checked. Try again or choose another model."
         case .dictationTooLong: "OpenRouter dictation with a Cleanup Style supports recordings up to 8 minutes. Record a shorter dictation, turn the style off, or import longer audio as a file."
+        case .jobFailed: "\(name) could not transcribe this recording. Retry or choose local transcription."
         case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
+    }
+
+    /// The message for any error from a request to the named provider.
+    static func message(for error: Error, providerName: String) -> String {
+        (error as? CloudTranscriptionError)?.message(providerName: providerName) ?? error.localizedDescription
+    }
+
+    /// ElevenLabs keys can be limited to some endpoints, so a refused key may only lack speech-to-text access.
+    private static func authenticationDetail(providerName: String) -> String {
+        providerName == ElevenLabsTranscriptionClient.name ? " The key may lack speech-to-text permission." : ""
     }
 }
 

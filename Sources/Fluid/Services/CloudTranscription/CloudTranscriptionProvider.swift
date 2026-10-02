@@ -1,42 +1,57 @@
 import AVFoundation
 import Foundation
 
-/// Configuration and credentials are frozen when the provider is created for an operation.
+/// Configuration and credentials are frozen when the provider is created for an operation. The client
+/// is the one serving `configuration.providerID`.
 final class CloudTranscriptionProvider: TranscriptionProvider {
     let configuration: CloudTranscriptionConfiguration
     private let apiKey: String
-    private let client: OpenRouterTranscriptionClient
+    private let client: any CloudTranscriptionClient
     private let engine: CloudTranscriptionEngine
 
-    init(configuration: CloudTranscriptionConfiguration, apiKey: String, cacheDirectory: URL? = nil, persistChunks: Bool = true, client: OpenRouterTranscriptionClient = .shared) {
+    init(
+        configuration: CloudTranscriptionConfiguration,
+        apiKey: String,
+        cacheDirectory: URL? = nil,
+        persistChunks: Bool = true,
+        client: (any CloudTranscriptionClient)? = nil
+    ) {
         self.configuration = configuration
         self.apiKey = apiKey
+        let client = client ?? CloudTranscriptionClients.make(configuration.providerID)
         self.client = client
         let directory = cacheDirectory ?? ForkIdentity.applicationSupportURL()?.appendingPathComponent("CloudTranscription", isDirectory: true)
         self.engine = CloudTranscriptionEngine(client: client, cacheDirectory: persistChunks ? directory : nil)
     }
 
-    var name: String { "OpenRouter" }
+    var name: String { self.client.providerName }
     var isAvailable: Bool { true }
     var isReady: Bool {
         !self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (try? self.configuration.validate(wordTimings: false)) != nil
     }
     var supportsWordTimings: Bool {
         if self.configuration.audioDictation != nil { return false }
-        return CloudTranscriptionModel.catalog.first(where: { $0.id == self.configuration.modelID })?.supportsWordTimings == true
+        return self.configuration.model?.supportsWordTimings == true
     }
     var prefersNativeFileTranscription: Bool { true }
     var shouldClearCacheAfterCancellation: Bool { false }
     func modelsExistOnDisk() -> Bool { self.isReady }
 
+    /// OpenRouter lists the models this key may use; every other provider checks the key alone, since
+    /// its catalog is fixed and already validated locally.
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         try self.configuration.validate(wordTimings: false)
+        guard let openRouter = self.client as? OpenRouterTranscriptionClient else {
+            guard self.client.providerID == self.configuration.providerID else { throw CloudTranscriptionError.unsupportedModel }
+            try await self.client.checkKey(apiKey: self.apiKey)
+            return
+        }
         if let instructions = self.configuration.audioDictation {
-            let available = try await self.client.validateAudioDictation(apiKey: self.apiKey)
+            let available = try await openRouter.validateAudioDictation(apiKey: self.apiKey)
             guard available.contains(where: { $0.id == instructions.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
             return
         }
-        let available = try await self.client.validate(apiKey: self.apiKey)
+        let available = try await openRouter.validate(apiKey: self.apiKey)
         guard available.contains(where: { $0.id == self.configuration.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
     }
 

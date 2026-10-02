@@ -445,13 +445,19 @@ final class FileTranscriptionService: ObservableObject {
         // Freeze source, model, language, credentials and speaker options before the first await.
         let settings = SettingsStore.shared
         let cloudProvider: CloudTranscriptionProvider? = settings.usesCloudTranscription
-            ? CloudTranscriptionProvider(configuration: settings.cloudTranscriptionConfiguration, apiKey: settings.openRouterTranscriptionAPIKey)
+            ? CloudTranscriptionSession(configuration: settings.cloudTranscriptionConfiguration, speechAPIKey: settings.speechAPIKey(for:))
+            .provider(persistChunks: true)
             : nil
-        let speakerLabelsEnabled = settings.fileTranscriptionSpeakerLabelsEnabled
         let expectedSpeakerCount = settings.fileTranscriptionExpectedSpeakerCount
-        if let cloudProvider, speakerLabelsEnabled, !cloudProvider.supportsWordTimings {
+        let speakerLabels = Self.cloudSpeakerLabels(
+            requested: settings.fileTranscriptionSpeakerLabelsEnabled,
+            cloudProviderID: cloudProvider?.configuration.providerID,
+            supportsWordTimings: cloudProvider?.supportsWordTimings ?? false
+        )
+        if speakerLabels == .unavailable {
             throw CloudTranscriptionError.unsupportedWordTimings
         }
+        let speakerLabelsEnabled = speakerLabels == .enabled
         let activityLease: ASRActivityLease
         do {
             activityLease = try self.asrService.acquireExclusiveActivity(.fileTranscription)
@@ -464,7 +470,9 @@ final class FileTranscriptionService: ObservableObject {
         self.currentFileURL = fileURL
         self.isTranscribing = true
         error = nil
-        self.fallbackNotice = nil
+        self.fallbackNotice = speakerLabels == .droppedForModel
+            ? "This model returns no word timings, so the file was transcribed without speaker labels."
+            : nil
         self.progress = 0.0
         let startTime = Date()
 
@@ -714,10 +722,28 @@ final class FileTranscriptionService: ObservableObject {
             self.error = error.localizedDescription
             throw error
         } catch {
-            let wrappedError = TranscriptionError.transcriptionFailed(error.localizedDescription)
+            let message = cloudProvider.map { CloudTranscriptionError.message(for: error, providerName: $0.name) } ?? error.localizedDescription
+            let wrappedError = TranscriptionError.transcriptionFailed(message)
             self.error = wrappedError.localizedDescription
             throw wrappedError
         }
+    }
+
+    enum CloudSpeakerLabels: Equatable {
+        case disabled, enabled
+        /// The provider's model has no word timings, so the file is transcribed without speaker labels.
+        case droppedForModel
+        /// OpenRouter's model has no verified word timings; its word-timing check can verify them.
+        case unavailable
+    }
+
+    /// Speaker labels on a Cloud file need word timings. A model whose provider documents none (Mistral)
+    /// transcribes without labels instead of failing; an OpenRouter model whose timings are only
+    /// unverified keeps failing with the remedy to run its word-timing check.
+    nonisolated static func cloudSpeakerLabels(requested: Bool, cloudProviderID: String?, supportsWordTimings: Bool) -> CloudSpeakerLabels {
+        guard requested else { return .disabled }
+        guard let cloudProviderID, !supportsWordTimings else { return .enabled }
+        return cloudProviderID == CloudTranscriptionCatalog.openRouterID ? .unavailable : .droppedForModel
     }
 
     private func transcribeCloudFile(
@@ -742,7 +768,7 @@ final class FileTranscriptionService: ObservableObject {
             turns = try await diarizer.diarize(fileURL: fileURL)
             try Task.checkCancellation()
         }
-        self.currentStatus = "Transcribing with OpenRouter..."
+        self.currentStatus = "Transcribing with \(provider.name)..."
         self.progress = 0.3
         let transcript: ASRTranscriptionResult
         let segments: [SpeakerTranscriptSegment]

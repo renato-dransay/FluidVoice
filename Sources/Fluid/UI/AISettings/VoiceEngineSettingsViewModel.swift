@@ -290,6 +290,23 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.settings.usesCloudTranscription && self.settings.cloudTranscriptionProviderID == providerID
     }
 
+    /// Job vendors answer only after their job finishes, which dictation feels.
+    static let slowCloudProviderIDs: Set<String> = ["speechmatics", "soniox", "assemblyai", "gladia"]
+
+    /// The captions under a non-OpenRouter provider's "Speech model" menu (VE-5 item 4).
+    static func cloudSpeechModelCaptions(providerID: String, supportsWordTimings: Bool) -> [String] {
+        var captions = [
+            "Turns speech into text. Used for dictation, imported files and voice commands. Cleanup Styles run afterwards on your default text provider.",
+        ]
+        if self.slowCloudProviderIDs.contains(providerID) {
+            captions.append("This provider answers after a short wait, so dictation feels slower than with Local or Live cloud.")
+        }
+        if !supportsWordTimings {
+            captions.append("Imported files are transcribed without speaker labels.")
+        }
+        return captions
+    }
+
     /// Why `Activate` is disabled for this Cloud provider, or nil when it can run.
     static func cloudActivationBlocker(hasKey: Bool, hasModel: Bool, isBusy: Bool) -> String? {
         if !hasKey { return "Add an API key in AI Providers first." }
@@ -301,7 +318,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func cloudActivationBlocker(for providerID: String) -> String? {
         Self.cloudActivationBlocker(
             hasKey: !self.settings.speechAPIKey(for: providerID).isEmpty,
-            hasModel: !self.settings.cloudTranscriptionModelID.isEmpty,
+            hasModel: !self.settings.cloudTranscriptionModelID(for: providerID).isEmpty,
             isBusy: self.areSpeechModelActionsBlocked || self.cloudProviderBeingChecked != nil || self.liveProviderBeingChecked != nil
         )
     }
@@ -348,10 +365,16 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     /// OpenRouter: both catalogs are listed with the key and the chosen speech and style models must be on
-    /// them. Every Cloud provider must pass its check before it becomes the engine.
+    /// them. Any other provider: its speech model must be in its catalog and its key check must pass.
+    /// Every Cloud provider must pass its check before it becomes the engine.
     private func checkCloudProvider(_ providerID: String, apiKey: String) async throws {
         guard providerID == CloudTranscriptionPreferences.defaultProviderID else {
-            throw CloudTranscriptionError.unsupportedModel
+            try await Self.checkCloudProvider(
+                providerID,
+                modelID: self.settings.cloudTranscriptionModelID(for: providerID),
+                apiKey: apiKey
+            )
+            return
         }
         let speechModelID = self.settings.cloudTranscriptionModelID
         let styleModelID = self.settings.cloudDictationModelID
@@ -363,6 +386,23 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         let name = VoiceEngineStatus.providerName(providerID)
         guard listed.speech.contains(speechModelID) else { throw CloudActivationError.speechModelUnavailable(providerName: name) }
         guard listed.style.contains(styleModelID) else { throw CloudActivationError.styleModelUnavailable(providerName: name) }
+    }
+
+    /// The check of a Cloud provider other than OpenRouter (VE-5a): the model locally, then one request
+    /// without audio that the provider answers only for a key it accepts.
+    static func checkCloudProvider(
+        _ providerID: String,
+        modelID: String,
+        apiKey: String,
+        clients: (String) -> any CloudTranscriptionClient = CloudTranscriptionClients.make
+    ) async throws {
+        let configuration = CloudTranscriptionConfiguration(providerID: providerID, modelID: modelID)
+        do {
+            try configuration.validate(wordTimings: false)
+        } catch {
+            throw CloudActivationError.speechModelUnavailable(providerName: VoiceEngineStatus.providerName(providerID))
+        }
+        try await clients(providerID).checkKey(apiKey: apiKey)
     }
 
     /// The listing check: which speech and style models OpenRouter offers this key. Afterwards only those

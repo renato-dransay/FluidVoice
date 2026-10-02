@@ -104,6 +104,11 @@
 		51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */; };
 		51AB0E0100000000000000C2 /* AIProvidersPageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */; };
 		51AB0E0100000000000000D2 /* VoiceEngineSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */; };
+		51AB0E0100000000000000E2 /* CloudProviderRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */; };
+		51AB0E0100000000000000F2 /* CloudVendorSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */; };
+		51AB0E010000000000000102 /* DeepgramTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */; };
+		51AB0E010000000000000112 /* ElevenLabsTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */; };
+		51AB0E010000000000000122 /* MistralTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000121 /* MistralTranscriptionClientTests.swift */; };
 		FEED67600000000000000002 /* PasteDeliveryCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */; };
 		7CDB0A2F2F3C4D5600FB7CAD /* dictation_fixture.wav in Resources */ = {isa = PBXBuildFile; fileRef = 7CDB0A2B2F3C4D5600FB7CAD /* dictation_fixture.wav */; };
 		7CDB0A302F3C4D5600FB7CAD /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CDB0A2C2F3C4D5600FB7CAD /* XCTest.framework */; };
@@ -231,6 +236,11 @@
 		51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRegistryTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvidersPageTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEngineSettingsTests.swift; sourceTree = "<group>"; };
+		51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProviderRoutingTests.swift; sourceTree = "<group>"; };
+		51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudVendorSupportTests.swift; sourceTree = "<group>"; };
+		51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepgramTranscriptionClientTests.swift; sourceTree = "<group>"; };
+		51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevenLabsTranscriptionClientTests.swift; sourceTree = "<group>"; };
+		51AB0E010000000000000121 /* MistralTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MistralTranscriptionClientTests.swift; sourceTree = "<group>"; };
 		FEED67600000000000000001 /* PasteDeliveryCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteDeliveryCoordinatorTests.swift; sourceTree = "<group>"; };
 		7C078D8F2E3B339200FB7CAC /* FluidVoice Debug.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "FluidVoice Debug.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyShortcutTests.swift; sourceTree = "<group>"; };
@@ -461,6 +471,11 @@
 				51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */,
 				51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */,
 				51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */,
+				51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */,
+				51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */,
+				51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */,
+				51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */,
+				51AB0E010000000000000121 /* MistralTranscriptionClientTests.swift */,
 				FF5BE30D67789BA16333DB81 /* FileCloudSpeakerAlignmentTests.swift */,
 				DE6661ED3750E5FB4FB63600 /* ForkIdentityTests.swift */,
 				1DE0C10000000000000000A1 /* LiveCloudSettingsTests.swift */,
@@ -832,6 +847,11 @@
 				51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */,
 				51AB0E0100000000000000C2 /* AIProvidersPageTests.swift in Sources */,
 				51AB0E0100000000000000D2 /* VoiceEngineSettingsTests.swift in Sources */,
+				51AB0E0100000000000000E2 /* CloudProviderRoutingTests.swift in Sources */,
+				51AB0E0100000000000000F2 /* CloudVendorSupportTests.swift in Sources */,
+				51AB0E010000000000000102 /* DeepgramTranscriptionClientTests.swift in Sources */,
+				51AB0E010000000000000112 /* ElevenLabsTranscriptionClientTests.swift in Sources */,
+				51AB0E010000000000000122 /* MistralTranscriptionClientTests.swift in Sources */,
 				B11ABB5737781D49446C9472 /* FileCloudSpeakerAlignmentTests.swift in Sources */,
 				309E0C06AEE9057BCC9E2C94 /* ForkIdentityTests.swift in Sources */,
 				1DE0C10000000000000000A2 /* LiveCloudSettingsTests.swift in Sources */,

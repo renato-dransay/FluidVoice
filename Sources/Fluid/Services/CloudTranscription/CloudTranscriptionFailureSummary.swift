@@ -17,7 +17,8 @@ nonisolated enum CloudTranscriptionFailureSummary {
         }
     }
 
-    static func line(for error: Error, modelID: String?) -> String {
-        "Cloud transcription failed: \(self.kind(of: error)); model=\(modelID ?? "unknown"). No transcript or request payload logged."
+    static func line(for error: Error, modelID: String?, providerID: String? = nil) -> String {
+        let provider = providerID.map { "provider=\($0) " } ?? ""
+        return "Cloud transcription failed: \(self.kind(of: error)); \(provider)model=\(modelID ?? "unknown"). No transcript or request payload logged."
     }
 }

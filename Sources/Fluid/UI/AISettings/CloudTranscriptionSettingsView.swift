@@ -47,6 +47,7 @@ struct CloudTranscriptionSettingsView: View {
         .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
         .task { await self.viewModel.refreshOpenRouterCatalog(force: false) }
         .onChange(of: self.settings.cloudTranscriptionModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
+        .onChange(of: self.settings.activeCloudTranscriptionModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudDictationModelID) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudTranscriptionPrimaryLanguageCode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
         .onChange(of: self.settings.cloudTranscriptionSecondaryLanguageCode) { _, _ in self.viewModel.asr.resetTranscriptionProvider() }
@@ -98,6 +99,8 @@ struct CloudTranscriptionSettingsView: View {
     private func modelControls(for providerID: String) -> some View {
         if providerID == CloudTranscriptionPreferences.defaultProviderID {
             OpenRouterModelControls(settings: self.settings, viewModel: self.viewModel)
+        } else {
+            CloudSpeechModelControls(settings: self.settings, providerID: providerID)
         }
     }
 
@@ -219,6 +222,36 @@ struct CloudTranscriptionSettingsView: View {
             cost = "unknown"
         }
         return "Last request: \(duration) seconds. Cost: \(cost)"
+    }
+}
+
+/// The one "Speech model" menu of a Cloud provider other than OpenRouter, from its fixed catalog (CLD-4).
+struct CloudSpeechModelControls: View {
+    @ObservedObject var settings: SettingsStore
+    let providerID: String
+
+    var body: some View {
+        let models = CloudTranscriptionCatalog.models(for: self.providerID)
+        let selectedID = self.settings.cloudTranscriptionModelID(for: self.providerID)
+        let supportsWordTimings = models.first { $0.id == selectedID }?.supportsWordTimings ?? false
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Speech model", selection: self.selection) {
+                ForEach(models, id: \.id) { model in
+                    Text(model.name).tag(model.id)
+                }
+            }
+            .accessibilityIdentifier("cloud-speech-model-\(self.providerID)")
+            ForEach(VoiceEngineSettingsViewModel.cloudSpeechModelCaptions(providerID: self.providerID, supportsWordTimings: supportsWordTimings), id: \.self) { caption in
+                Text(caption).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var selection: Binding<String> {
+        Binding(
+            get: { self.settings.cloudTranscriptionModelID(for: self.providerID) },
+            set: { self.settings.setCloudTranscriptionModelID($0, for: self.providerID) }
+        )
     }
 }
 

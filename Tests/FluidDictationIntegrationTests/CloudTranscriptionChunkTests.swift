@@ -85,12 +85,12 @@ final class CloudTranscriptionChunkTests: XCTestCase {
         }
         let samples = [Float](repeating: 0.1, count: 16_000 * 130)
         let configuration = CloudTranscriptionConfiguration(modelID: "openai/gpt-4o-mini-transcribe")
-        let engine = CloudTranscriptionEngine(client: .init(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: directory)
+        let engine = CloudTranscriptionEngine(client: OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: directory)
         do {
             _ = try await engine.transcribe(samples: samples, configuration: configuration, apiKey: "test-key", wordTimings: false)
             XCTFail("Expected second chunk timeout")
         } catch {}
-        let resumedEngine = CloudTranscriptionEngine(client: .init(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: directory)
+        let resumedEngine = CloudTranscriptionEngine(client: OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: directory)
         let result = try await resumedEngine.transcribe(samples: samples, configuration: configuration, apiKey: "test-key", wordTimings: false)
         XCTAssertEqual(result.text, "cached cached")
         XCTAssertEqual(recorder.requests.count, 3)
@@ -126,7 +126,7 @@ final class CloudTranscriptionChunkTests: XCTestCase {
                 : #"{"text":"boundary last","words":[{"word":"boundary","start":0.3,"end":0.7},{"word":"last","start":2,"end":3}]}"#
             return (200, [:], Data(response.utf8))
         }
-        let engine = CloudTranscriptionEngine(client: .init(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: nil)
+        let engine = CloudTranscriptionEngine(client: OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: nil)
         let result = try await engine.transcribe(samples: [Float](repeating: 0.2, count: 16_000 * 125), configuration: .init(), apiKey: "test-key", wordTimings: true)
         XCTAssertEqual(result.words?.map(\.word), ["first", "boundary", "last"])
         XCTAssertEqual(result.words?.last?.start, 121)
@@ -151,7 +151,7 @@ final class CloudTranscriptionChunkTests: XCTestCase {
         CloudURLProtocol.install { _ in
             (200, [:], Data(#"{"text":"你好，世界。\n新段落。","words":[{"word":"你好，世界。","start":0,"end":0.5},{"word":"新段落。","start":0.5,"end":1}]}"#.utf8))
         }
-        let engine = CloudTranscriptionEngine(client: .init(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: nil)
+        let engine = CloudTranscriptionEngine(client: OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false), cacheDirectory: nil)
         let result = try await engine.transcribe(samples: [Float](repeating: 0.1, count: 16_000), configuration: .init(languageCode: "zh"), apiKey: "test-key", wordTimings: true)
         XCTAssertEqual(result.text, "你好，世界。\n新段落。")
     }

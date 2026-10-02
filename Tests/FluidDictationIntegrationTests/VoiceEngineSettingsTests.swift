@@ -122,11 +122,30 @@ final class VoiceEngineSettingsTests: XCTestCase {
     func testTheProviderMenuListsConnectedCloudProvidersFirst() {
         let connected = VoiceEngineSettingsViewModel.cloudProviderGroups(hasKey: { $0 == "openrouter" })
         XCTAssertEqual(connected.connected.map(\.id), ["openrouter"])
-        XCTAssertEqual(connected.notSetUp.map(\.id), [])
+        XCTAssertEqual(connected.notSetUp.map(\.id), ["mistral", "deepgram", "elevenlabs"])
 
         let none = VoiceEngineSettingsViewModel.cloudProviderGroups(hasKey: { _ in false })
         XCTAssertEqual(none.connected.map(\.id), [])
-        XCTAssertEqual(none.notSetUp.map(\.id), ["openrouter"], "OpenRouter is the only Cloud provider in this phase")
+        XCTAssertEqual(none.notSetUp.map(\.id), ProviderRegistry.providers(with: .cloudTranscription).map(\.id))
+        XCTAssertTrue(none.notSetUp.map(\.id).contains("deepgram"))
+
+        let two = VoiceEngineSettingsViewModel.cloudProviderGroups(hasKey: { ["openrouter", "elevenlabs"].contains($0) })
+        XCTAssertEqual(two.connected.map(\.id), ["openrouter", "elevenlabs"])
+        XCTAssertFalse(two.notSetUp.map(\.id).contains("elevenlabs"))
+    }
+
+    func testANonOpenRouterSpeechModelIsCaptionedByWhatItCanDo() {
+        typealias Model = VoiceEngineSettingsViewModel
+        let base = "Turns speech into text. Used for dictation, imported files and voice commands. Cleanup Styles run afterwards on your default text provider."
+        XCTAssertEqual(Model.cloudSpeechModelCaptions(providerID: "deepgram", supportsWordTimings: true), [base])
+        XCTAssertEqual(
+            Model.cloudSpeechModelCaptions(providerID: "mistral", supportsWordTimings: false),
+            [base, "Imported files are transcribed without speaker labels."]
+        )
+        XCTAssertEqual(
+            Model.cloudSpeechModelCaptions(providerID: "soniox", supportsWordTimings: true),
+            [base, "This provider answers after a short wait, so dictation feels slower than with Local or Live cloud."]
+        )
     }
 
     func testTheShownCloudProviderIsBrowsedThenStoredThenFirstConnected() {
@@ -210,6 +229,65 @@ final class VoiceEngineSettingsTests: XCTestCase {
         XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider, "Exactly one engine is active")
         XCTAssertTrue(store.isSpeechVerified("openrouter"))
         XCTAssertTrue(SettingsStore.verifiedProviderFingerprints(in: self.defaults).isEmpty, "A speech check never writes the text record")
+    }
+
+    func testActivatingDeepgramChecksItsKeyWithDeepgramOnly() async throws {
+        let keychain = FakeKeychain(["openrouter": "or-key", "deepgram": "dg-key"])
+        let store = self.store(keychain)
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data(#"{"projects":[]}"#.utf8))
+        }
+        let clients: (String) -> any CloudTranscriptionClient = { _ in DeepgramTranscriptionClient(session: CloudURLProtocol.session()) }
+
+        let outcome = await CloudEngineActivation(keyStore: store).activate(
+            "deepgram",
+            check: { apiKey in try await VoiceEngineSettingsViewModel.checkCloudProvider("deepgram", modelID: "nova-3", apiKey: apiKey, clients: clients) },
+            canSwitch: { true }
+        )
+
+        XCTAssertEqual(outcome, .activated)
+        XCTAssertEqual(recorder.requests.map(\.url?.absoluteString), ["https://api.deepgram.com/v1/projects"])
+        XCTAssertEqual(recorder.requests.first?.value(forHTTPHeaderField: "Authorization"), "Token dg-key")
+        let cloud = CloudTranscriptionPreferences(defaults: self.defaults)
+        XCTAssertEqual(cloud.source, .cloud)
+        XCTAssertEqual(cloud.providerID, "deepgram")
+        XCTAssertTrue(store.isSpeechVerified("deepgram"))
+        XCTAssertFalse(SettingsStore.usesCombinedCloudDictation(source: cloud.source, cloudProviderID: cloud.providerID))
+    }
+
+    func testARejectedDeepgramKeyNamesDeepgramAndAnUnknownModelSendsNothing() async throws {
+        let store = self.store(FakeKeychain(["deepgram": "dg-key"]))
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (401, [:], Data("PRIVATE".utf8))
+        }
+        let clients: (String) -> any CloudTranscriptionClient = { _ in DeepgramTranscriptionClient(session: CloudURLProtocol.session()) }
+
+        let rejected = await CloudEngineActivation(keyStore: store).activate(
+            "deepgram",
+            check: { apiKey in try await VoiceEngineSettingsViewModel.checkCloudProvider("deepgram", modelID: "nova-3", apiKey: apiKey, clients: clients) },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(rejected, .failed(
+            message: "Couldn't activate Deepgram: Deepgram rejected the API key. Update it in AI Providers and retry.",
+            keyRejected: true
+        ))
+        XCTAssertEqual(recorder.requests.count, 1)
+
+        let unknownModel = await CloudEngineActivation(keyStore: store).activate(
+            "deepgram",
+            check: { apiKey in try await VoiceEngineSettingsViewModel.checkCloudProvider("deepgram", modelID: "nova-0", apiKey: apiKey, clients: clients) },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(unknownModel, .failed(
+            message: "Couldn't activate Deepgram: The selected speech model is unavailable on Deepgram. Choose another model.",
+            keyRejected: false
+        ))
+        XCTAssertEqual(recorder.requests.count, 1, "An unknown model fails before any request")
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
     }
 
     func testActivationNeedsAKeyAndNeverSwitchesUnderARecording() async {

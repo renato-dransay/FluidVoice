@@ -1,0 +1,118 @@
+import Foundation
+
+/// ElevenLabs speech to text: one multipart request carries the whole chunk and returns the transcript.
+///
+/// EVIDENCE: https://elevenlabs.io/docs/api-reference/speech-to-text/convert (checked 2026-10-02):
+/// `POST https://api.elevenlabs.io/v1/speech-to-text`, header `xi-api-key`, multipart fields `file`,
+/// `model_id`, optional `language_code`, `timestamps_granularity` (`none`, `word`, `character`) and
+/// `tag_audio_events`. The response has `text` and `words[]` with `text`, `start`, `end` (seconds) and
+/// `type` (`word`, `spacing`, `audio_event`). No hint field exists, so only a chosen language is sent.
+/// EVIDENCE: https://elevenlabs.io/docs/overview/models (checked 2026-10-02): `scribe_v2` is the batch model.
+/// EVIDENCE: https://elevenlabs.io/docs/overview/capabilities/speech-to-text (checked 2026-10-02): FLAC and WAV
+/// are accepted.
+/// EVIDENCE: https://elevenlabs.io/docs/eleven-api/resources/errors (checked 2026-10-02): 401
+/// `authentication_error`, 402 `insufficient_credits`, 403 `insufficient_permissions` for a key without
+/// access to the endpoint, 429 rate limits. The help centre also documents a legacy 401 `quota_exceeded`.
+nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
+    static let id = "elevenlabs"
+    static let name = "ElevenLabs"
+    static let models: [CloudTranscriptionModel] = [
+        .init(id: "scribe_v2", name: "Scribe v2", wordTimingSupport: .supported, languageHintProviderTags: []),
+    ]
+    static let shared = ElevenLabsTranscriptionClient()
+
+    private static let speechToTextEndpoint = "https://api.elevenlabs.io/v1/speech-to-text"
+    /// The key check the ElevenLabs live adapter uses.
+    private static let keyCheckEndpoint = "https://api.elevenlabs.io/v1/models"
+
+    private let http: CloudVendorHTTP
+
+    init(session: URLSession? = nil) {
+        self.http = CloudVendorHTTP(providerID: Self.id, session: session ?? CloudVendorHTTP.makeSession())
+    }
+
+    var providerID: String { Self.id }
+    var providerName: String { Self.name }
+    var maximumRequestSeconds: Int { CloudVendorHTTP.maximumRequestSeconds }
+
+    func checkKey(apiKey: String) async throws {
+        let key = try CloudVendorHTTP.trimmedKey(apiKey)
+        guard let url = URL(string: Self.keyCheckEndpoint) else { throw CloudTranscriptionError.network }
+        _ = try await self.http.send(CloudVendorHTTP.request(url, headers: ["xi-api-key": key]), endpoint: "models", classify: Self.classify)
+    }
+
+    func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult {
+        try Task.checkCancellation()
+        guard configuration.providerID == Self.id else { throw CloudTranscriptionError.unsupportedModel }
+        try configuration.validate(wordTimings: wordTimings)
+        let key = try CloudVendorHTTP.trimmedKey(apiKey)
+        let audio = try CloudEncodedAudio.best(samples: samples)
+        guard let url = URL(string: Self.speechToTextEndpoint) else { throw CloudTranscriptionError.network }
+        var form = CloudMultipartForm()
+        form.append(field: "model_id", value: configuration.modelID)
+        if let language = configuration.languageCode { form.append(field: "language_code", value: language) }
+        form.append(field: "timestamps_granularity", value: wordTimings ? "word" : "none")
+        form.append(field: "tag_audio_events", value: "false")
+        form.append(audio: audio)
+        var request = CloudVendorHTTP.request(
+            url,
+            method: "POST",
+            headers: ["xi-api-key": key, "Content-Type": form.contentType],
+            timeout: CloudVendorHTTP.singleRequestTimeout(audioSamples: samples.count)
+        )
+        request.httpBody = form.data
+        let started = ProcessInfo.processInfo.systemUptime
+        let (data, response) = try await self.http.send(
+            request,
+            endpoint: "speech-to-text",
+            modelID: configuration.modelID,
+            audioBytes: audio.data.count,
+            audioSamples: samples.count,
+            classify: Self.classify
+        )
+        let decoded = try CloudVendorHTTP.decode(Response.self, from: data)
+        let result = CloudTranscriptionResult(
+            text: decoded.text,
+            // Spacing and audio events are not words.
+            words: wordTimings ? decoded.words?.filter { $0.type == "word" }.map {
+                CloudTranscriptionWord(word: $0.text, start: $0.start, end: $0.end)
+            } : nil,
+            usage: nil,
+            requestID: response.value(forHTTPHeaderField: "request-id"),
+            processingDuration: ProcessInfo.processInfo.systemUptime - started
+        )
+        if wordTimings { try result.validateTimings(duration: CloudVendorHTTP.audioSeconds(samples.count)) }
+        try Task.checkCancellation()
+        return result
+    }
+
+    /// A legacy 401 `quota_exceeded` means no credits, not a bad key. The body is read for its code only.
+    static let classify: @Sendable (Int, Data) -> CloudTranscriptionError? = { status, data in
+        guard status == 401,
+              let error = try? JSONDecoder().decode(ErrorBody.self, from: data),
+              [error.detail.code, error.detail.status].contains("quota_exceeded")
+        else { return nil }
+        return .creditsExhausted
+    }
+
+    private struct ErrorBody: Decodable {
+        struct Detail: Decodable {
+            let code: String?
+            let status: String?
+        }
+        let detail: Detail
+    }
+
+    private struct Response: Decodable {
+        struct Word: Decodable {
+            let text: String
+            let start: TimeInterval
+            let end: TimeInterval
+            let type: String?
+        }
+        let text: String
+        // Missing timings and a successful empty transcript have different meanings.
+        // swiftlint:disable:next discouraged_optional_collection
+        let words: [Word]?
+    }
+}

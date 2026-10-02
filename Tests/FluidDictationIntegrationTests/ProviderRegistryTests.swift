@@ -23,7 +23,8 @@ final class ProviderRegistryTests: XCTestCase {
         XCTAssertNil(ProviderRegistry.liveProviderID(for: "openAI"))
     }
 
-    /// Through phase 3 the seven live vendors carry Live only, and OpenRouter is the only Cloud provider.
+    /// A vendor gains Cloud transcription once its client ships: OpenRouter, then Deepgram, ElevenLabs and
+    /// Mistral in phase 4. The other live vendors carry Live only until theirs ship.
     func testCapabilitiesMatchTheCodeThatHasShipped() {
         func capabilities(_ id: String) -> Set<ProviderCapability> { ProviderRegistry.descriptor(for: id)?.capabilities ?? [] }
         XCTAssertEqual(capabilities("openai"), [.text, .liveTranscription])
@@ -31,10 +32,13 @@ final class ProviderRegistryTests: XCTestCase {
             XCTAssertEqual(capabilities(id), [.text], id)
         }
         XCTAssertEqual(capabilities("openrouter"), [.text, .cloudTranscription])
-        for id in ["mistral", "assemblyai"] + self.speechOnlyIDs {
+        for id in ["deepgram", "elevenlabs", "mistral"] {
+            XCTAssertEqual(capabilities(id), [.cloudTranscription, .liveTranscription], id)
+        }
+        for id in ["assemblyai", "soniox", "speechmatics", "gladia"] {
             XCTAssertEqual(capabilities(id), [.liveTranscription], id)
         }
-        XCTAssertEqual(ProviderRegistry.providers(with: .cloudTranscription).map(\.id), ["openrouter"])
+        XCTAssertEqual(ProviderRegistry.providers(with: .cloudTranscription).map(\.id), ["openrouter", "mistral", "deepgram", "elevenlabs"])
         XCTAssertEqual(Set(ProviderRegistry.all.map(\.id)).count, ProviderRegistry.all.count)
         XCTAssertFalse(ProviderRegistry.descriptor(for: "ollama")?.requiresAPIKey ?? true)
         XCTAssertFalse(ProviderRegistry.descriptor(for: "lmstudio")?.requiresAPIKey ?? true)
@@ -112,14 +116,19 @@ final class ProviderRegistryTests: XCTestCase {
         }
     }
 
-    /// Every provider the registry offers for Cloud transcription has a client and a model catalog.
-    /// Only OpenRouter has shipped one; another provider gains the capability with its client.
+    /// Every provider the registry offers for Cloud transcription has a client and a model catalog (CLD-4).
     func testEveryCloudTranscriptionProviderHasAClientAndACatalog() {
-        func catalog(for id: String) -> [CloudTranscriptionModel] {
-            id == CloudTranscriptionPreferences.defaultProviderID ? CloudTranscriptionModel.catalog : []
-        }
         for descriptor in ProviderRegistry.providers(with: .cloudTranscription) {
-            XCTAssertFalse(catalog(for: descriptor.id).isEmpty, descriptor.id)
+            let client = CloudTranscriptionClients.client(for: descriptor.id)
+            XCTAssertNotNil(client, descriptor.id)
+            XCTAssertEqual(client?.providerID, descriptor.id)
+            XCTAssertEqual(client?.providerName, descriptor.name)
+            XCTAssertFalse(CloudTranscriptionCatalog.models(for: descriptor.id).isEmpty, descriptor.id)
         }
+        XCTAssertEqual(
+            Set(CloudTranscriptionClients.providerIDs),
+            Set(ProviderRegistry.providers(with: .cloudTranscription).map(\.id)),
+            "A client ships together with the registry capability"
+        )
     }
 }

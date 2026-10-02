@@ -56,14 +56,17 @@ final class InferenceAPIController: LocalAPIRouteHandler {
                 throw error
             }
         } catch {
-            return LocalAPI.error(error.localizedDescription, status: 400)
+            // A Cloud failure names the provider that served the request.
+            let message = CloudTranscriptionError.message(for: error, providerName: SettingsStore.shared.cloudTranscriptionProviderName)
+            return LocalAPI.error(message, status: 400)
         }
     }
 
     private func transcribeFile(_ fileURL: URL) async throws -> LocalAPI.Response {
-        let providerName = SettingsStore.shared.usesCloudTranscription
-            ? "OpenRouter / \(SettingsStore.shared.cloudTranscriptionModelID)"
-            : SettingsStore.shared.selectedSpeechModel.displayName
+        let settings = SettingsStore.shared
+        let providerName = settings.usesCloudTranscription
+            ? "\(settings.cloudTranscriptionProviderName) / \(settings.activeCloudTranscriptionModelID)"
+            : settings.selectedSpeechModel.displayName
         let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
         return LocalAPI.json(
             TranscribeResponse(

@@ -51,7 +51,7 @@ struct CloudEngineActivation {
             if rejected {
                 self.keyStore.clearSpeechVerification(for: providerID)
             }
-            return .failed(message: Self.failure(name, error.localizedDescription), keyRejected: rejected)
+            return .failed(message: Self.failure(name, CloudTranscriptionError.message(for: error, providerName: name)), keyRejected: rejected)
         }
         guard canSwitch() else {
             return .failed(message: Self.failure(name, "finish the current recording first."), keyRejected: false)

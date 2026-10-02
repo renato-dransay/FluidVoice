@@ -632,8 +632,9 @@ final class ASRService: ObservableObject {
     /// and the next dictation lease replaces it.
     private var liveProviderTestRun: LiveProviderTestRun?
     private var cloudSpeechProvider: CloudTranscriptionProvider?
-    private var frozenCloudConfiguration: CloudTranscriptionConfiguration?
-    private var frozenCloudAPIKey: String?
+    /// The Cloud provider, key and configuration frozen for the recording in progress.
+    private var frozenCloudSession: CloudTranscriptionSession?
+    private var frozenCloudConfiguration: CloudTranscriptionConfiguration? { self.frozenCloudSession?.configuration }
     private var frozenCloudDictationModelID: String?
     private var lastCompletedCloudDictationOutput: CloudAudioDictationOutput?
     enum FailedRemoteDictation {
@@ -722,18 +723,15 @@ final class ASRService: ObservableObject {
                     let configuration = activity == .dictation
                         ? SettingsStore.shared.cloudDictationConfiguration
                         : SettingsStore.shared.cloudTranscriptionConfiguration
-                    self.frozenCloudConfiguration = configuration
-                    self.frozenCloudAPIKey = SettingsStore.shared.openRouterTranscriptionAPIKey
+                    // The key is the speech key of the configuration's own provider (KEY-8).
+                    let session = CloudTranscriptionSession(configuration: configuration, speechAPIKey: SettingsStore.shared.speechAPIKey(for:))
+                    self.frozenCloudSession = session
                     self.frozenCloudDictationModelID = activity == .dictation && SettingsStore.shared.usesCombinedCloudDictation
                         ? SettingsStore.shared.cloudDictationModelID : nil
-                    self.frozenTranscriptionProvider = CloudTranscriptionProvider(
-                        configuration: configuration,
-                        apiKey: self.frozenCloudAPIKey ?? "",
-                        persistChunks: activity != .dictation
-                    )
+                    self.frozenTranscriptionProvider = session.provider(persistChunks: activity != .dictation)
                     if activity == .dictation {
-                        let key = self.frozenCloudAPIKey ?? ""
-                        Task.detached(priority: .utility) { await OpenRouterTranscriptionClient.shared.prewarmIfIdle(apiKey: key) }
+                        // Only OpenRouter is prewarmed; the session ignores every other provider.
+                        Task.detached(priority: .utility) { await session.prewarm() }
                     }
                 } else {
                     self.frozenTranscriptionProvider = self.transcriptionProvider
@@ -770,8 +768,7 @@ final class ASRService: ObservableObject {
         self.asrReadyBeforeLiveLease = nil
         self.frozenTranscriptionProvider = nil
         self.frozenSpeechExecutionSource = nil
-        self.frozenCloudConfiguration = nil
-        self.frozenCloudAPIKey = nil
+        self.frozenCloudSession = nil
         self.frozenCloudDictationModelID = nil
         DictionaryAudioLearningService.shared.activityDidEnd()
 
@@ -818,23 +815,13 @@ final class ASRService: ObservableObject {
         }
         guard self.activeActivityLease?.activity == .dictation,
               !self.isStoppingFinalTranscription,
-              let configuration = self.frozenCloudConfiguration
+              let session = self.frozenCloudSession
         else { return }
         let languageCode = SettingsStore.shared.cloudDictationLanguageCode
-        guard configuration.languageCode != languageCode else { return }
-        let updated = CloudTranscriptionConfiguration(
-            modelID: configuration.modelID,
-            languageCode: languageCode,
-            primaryLanguageCode: configuration.primaryLanguageCode,
-            secondaryLanguageCode: configuration.secondaryLanguageCode,
-            audioDictation: configuration.audioDictation
-        )
-        self.frozenCloudConfiguration = updated
-        self.frozenTranscriptionProvider = CloudTranscriptionProvider(
-            configuration: updated,
-            apiKey: self.frozenCloudAPIKey ?? "",
-            persistChunks: false
-        )
+        guard session.configuration.languageCode != languageCode else { return }
+        let updated = session.with(configuration: session.configuration.with(languageCode: languageCode))
+        self.frozenCloudSession = updated
+        self.frozenTranscriptionProvider = updated.provider(persistChunks: false)
     }
 
     func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {
@@ -1250,10 +1237,13 @@ final class ASRService: ObservableObject {
         if let frozenTranscriptionProvider { return frozenTranscriptionProvider }
         if SettingsStore.shared.usesCloudTranscription {
             if let cloudSpeechProvider { return cloudSpeechProvider }
-            let provider = CloudTranscriptionProvider(
+            let session = CloudTranscriptionSession(
                 configuration: SettingsStore.shared.cloudTranscriptionConfiguration,
-                apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
-                cacheDirectory: ForkIdentity.applicationSupportURL()?.appendingPathComponent("CloudTranscription", isDirectory: true)
+                speechAPIKey: SettingsStore.shared.speechAPIKey(for:)
+            )
+            let provider = session.provider(
+                cacheDirectory: ForkIdentity.applicationSupportURL()?.appendingPathComponent("CloudTranscription", isDirectory: true),
+                persistChunks: true
             )
             self.cloudSpeechProvider = provider
             return provider
@@ -1387,6 +1377,49 @@ final class ASRService: ObservableObject {
             ?? SettingsStore.shared.activeLiveProvider.map { LiveTranscriptionCatalog.info(for: $0).name }
     }
 
+    /// The Cloud provider of the recording in progress, or the active one when nothing is recording.
+    var activeCloudProviderID: String {
+        self.frozenCloudConfiguration?.providerID ?? SettingsStore.shared.cloudTranscriptionProviderID
+    }
+
+    /// True when the transcript is used as the provider returned it: OpenRouter's Cloud output only (CLD-5).
+    var skipsLocalTextProcessing: Bool {
+        self.isUsingCloudTranscription && Self.skipsLocalTextProcessing(cloudProviderID: self.activeCloudProviderID)
+    }
+
+    nonisolated static func skipsLocalTextProcessing(cloudProviderID: String) -> Bool {
+        cloudProviderID == CloudTranscriptionCatalog.openRouterID
+    }
+
+    /// The text a transcript becomes before it is inserted. OpenRouter's Cloud output is only trimmed;
+    /// Local, Live cloud and every other Cloud provider get filler-word removal, the custom dictionary
+    /// and spoken-punctuation formatting. A dictionary training capture skips the dictionary and the
+    /// formatting. The steps are injectable for tests.
+    static func processedTranscript(
+        _ text: String,
+        skipsLocalProcessing: Bool,
+        isDictionaryTraining: Bool = false,
+        removeFillers: ((String) -> String)? = nil,
+        applyDictionary: ((String) -> String)? = nil,
+        formatPunctuation: ((String) -> String)? = nil
+    ) -> String {
+        if skipsLocalProcessing { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let withoutFillers = removeFillers?(text) ?? ASRService.removeFillerWords(text)
+        if isDictionaryTraining { return withoutFillers }
+        let dictionaryText = applyDictionary?(withoutFillers) ?? ASRService.applyCustomDictionary(withoutFillers)
+        return formatPunctuation?(dictionaryText) ?? ASRService.applySpokenPunctuationFormatting(dictionaryText)
+    }
+
+    /// Retry of a failed Cloud recording: the provider it was frozen with, never the one active now, and
+    /// that provider's current speech key, so a key replaced after a rejection is used.
+    nonisolated static func cloudRetrySession(
+        configuration: CloudTranscriptionConfiguration,
+        speechAPIKey: (String) -> String,
+        clients: (String) -> any CloudTranscriptionClient = CloudTranscriptionClients.make
+    ) -> CloudTranscriptionSession {
+        CloudTranscriptionSession(configuration: configuration, speechAPIKey: speechAPIKey, clients: clients)
+    }
+
     var isUsingCombinedCloudDictation: Bool {
         self.isUsingCloudTranscription && (self.activeActivityLease != nil
             ? self.frozenCloudDictationModelID != nil : SettingsStore.shared.usesCombinedCloudDictation)
@@ -1423,7 +1456,7 @@ final class ASRService: ObservableObject {
             return (provider: "live-\(live.configuration.provider.rawValue)", model: live.configuration.modelID)
         }
         if self.isUsingCloudTranscription {
-            return (provider: "openrouter", model: self.transcriptionProvider.name)
+            return (provider: CloudTranscriptionClients.historyProviderName(for: self.activeCloudProviderID), model: self.transcriptionProvider.name)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
@@ -2449,8 +2482,7 @@ final class ASRService: ObservableObject {
     /// A provider built with the old key, or for an engine that a key removal ended, is rebuilt. A key
     /// change for a provider the engine does not use leaves the loaded model alone.
     private func handleProviderAPIKeyChanged(_ change: ProviderAPIKeyChange) {
-        let cachedCloudProviderUsesKey = self.cloudSpeechProvider != nil
-            && change.providerID == CloudTranscriptionPreferences.defaultProviderID
+        let cachedCloudProviderUsesKey = self.cloudSpeechProvider?.configuration.providerID == change.providerID
         guard change.affectedActiveEngine || cachedCloudProviderUsesKey else { return }
         self.resetTranscriptionProvider()
     }
@@ -3803,21 +3835,11 @@ final class ASRService: ObservableObject {
             traceStop("readiness_begin")
             var provider = self.transcriptionProvider
             if !isolatedDictionaryCapture, self.isUsingCombinedCloudDictation,
-               let instructions = cloudDictationInstructions?(), let configuration = self.frozenCloudConfiguration
+               let instructions = cloudDictationInstructions?(), let session = self.frozenCloudSession
             {
-                let combinedConfiguration = CloudTranscriptionConfiguration(
-                    modelID: configuration.modelID,
-                    languageCode: configuration.languageCode,
-                    primaryLanguageCode: configuration.primaryLanguageCode,
-                    secondaryLanguageCode: configuration.secondaryLanguageCode,
-                    audioDictation: instructions
-                )
-                self.frozenCloudConfiguration = combinedConfiguration
-                provider = CloudTranscriptionProvider(
-                    configuration: combinedConfiguration,
-                    apiKey: self.frozenCloudAPIKey ?? "",
-                    persistChunks: false
-                )
+                let combined = session.with(configuration: session.configuration.with(audioDictation: instructions))
+                self.frozenCloudSession = combined
+                provider = combined.provider(persistChunks: false)
                 self.frozenTranscriptionProvider = provider
             }
             let ensureStartedAt = Date().timeIntervalSince1970
@@ -3964,17 +3986,12 @@ final class ASRService: ObservableObject {
             }
 
             try Task.checkCancellation()
-            let outputText: String
-            // Live cloud output is treated like local output here.
-            if self.isUsingCloudTranscription {
-                outputText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            } else {
-                let textWithoutFillers = ASRService.removeFillerWords(result.text)
-                let dictionaryText = useDictionaryTrainingPath
-                    ? textWithoutFillers
-                    : ASRService.applyCustomDictionary(textWithoutFillers)
-                outputText = useDictionaryTrainingPath ? dictionaryText : ASRService.applySpokenPunctuationFormatting(dictionaryText)
-            }
+            // Live cloud and Cloud providers other than OpenRouter are treated like local output here (CLD-5).
+            let outputText = ASRService.processedTranscript(
+                result.text,
+                skipsLocalProcessing: self.skipsLocalTextProcessing,
+                isDictionaryTraining: useDictionaryTrainingPath
+            )
             if !isolatedDictionaryCapture {
                 self.recordWordBoostHitIfAny(transcribedText: outputText)
             }
@@ -4012,8 +4029,11 @@ final class ASRService: ObservableObject {
                     self.failedRemoteDictation = .cloud(samples: pcm, configuration: configuration)
                     self.failedLiveProvider = nil
                     self.hasFailedCloudDictation = true
-                    self.errorTitle = "OpenRouter transcription failed"
-                    self.errorMessage = Self.failedDictationMessage(error.localizedDescription, error: error)
+                    let providerName = CloudTranscriptionClients.providerName(for: configuration.providerID)
+                    self.errorTitle = "\(providerName) transcription failed"
+                    self.errorMessage = Self.failedDictationMessage(
+                        CloudTranscriptionError.message(for: error, providerName: providerName), error: error
+                    )
                     self.showError = true
                 }
                 self.isLoadingModel = false
@@ -4022,7 +4042,8 @@ final class ASRService: ObservableObject {
                     CloudTranscriptionFailureSummary.line(
                         for: error,
                         // A styled dictation fails on the style model; every other request on the speech model.
-                        modelID: self.frozenCloudConfiguration?.audioDictation?.modelID ?? self.frozenCloudConfiguration?.modelID
+                        modelID: self.frozenCloudConfiguration?.audioDictation?.modelID ?? self.frozenCloudConfiguration?.modelID,
+                        providerID: self.frozenCloudConfiguration?.providerID
                     ),
                     source: "ASRService"
                 )
@@ -4072,12 +4093,9 @@ final class ASRService: ObservableObject {
         } else {
             switch failed {
             case .cloud(_, let configuration):
-                // The only Cloud client is OpenRouter's, so the retry sends OpenRouter's speech key.
-                provider = CloudTranscriptionProvider(
-                    configuration: configuration,
-                    apiKey: SettingsStore.shared.openRouterTranscriptionAPIKey,
-                    persistChunks: false
-                )
+                // The provider the recording was frozen with, with that provider's current speech key.
+                provider = Self.cloudRetrySession(configuration: configuration, speechAPIKey: SettingsStore.shared.speechAPIKey(for:))
+                    .provider(persistChunks: false)
             case .live(_, let configuration):
                 // `transcribe` replays the saved recording through a new connection at the provider's accepted speed.
                 provider = LiveCloudTranscriptionProvider(
@@ -4196,11 +4214,7 @@ final class ASRService: ObservableObject {
         }
 
         try Task.checkCancellation()
-        let cleanedText = self.isUsingCloudTranscription
-            ? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            : ASRService.applySpokenPunctuationFormatting(
-                ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
-            )
+        let cleanedText = ASRService.processedTranscript(result.text, skipsLocalProcessing: self.skipsLocalTextProcessing)
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return ASRTranscriptionResult(text: cleanedText, confidence: result.confidence)
     }
@@ -4298,11 +4312,7 @@ final class ASRService: ObservableObject {
         }
 
         try Task.checkCancellation()
-        let cleanedText = self.isUsingCloudTranscription
-            ? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            : ASRService.applySpokenPunctuationFormatting(
-                ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
-            )
+        let cleanedText = ASRService.processedTranscript(result.text, skipsLocalProcessing: self.skipsLocalTextProcessing)
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return (ASRTranscriptionResult(text: cleanedText, confidence: result.confidence), estimatedSamples)
     }
