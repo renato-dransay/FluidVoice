@@ -3362,7 +3362,9 @@ final class SettingsStore: ObservableObject {
 
     /// Whether the model rejects the `temperature` parameter.
     /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, Sonnet 5, Fable/Mythos 5 — Sonnet 4.6 and older still accept it).
+    /// (Opus 4.7+, Opus 5 and 5.5, Sonnet 5, Fable/Mythos 5 — Sonnet 4.6 and older still accept it).
+    /// EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/available-models (checked 2026-10-02) lists no
+    /// `temperature` for `claude-opus-5` and `claude-opus-5-5`, as for Opus 4.7 and 4.8.
     func isTemperatureUnsupported(_ model: String) -> Bool {
         if self.isReasoningModel(model) { return true }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
@@ -3370,6 +3372,7 @@ final class SettingsStore: ObservableObject {
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
         return modelLower.contains("claude-opus-4-7")
             || modelLower.contains("claude-opus-4-8")
+            || modelLower.contains("claude-opus-5")
             || modelLower.contains("claude-sonnet-5")
             || modelLower.contains("claude-fable")
             || modelLower.contains("claude-mythos")

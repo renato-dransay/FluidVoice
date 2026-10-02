@@ -77,20 +77,28 @@ final class AIProvidersPageTests: XCTestCase {
         }
         XCTAssertEqual(ModelRepository.shared.defaultBaseURL(for: "mistral"), "https://api.mistral.ai/v1")
         XCTAssertEqual(ModelRepository.shared.defaultModels(for: "mistral").first, "mistral-small-latest")
-        XCTAssertTrue(ModelRepository.listsModels(for: "mistral"))
         XCTAssertEqual(ModelRepository.shared.defaultBaseURL(for: "assemblyai"), "https://llm-gateway.assemblyai.com/v1")
         XCTAssertEqual(ModelRepository.shared.defaultModels(for: "assemblyai").first, "gpt-5-mini")
-        XCTAssertFalse(ModelRepository.listsModels(for: "assemblyai"), "The LLM Gateway has no model list endpoint")
         XCTAssertEqual(ModelRepository.shared.displayName(for: "assemblyai"), "AssemblyAI")
 
         let rows = AIEnhancementSettingsViewModel.providerRows(textRows: [], apiKeys: ["mistral": "m", "assemblyai": "a", "deepgram": "d"])
         XCTAssertEqual(rows.map(\.id), ["deepgram"], "Text providers come through the text rows only")
     }
 
-    /// AssemblyAI's fixed list stands in for a model listing and makes no request.
-    func testAssemblyAIModelsComeFromTheFixedList() async throws {
-        let models = try await ModelRepository.shared.fetchModels(for: "assemblyai", baseURL: "http://127.0.0.1:9/unreachable", apiKey: "k")
+    /// AssemblyAI's documented gateway models are offered offline, default first; Refresh asks the gateway's
+    /// own `/v1/models`, so an unreachable gateway fails the refresh instead of returning the fixed list.
+    func testAssemblyAIOffersItsGatewayModelsOfflineAndRefreshesFromTheGateway() async {
+        let models = ModelRepository.shared.defaultModels(for: "assemblyai")
         XCTAssertEqual(models, ModelRepository.assemblyAIGatewayModels)
+        XCTAssertEqual(models.first, "gpt-5-mini")
+        XCTAssertEqual(Set(models).count, models.count)
+        for retiredOrOptIn in ["gemini-3.1-flash-lite", "kimi-k3", "minimax-m3", "glm-5.3", "deepseek-v4.1-flash", "claude-3-haiku"] {
+            XCTAssertFalse(models.contains(retiredOrOptIn), retiredOrOptIn)
+        }
+        do {
+            _ = try await ModelRepository.shared.fetchModels(for: "assemblyai", baseURL: "http://127.0.0.1:9/unreachable", apiKey: "k")
+            XCTFail("Refresh lists the gateway's models")
+        } catch {}
     }
 
     /// REG-7: a custom provider the user pointed at Mistral keeps its own entry; saving the built-in

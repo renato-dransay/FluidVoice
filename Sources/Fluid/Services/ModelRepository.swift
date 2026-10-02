@@ -54,9 +54,7 @@ final class ModelRepository {
         case "mistral":
             return ["mistral-small-latest"]
         case "assemblyai":
-            // The LLM Gateway has no model list endpoint; this fixed list stands in for one and the user
-            // can add other IDs. EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/available-models
-            // (checked 2026-10-02).
+            // Offered offline and before the first refresh; Refresh replaces it with the gateway's own list.
             return Self.assemblyAIGatewayModels
         default:
             // Custom providers start with no default models; user must add them
@@ -73,15 +71,23 @@ final class ModelRepository {
         return self.defaultModels(for: providerID)
     }
 
-    /// AssemblyAI LLM Gateway models offered before the user adds any, default first.
+    /// AssemblyAI LLM Gateway models offered before the first refresh, default first, then by vendor.
+    /// EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/available-models (checked 2026-10-02): every model in
+    /// the documented table except those that need a provider switched on under Dashboard > Data Controls
+    /// (DeepSeek V4.1 Flash, GLM-5.3, GLM-5.3 Flash, Kimi K3, Minimax M3, Nemotron Lightning 3.5,
+    /// https://www.assemblyai.com/docs/llm-gateway/providers) and Gemini 3.1 Flash Lite, which retires on
+    /// 2027-05-07. The docs name no default; `gpt-5-mini` stays the app's.
     static let assemblyAIGatewayModels = [
-        "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "gemini-2.5-flash", "qwen3.5-4b-32k-fast",
+        "gpt-5-mini",
+        "gpt-5-nano", "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+        "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-4.1", "gpt-oss-120b", "gpt-oss-20b",
+        "claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929", "claude-sonnet-4-6", "claude-sonnet-5",
+        "claude-opus-4-5-20251101", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+        "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.5-flash-lite", "gemini-3.5-flash",
+        "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemma-4-31b",
+        "qwen3.5-4b-32k-fast", "qwen3-32B", "qwen3-next-80b-a3b",
+        "nemotron-nano-9b-v2", "nemotron-3-nano-30b-a3b", "nemotron-3-super-120b-a12b",
     ]
-
-    /// False for a provider whose API cannot list its models, so a refresh keeps the fixed list.
-    static func listsModels(for providerID: String) -> Bool {
-        providerID != "assemblyai"
-    }
 
     static func eligibleModel(preferred: String?, from models: [String]) -> String? {
         if let preferred, models.contains(preferred) {
@@ -115,6 +121,9 @@ final class ModelRepository {
         // with `Authorization: Bearer <key>` and `GET /v1/models`.
         case "mistral":
             return "https://api.mistral.ai/v1"
+        // EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/api-reference/list-available-models (checked 2026-10-02):
+        // the gateway answers `GET /v1/models` in the OpenAI `{"data": [{"id": ...}]}` shape without auth (since
+        // 2026-09-09), so Refresh lists its models like any other provider's.
         // EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/quickstart (checked 2026-10-02): the gateway is used
         // through the OpenAI SDK with this base URL and the AssemblyAI key as `api_key`, so it accepts
         // `Authorization: Bearer <key>` as well as the bare key its HTTP examples send.
@@ -267,10 +276,6 @@ final class ModelRepository {
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
-        }
-
-        if !Self.listsModels(for: providerID) {
-            return self.defaultModels(for: providerID)
         }
 
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")
