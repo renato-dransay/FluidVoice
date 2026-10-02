@@ -20,7 +20,9 @@ enum KeychainServiceError: Error, LocalizedError {
 
 /// Lightweight helper for storing provider API keys in the system Keychain.
 /// Keys are stored as generic passwords scoped to the FluidVoice service.
-final class KeychainService {
+/// Not tied to the main actor: Keychain I/O may wait for the login keychain, so callers may run it on
+/// another thread. The cache and the I/O are guarded by their own locks.
+nonisolated final class KeychainService: @unchecked Sendable {
     static let shared = KeychainService()
 
     private struct TestingBackend {

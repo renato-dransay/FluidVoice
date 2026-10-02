@@ -26,10 +26,16 @@ enum MeetingCloudSummaryRouteResolver {
     /// which authorizes OpenRouter's chat endpoint as well. While OpenRouter is the Cloud voice engine,
     /// AI Providers hides the OpenRouter text model, so a selected OpenRouter provider uses the Voice
     /// Engine style model, which the user picked and which their OpenRouter account is known to serve.
+    ///
+    /// `keyAwaitsTextVerification` is true when the key migration copied the provider's text key from its
+    /// Voice Engine entry (a live key) and it has been neither text-verified nor saved again since. Before
+    /// the update that provider had no text key and summaries fell back to OpenRouter, so they still do.
+    /// OpenRouter is exempt: its summary already used the Voice Engine key before the update.
     static func resolve(
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool,
         usesVoiceEngine: Bool,
+        keyAwaitsTextVerification: Bool = false,
         providerName: String,
         openRouterSpeechKey: String,
         openRouterModel: String?,
@@ -43,7 +49,8 @@ enum MeetingCloudSummaryRouteResolver {
             apiKey = voiceKey
         }
         let defersToVoiceEngine = usesVoiceEngine && provider.providerID == self.openRouterProviderID
-        if !defersToVoiceEngine, !provider.providerID.isEmpty, !provider.usesPrivateAI, !model.isEmpty, !baseURL.isEmpty,
+        let keyIsUnconfirmed = keyAwaitsTextVerification && provider.providerID != self.openRouterProviderID
+        if !defersToVoiceEngine, !keyIsUnconfirmed, !provider.providerID.isEmpty, !provider.usesPrivateAI, !model.isEmpty, !baseURL.isEmpty,
            isLocalEndpoint || !apiKey.isEmpty
         {
             return MeetingCloudSummaryRoute(
@@ -72,6 +79,8 @@ enum MeetingCloudSummaryRouteResolver {
             provider: provider,
             isLocalEndpoint: repository.isLocalEndpoint(provider.baseURL),
             usesVoiceEngine: settings.usesCombinedCloudDictation,
+            keyAwaitsTextVerification: ProviderKeyMigration.filledTextProviders(in: .standard).contains(provider.providerKey)
+                && !settings.isCommandModeProviderVerified(provider.providerID),
             providerName: settings.savedProviders.first(where: { $0.id == provider.providerID })?.name
                 ?? repository.displayName(for: provider.providerID),
             openRouterSpeechKey: settings.speechAPIKey(for: self.openRouterProviderID),

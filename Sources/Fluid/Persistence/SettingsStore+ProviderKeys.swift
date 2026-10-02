@@ -80,12 +80,17 @@ struct ProviderKeyStore {
         self.defaults.bool(forKey: ProviderKeyMigration.flagKey)
     }
 
-    /// The stored entries as this build reads them, from the Keychain cache. Until the migration could
-    /// be written, its result is computed in memory, so a failed write never hides or swaps a key and a
-    /// read never writes.
+    /// The stored entries, from the Keychain cache. Until the migration is written they are exactly what
+    /// the build before the update stored, so a deferred migration never hides, swaps or reroutes a key:
+    /// text readers get `<id>` and speech readers get the old voice entries (see `speechAPIKey(for:)`).
     func entries() -> [String: String] {
-        let stored = (try? self.keychain.fetchAllKeys()) ?? [:]
-        return self.isMigrated ? stored : ProviderKeyMigration.migrated(stored)
+        guard let stored = try? self.keychain.fetchAllKeys() else { return [:] }
+        if !self.isMigrated, self.writesMigration {
+            // The first Keychain read that succeeds settles the engines without a Voice Engine key, even
+            // while the migration write keeps failing (UserDefaults only; no Keychain write).
+            ProviderKeyMigration.keepEnginesWithoutVoiceKeysLocalIfNeeded(entriesBefore: stored, defaults: self.defaults)
+        }
+        return stored
     }
 
     /// The text key: the exact entry, else the canonical provider key (a custom provider's prefixed key).
@@ -95,12 +100,24 @@ struct ProviderKeyStore {
         return entries[ModelRepository.shared.providerKey(for: providerID)]
     }
 
-    /// The key speech features send to this provider.
+    /// The key speech features send to this provider: `speech-key.<id>` when present, otherwise `<id>`.
+    /// Until the migration is written, only the key Voice Engine used before the update: its old voice
+    /// entry for this provider, never the text entry. A provider without an old voice entry then has no
+    /// speech key, as before the update.
     func speechAPIKey(for providerID: String) -> String {
         let entries = self.entries()
-        let override = entries[ProviderKeyMigration.speechKeyEntry(for: providerID)]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return override.isEmpty ? entries[providerID] ?? "" : override
+        if let override = Self.nonEmpty(entries[ProviderKeyMigration.speechKeyEntry(for: providerID)]) {
+            return override
+        }
+        guard self.isMigrated else {
+            return ProviderKeyMigration.oldVoiceEntries(for: providerID).lazy.compactMap { Self.nonEmpty(entries[$0]) }.first ?? ""
+        }
+        return entries[providerID] ?? ""
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
     }
 
     // MARK: - Speech verification
@@ -165,6 +182,8 @@ struct ProviderKeyStore {
         self.migrateIfNeeded()
         let affectedActiveEngine = self.isActiveEngineProvider(id)
         if !removed, self.isSavedKey(value, for: id) {
+            // Saved again by the user: the key is now theirs for text, whatever entry it came from.
+            ProviderKeyMigration.forgetFilledTextProvider(id, in: self.defaults)
             self.addToLiveProviders(id)
             return ProviderAPIKeyChange(providerID: id, removed: false, affectedActiveEngine: affectedActiveEngine)
         }
@@ -185,6 +204,12 @@ struct ProviderKeyStore {
                     entries[entry] = value
                 }
             }
+        }
+
+        ProviderKeyMigration.forgetFilledTextProvider(id, in: self.defaults)
+        // The Keychain took this write, so a migration it refused earlier is tried again now.
+        if !self.isMigrated {
+            self.migrateIfNeeded()
         }
 
         var fingerprints = SettingsStore.verifiedProviderFingerprints(in: self.defaults)
@@ -208,13 +233,17 @@ struct ProviderKeyStore {
         return change
     }
 
-    /// True when `key` (trimmed) is already the provider's key for text and speech alike, so saving it
-    /// again would change nothing.
+    /// True when `key` (trimmed) is already the provider's key for text and speech alike, and every old
+    /// voice entry it still has (read by a downgraded build) holds it too, so saving it again would change
+    /// nothing.
     func isSavedKey(_ key: String, for providerID: String) -> Bool {
         let id = ModelRepository.shared.providerKey(for: providerID)
         let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
         let entries = self.entries()
-        return !value.isEmpty && entries[id] == value && entries[ProviderKeyMigration.speechKeyEntry(for: id)] == nil
+        return !value.isEmpty
+            && entries[id] == value
+            && entries[ProviderKeyMigration.speechKeyEntry(for: id)] == nil
+            && ProviderKeyMigration.oldVoiceEntries(for: id).allSatisfy { entries[$0] == nil || entries[$0] == value }
     }
 
     /// A live-capable provider with a key is listed in `LiveTranscriptionProviders`, which a downgraded
@@ -385,18 +414,35 @@ extension SettingsStore {
     }
 
     /// Retries a deferred key migration when the app becomes active, at most once per
-    /// `ProviderKeyMigrationRetryThrottle.minimumInterval`.
+    /// `ProviderKeyMigrationRetryThrottle.minimumInterval` and never twice at once. The Keychain read and
+    /// write run off the main thread (they may wait for the login keychain); the result is applied to
+    /// UserDefaults back on the main actor.
     func retryProviderKeyMigrationIfDue(now: Date = Date()) {
-        guard !self.providerKeyStore.isMigrated,
+        let store = self.providerKeyStore
+        guard store.writesMigration,
+              !store.isMigrated,
+              !Self.isProviderKeyMigrationRetryRunning,
               Self.providerKeyMigrationRetryThrottle.shouldAttempt(at: now)
         else { return }
-        self.providerKeyStore.migrateIfNeeded()
+        Self.isProviderKeyMigrationRetryRunning = true
+        let keychain = store.keychain
+        let defaults = store.defaults
+        Task.detached(priority: .utility) {
+            let outcome = ProviderKeyMigration.migrateKeychain(keychain)
+            await MainActor.run {
+                Self.isProviderKeyMigrationRetryRunning = false
+                if ProviderKeyMigration.apply(outcome, defaults: defaults), outcome.written {
+                    self.objectWillChange.send()
+                }
+            }
+        }
     }
 
+    private static var isProviderKeyMigrationRetryRunning = false
     private static var providerKeyMigrationRetryThrottle = ProviderKeyMigrationRetryThrottle()
 
     /// The unit-test host is this app with the app's own Keychain item and defaults, so the key
-    /// migration never writes them from there; readers still see the migrated keys in memory.
+    /// migration never writes them from there; readers see the keys as the build before the update stored them.
     nonisolated static var isRunningInUnitTestHost: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }

@@ -93,6 +93,8 @@ final class LiveCloudSettingsTests: XCTestCase {
     func testTheKeyIsLookedUpForTheActiveProviderOnly() throws {
         let (defaults, cleanup) = try self.defaults()
         defer { cleanup() }
+        // After the key migration; before it, only the old voice entries serve speech.
+        defaults.set(true, forKey: ProviderKeyMigration.flagKey)
         var preferences = LiveTranscriptionPreferences(defaults: defaults)
         preferences.activeProvider = .assemblyAI
         var stored = ["soniox": "soniox-key"]

@@ -10,6 +10,7 @@ final class ProviderKeyStoreTests: XCTestCase {
     private final class FakeKeychain {
         var storage: [String: String]
         var failSaves = false
+        var failLoads = false
         var saves = 0
         var saveAttempts = 0
         var loads = 0
@@ -20,6 +21,7 @@ final class ProviderKeyStoreTests: XCTestCase {
             self.service = KeychainService(
                 testingLoad: {
                     self.loads += 1
+                    if self.failLoads { throw KeychainServiceError.unhandled(-25308) }
                     return self.storage
                 },
                 testingSave: { values in
@@ -133,6 +135,7 @@ final class ProviderKeyStoreTests: XCTestCase {
 
         XCTAssertTrue(ProviderKeyMigration.runIfNeeded(defaults: self.defaults, keychain: keychain.service))
         XCTAssertEqual(keychain.saves, 1)
+        XCTAssertEqual(ProviderKeyMigration.filledTextProviders(in: self.defaults), ["openrouter"])
     }
 
     func testTheRunnerWritesNoVerificationRecord() {
@@ -273,7 +276,100 @@ final class ProviderKeyStoreTests: XCTestCase {
         XCTAssertNil(SettingsStore.meetingLiveCloudProvider(in: self.defaults))
     }
 
+    func testAKeylessOpenRouterEngineAndMeetingStayLocalAfterTheMigration() {
+        // Only an AI Providers text key: before the update Cloud dictation and the OpenRouter meeting
+        // backend failed with a missing key. The text key must not start receiving audio.
+        let keychain = FakeKeychain(["openrouter": "router-text"])
+        self.setSource(.cloud)
+        SettingsStore.setMeetingTranscriptionBackendID(.openRouterNemotron, in: self.defaults)
+
+        XCTAssertTrue(self.store(keychain).migrateIfNeeded())
+
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+        XCTAssertEqual(SettingsStore.meetingTranscriptionBackendID(in: self.defaults), .parakeetNemotron)
+        XCTAssertEqual(self.store(keychain).speechAPIKey(for: "openrouter"), "router-text", "Why the engines had to move")
+    }
+
+    func testOpenRouterWithAVoiceKeyKeepsCloudAndItsMeetingAfterTheMigration() {
+        let keychain = FakeKeychain(["openrouter-transcription": "router-voice", "openrouter": "router-text"])
+        self.setSource(.cloud)
+        SettingsStore.setMeetingTranscriptionBackendID(.openRouterNemotron, in: self.defaults)
+
+        XCTAssertTrue(self.store(keychain).migrateIfNeeded())
+
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .cloud)
+        XCTAssertEqual(SettingsStore.meetingTranscriptionBackendID(in: self.defaults), .openRouterNemotron)
+    }
+
+    func testAKeylessLiveEngineIsSettledEvenWhileTheMigrationWriteFails() {
+        // The Soniox entry gives the migration something to write, which the locked Keychain refuses.
+        let keychain = FakeKeychain(["openai": "openai-text", "live-transcription.soniox": "soniox-key"])
+        keychain.failSaves = true
+        self.setSource(.liveCloud)
+        var live = LiveTranscriptionPreferences(defaults: self.defaults)
+        live.activeProvider = .openAI
+
+        XCTAssertFalse(self.store(keychain).migrateIfNeeded())
+
+        XCTAssertFalse(self.defaults.bool(forKey: ProviderKeyMigration.flagKey))
+        XCTAssertTrue(self.defaults.bool(forKey: ProviderKeyMigration.enginesCheckedFlagKey))
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+        XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
+    }
+
+    func testTheFirstSuccessfulReadSettlesKeylessEnginesWhenTheLaunchAttemptCouldNotRead() {
+        let keychain = FakeKeychain(["openai": "openai-text", "openrouter": "router-text"])
+        keychain.failLoads = true
+        self.setSource(.liveCloud)
+        var live = LiveTranscriptionPreferences(defaults: self.defaults)
+        live.activeProvider = .openAI
+        SettingsStore.setMeetingTranscriptionBackendID(.openRouterNemotron, in: self.defaults)
+        let store = self.store(keychain)
+
+        XCTAssertFalse(store.migrateIfNeeded())
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .liveCloud, "Nothing was read yet")
+
+        keychain.failLoads = false
+        XCTAssertEqual(store.speechAPIKey(for: "openai"), "")
+
+        XCTAssertTrue(self.defaults.bool(forKey: ProviderKeyMigration.enginesCheckedFlagKey))
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+        XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
+        XCTAssertEqual(SettingsStore.meetingTranscriptionBackendID(in: self.defaults), .parakeetNemotron)
+        XCTAssertEqual(keychain.saves, 0, "A reader writes no Keychain entry")
+    }
+
     // MARK: - Readers
+
+    func testBeforeTheFlagASpeechReaderNeverReturnsATextKey() {
+        let keychain = FakeKeychain(["openai": "openai-text", "openrouter": "router-text", "live-transcription.soniox": "soniox-key"])
+        keychain.failSaves = true
+        let store = self.store(keychain)
+        XCTAssertFalse(store.migrateIfNeeded())
+
+        for providerID in ["openai", "openrouter"] {
+            XCTAssertEqual(store.speechAPIKey(for: providerID), "", providerID)
+            XCTAssertFalse(store.isSpeechVerified(providerID))
+        }
+        XCTAssertEqual(store.apiKey(for: "openai"), "openai-text")
+        XCTAssertEqual(store.apiKey(for: "openrouter"), "router-text")
+
+        keychain.failSaves = false
+        XCTAssertTrue(store.migrateIfNeeded())
+        XCTAssertEqual(store.speechAPIKey(for: "openai"), "openai-text", "After the migration one key serves both")
+    }
+
+    func testBeforeTheFlagTheTextReaderReturnsTheTextEntryAsBefore() {
+        // Migration case 2 would copy the live key into the empty text entry; until it is written text
+        // features see exactly what they saw before the update.
+        let keychain = FakeKeychain(["live-transcription.openAI": "openai-voice"])
+        keychain.failSaves = true
+        let store = self.store(keychain)
+        XCTAssertFalse(store.migrateIfNeeded())
+
+        XCTAssertNil(store.apiKey(for: "openai"))
+        XCTAssertEqual(store.speechAPIKey(for: "openai"), "openai-voice")
+    }
 
     func testReadersReturnTheOldVoiceKeysBeforeTheFlagIsSet() {
         let keychain = FakeKeychain([
@@ -303,6 +399,38 @@ final class ProviderKeyStoreTests: XCTestCase {
     }
 
     // MARK: - setProviderAPIKey
+
+    func testSavingOrRemovingAKeyForgetsThatTheMigrationFilledIt() throws {
+        let keychain = FakeKeychain([
+            "live-transcription.openAI": "openai-voice",
+            "live-transcription.mistral": "mistral-voice",
+            "openrouter-transcription": "router-voice",
+        ])
+        let store = self.store(keychain)
+        XCTAssertTrue(store.migrateIfNeeded())
+        XCTAssertEqual(Set(ProviderKeyMigration.filledTextProviders(in: self.defaults)), ["openai", "mistral", "openrouter"])
+
+        try store.setProviderAPIKey("openai-voice", for: "openai")
+        XCTAssertFalse(ProviderKeyMigration.filledTextProviders(in: self.defaults).contains("openai"), "Saved again by the user")
+
+        try store.setProviderAPIKey("mistral-new", for: "mistral")
+        try store.setProviderAPIKey(nil, for: "openrouter")
+        XCTAssertEqual(ProviderKeyMigration.filledTextProviders(in: self.defaults), [])
+    }
+
+    func testSavingTheSameKeyStillWritesAnOldVoiceEntryThatDiffers() throws {
+        let keychain = FakeKeychain(["openai": "openai-key", "live-transcription.openAI": "openai-old"])
+        self.defaults.set(true, forKey: ProviderKeyMigration.flagKey)
+        let store = self.store(keychain)
+        XCTAssertFalse(store.isSavedKey("openai-key", for: "openai"))
+        let savesBefore = keychain.saves
+
+        try store.setProviderAPIKey("openai-key", for: "openai")
+
+        XCTAssertEqual(keychain.saves, savesBefore + 1)
+        XCTAssertEqual(keychain.storage["live-transcription.openAI"], "openai-key", "A downgraded build reads the key now saved")
+        XCTAssertTrue(store.isSavedKey("openai-key", for: "openai"))
+    }
 
     func testSavingMirrorsIntoExistingOldEntriesAndDeletesTheSpeechKey() throws {
         let keychain = FakeKeychain([
@@ -470,6 +598,7 @@ final class ProviderKeyStoreTests: XCTestCase {
     // MARK: - Speech verification (VER-1)
 
     func testASpeechCheckWritesOnlyTheSpeechRecordForTheCurrentKey() throws {
+        self.defaults.set(true, forKey: ProviderKeyMigration.flagKey)
         let keychain = FakeKeychain(["openai": "openai-key"])
         let store = self.store(keychain)
 
@@ -486,6 +615,7 @@ final class ProviderKeyStoreTests: XCTestCase {
     }
 
     func testATextVerificationLeavesTheSpeechRecordEmpty() {
+        self.defaults.set(true, forKey: ProviderKeyMigration.flagKey)
         let store = self.store(FakeKeychain(["openai": "openai-key"]))
         // The write a passed text check makes (`storeVerificationFingerprint`).
         let recorded = TextVerificationRecord.recording(
@@ -511,6 +641,7 @@ final class ProviderKeyStoreTests: XCTestCase {
     }
 
     func testASpeechCheckIsRecordedOnlyForTheKeyStillSaved() throws {
+        self.defaults.set(true, forKey: ProviderKeyMigration.flagKey)
         let keychain = FakeKeychain(["openai": "openai-key"])
         let store = self.store(keychain)
 

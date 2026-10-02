@@ -148,10 +148,33 @@ final class MeetingCloudSummaryTests: XCTestCase {
         XCTAssertEqual(messages.last?["content"], "Title: Planning\n----------\n**Maya**: Ship on Friday.")
     }
 
+    /// The key migration filled an empty OpenAI text entry with the Live OpenAI key. Before the update that
+    /// provider had no text key and summaries went to OpenRouter; they still do until the key is
+    /// text-verified or saved again.
+    func testAKeyTheMigrationCopiedFromAVoiceEntryWaitsForTextVerification() {
+        let openAI = DictationProviderRoute(providerID: "openai", providerKey: "openai", baseURL: "https://api.openai.com/v1", model: "gpt-5-mini", apiKey: "live-key")
+        let unconfirmed = self.resolve(provider: openAI, keyAwaitsTextVerification: true, openRouterSpeechKey: "voice-key")
+        XCTAssertEqual(unconfirmed?.providerKey, "openrouter")
+        XCTAssertEqual(unconfirmed?.apiKey, "voice-key")
+
+        let noFallback = self.resolve(provider: openAI, keyAwaitsTextVerification: true, openRouterSpeechKey: "")
+        XCTAssertNil(noFallback, "The copied key is never used for a summary while it waits")
+
+        XCTAssertEqual(self.resolve(provider: openAI, openRouterSpeechKey: "voice-key")?.providerKey, "openai")
+
+        let openRouter = DictationProviderRoute(providerID: "openrouter", providerKey: "openrouter", baseURL: self.openRouterURL, model: "openai/gpt-oss-20b", apiKey: "voice-key")
+        XCTAssertEqual(
+            self.resolve(provider: openRouter, keyAwaitsTextVerification: true, openRouterSpeechKey: "voice-key")?.model,
+            "openai/gpt-oss-20b",
+            "OpenRouter summaries used the Voice Engine key before the update too"
+        )
+    }
+
     private func resolve(
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool = false,
         usesVoiceEngine: Bool = false,
+        keyAwaitsTextVerification: Bool = false,
         openRouterSpeechKey: String,
         openRouterModel: String? = "google/gemini-3.8-flash"
     ) -> MeetingCloudSummaryRoute? {
@@ -159,6 +182,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
             provider: provider,
             isLocalEndpoint: isLocalEndpoint,
             usesVoiceEngine: usesVoiceEngine,
+            keyAwaitsTextVerification: keyAwaitsTextVerification,
             providerName: ModelRepository.shared.displayName(for: provider.providerID),
             openRouterSpeechKey: openRouterSpeechKey,
             openRouterModel: openRouterModel,
