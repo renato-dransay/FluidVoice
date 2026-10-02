@@ -15,7 +15,7 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         XCTAssertEqual(preferences.source, .local)
         XCTAssertEqual(preferences.configuration.modelID, "openai/whisper-large-v3-turbo")
         XCTAssertNil(preferences.configuration.languageCode)
-        XCTAssertEqual(preferences.dictationModelID, CloudAudioDictationModel.defaultID)
+        XCTAssertEqual(preferences.dictationModelID(inheriting: nil), CloudAudioDictationModel.defaultID)
         XCTAssertNil(preferences.configuration.audioDictation)
         XCTAssertNil(preferences.primaryLanguageCode)
         XCTAssertNil(preferences.secondaryLanguageCode)
@@ -143,13 +143,43 @@ final class CloudTranscriptionSettingsTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         var preferences = CloudTranscriptionPreferences(defaults: defaults)
-        preferences.dictationModelID = "google/gemini-3.5-flash-lite"
+        preferences.dictationModelSelection = "google/gemini-3.5-flash-lite"
         preferences.modelID = "openai/whisper-large-v3"
         let restored = CloudTranscriptionPreferences(defaults: defaults)
-        XCTAssertEqual(restored.dictationModelID, "google/gemini-3.5-flash-lite")
+        XCTAssertEqual(restored.dictationModelID(inheriting: nil), "google/gemini-3.5-flash-lite")
         XCTAssertEqual(restored.configuration.modelID, "openai/whisper-large-v3")
         XCTAssertNil(restored.configuration.audioDictation)
-        preferences.dictationModelID = "unvalidated/audio-model"
-        XCTAssertEqual(preferences.dictationModelID, "google/gemini-3.5-flash-lite")
+        preferences.dictationModelSelection = "unvalidated/audio-model"
+        XCTAssertEqual(preferences.dictationModelSelection, "google/gemini-3.5-flash-lite")
+    }
+
+    func testAutomaticDictationModelInheritsAnAudioCapableAIProviderModel() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.dictationModelSelection, CloudAudioDictationModel.automaticID)
+        XCTAssertEqual(preferences.dictationModelID(inheriting: "google/gemini-3.5-flash-lite"), "google/gemini-3.5-flash-lite")
+        XCTAssertEqual(preferences.dictationModelID(inheriting: " google/gemini-3.5-flash-lite "), "google/gemini-3.5-flash-lite")
+
+        // A text-only model cannot hear the recording, so Automatic keeps the default audio model.
+        XCTAssertEqual(preferences.dictationModelID(inheriting: "anthropic/claude-haiku-4.5"), CloudAudioDictationModel.defaultID)
+        XCTAssertEqual(preferences.dictationModelID(inheriting: nil), CloudAudioDictationModel.defaultID)
+
+        // A model the user picked wins over the inherited one until they choose Automatic again.
+        preferences.dictationModelSelection = CloudAudioDictationModel.defaultID
+        XCTAssertEqual(preferences.dictationModelID(inheriting: "google/gemini-3.5-flash-lite"), CloudAudioDictationModel.defaultID)
+        preferences.dictationModelSelection = CloudAudioDictationModel.automaticID
+        XCTAssertEqual(preferences.dictationModelID(inheriting: "google/gemini-3.5-flash-lite"), "google/gemini-3.5-flash-lite")
+    }
+
+    func testWithdrawnDictationModelReadsAsAutomatic() throws {
+        let suite = "CloudTranscriptionSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("vendor/withdrawn-audio-model", forKey: "CloudDictationModel")
+        let preferences = CloudTranscriptionPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.dictationModelSelection, CloudAudioDictationModel.automaticID)
+        XCTAssertEqual(preferences.dictationModelID(inheriting: nil), CloudAudioDictationModel.defaultID)
     }
 }

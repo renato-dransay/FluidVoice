@@ -119,7 +119,7 @@ struct DictationProviderRoute: Equatable {
     static func isDictationDefaultAvailable(settings: SettingsStore, appBundleID: String? = nil) -> Bool {
         if settings.usesCombinedCloudDictation {
             return !settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                CloudAudioDictationModel.catalog.contains { $0.id == settings.cloudDictationModelID }
+                CloudAudioDictationModel.isListed(settings.cloudDictationModelID)
         }
         let route = self.resolveDictationDefault(settings: settings, appBundleID: appBundleID)
         guard !route.providerID.isEmpty, !route.model.isEmpty else { return false }

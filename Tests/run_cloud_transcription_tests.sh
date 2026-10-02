@@ -31,6 +31,7 @@ enum ForkIdentity {
 final class SettingsStore: ObservableObject {
     /// Live cloud lives outside this harness, so the source getter sees no usable live provider.
     var activeLiveProvider: LiveTranscriptionProviderID? { nil }
+    var openRouterAIProviderModel: String? { nil }
     static func whisperLanguageCode(fromStoredValue value: String?) -> String? {
         guard let value, CloudTranscriptionConfiguration.supportedLanguageCodes.contains(value) else { return nil }
         return value

@@ -16,6 +16,8 @@ nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
 
     /// The newest Gemini Flash OpenRouter lists, which `current` always sorts first.
     static var defaultID: String { self.catalog.first?.id ?? self.fallbackDefaultID }
+    /// The stored choice that follows the OpenRouter model selected in AI Providers.
+    static let automaticID = "automatic"
     /// Always offered, so dictation works before the first catalog fetch and while offline.
     static let builtIn: [CloudAudioDictationModel] = [
         .init(id: fallbackDefaultID, name: "Gemini 3.8 Flash"),
@@ -24,6 +26,20 @@ nonisolated struct CloudAudioDictationModel: Identifiable, Equatable, Sendable {
     /// Current audio chat models: built-in ones plus every model OpenRouter last listed with audio
     /// input, text output and structured outputs, reduced to the newest release of each family.
     static var catalog: [CloudAudioDictationModel] { CloudTranscriptionCatalogStore.shared.audioDictationModels }
+
+    /// Any model OpenRouter last listed for audio dictation, including older releases `catalog` hides,
+    /// so a model inherited from AI Providers can run even when the picker does not offer it.
+    static func listed(_ id: String) -> CloudAudioDictationModel? {
+        CloudTranscriptionCatalogStore.shared.audioDictationModel(id: id)
+    }
+
+    static func isListed(_ id: String) -> Bool { self.listed(id) != nil }
+
+    /// Automatic uses the AI Providers OpenRouter model when it accepts audio, otherwise the default.
+    static func automaticModelID(inheriting providerModel: String?) -> String {
+        let model = providerModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return self.isListed(model) ? model : self.defaultID
+    }
 
     /// Keeps the newest release of each model family, preferring a stable release over a preview of
     /// the same version, and orders Gemini Flash, Flash Lite and Pro first, then the rest by id.
@@ -123,7 +139,7 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
             throw CloudTranscriptionError.invalidLanguage
         }
         if let audioDictation {
-            guard CloudAudioDictationModel.catalog.contains(where: { $0.id == audioDictation.modelID }) else {
+            guard CloudAudioDictationModel.isListed(audioDictation.modelID) else {
                 throw CloudTranscriptionError.unsupportedModel
             }
             if wordTimings { throw CloudTranscriptionError.unsupportedWordTimings }

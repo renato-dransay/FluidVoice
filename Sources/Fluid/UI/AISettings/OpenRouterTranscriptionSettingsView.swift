@@ -95,18 +95,44 @@ struct OpenRouterTranscriptionSettingsView: View {
     @ViewBuilder
     private var dictationControls: some View {
         Label("Dictation", systemImage: "mic").font(.callout)
-        Picker("Dictation model", selection: self.$settings.cloudDictationModelID) {
+        Picker("Dictation model", selection: self.$settings.cloudDictationModelSelection) {
+            Text("Automatic (\(self.modelName(self.automaticModelID)))").tag(CloudAudioDictationModel.automaticID)
+            Divider()
             ForEach(self.audioModels, id: \.id) { model in
                 Text(model.name).tag(model.id)
                     .disabled(self.hasValidatedDictationCatalog && !self.availableDictationModelIDs.contains(model.id))
             }
         }
         .accessibilityIdentifier("openrouter-audio-dictation-model")
+        Text(self.automaticExplanation)
+            .font(.caption).foregroundStyle(.secondary)
         Text("Choose the style in Cleanup Styles, including app and shortcut rules. Off returns the plain transcript from the same single request. Recordings are limited to 8 minutes; a failure never triggers another request automatically.")
             .font(.caption).foregroundStyle(.secondary)
         Text("The list shows the newest audio-capable models OpenRouter offers, one per model family.")
             .font(.caption).foregroundStyle(.secondary)
         self.languageControls
+    }
+
+    private var automaticModelID: String {
+        CloudAudioDictationModel.automaticModelID(inheriting: self.settings.openRouterAIProviderModel)
+    }
+
+    /// Says which model Automatic resolves to and why, so the choice never needs a second look.
+    private var automaticExplanation: String {
+        let fallback = self.modelName(CloudAudioDictationModel.defaultID)
+        guard let providerModel = self.settings.openRouterAIProviderModel?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerModel.isEmpty
+        else {
+            return "Automatic uses the OpenRouter model selected in AI Providers when it accepts audio, otherwise \(fallback)."
+        }
+        if CloudAudioDictationModel.isListed(providerModel) {
+            return "Automatic uses \(self.modelName(providerModel)), the OpenRouter model selected in AI Providers."
+        }
+        return "Automatic uses \(fallback) because \(providerModel), selected in AI Providers, does not accept audio."
+    }
+
+    private func modelName(_ id: String) -> String {
+        CloudAudioDictationModel.listed(id)?.name ?? id
     }
 
     /// Imported files, the local API and voice command and rewrite modes use the transcription model.
