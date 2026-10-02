@@ -746,6 +746,12 @@ final class FileTranscriptionService: ObservableObject {
         return cloudProviderID == CloudTranscriptionCatalog.openRouterID ? .unavailable : .droppedForModel
     }
 
+    /// The note saved with a Cloud file transcript: unassigned words when speakers were labelled, otherwise
+    /// why the file has no speaker labels although they were requested (a model without word timings).
+    nonisolated static func cloudSpeakerLabelingNotice(hasUnassignedWords: Bool, droppedNotice: String?) -> String? {
+        hasUnassignedWords ? "Some words could not be assigned to one speaker. Their text is retained." : droppedNotice
+    }
+
     private func transcribeCloudFile(
         _ fileURL: URL,
         provider: CloudTranscriptionProvider,
@@ -789,7 +795,7 @@ final class FileTranscriptionService: ObservableObject {
             processingTime: Date().timeIntervalSince(startTime),
             fileName: fileURL.lastPathComponent,
             speakerSegments: segments,
-            speakerLabelingNotice: hasUnassignedWords ? "Some words could not be assigned to one speaker. Their text is retained." : nil
+            speakerLabelingNotice: Self.cloudSpeakerLabelingNotice(hasUnassignedWords: hasUnassignedWords, droppedNotice: self.fallbackNotice)
         )
         self.currentStatus = "Complete!"
         self.progress = 1

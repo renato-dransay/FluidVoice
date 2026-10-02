@@ -45,6 +45,16 @@ final class ProviderConsumersTests: XCTestCase {
         XCTAssertEqual(line.tab, .local, "Change opens the tab where the model files use is chosen")
     }
 
+    func testACloudFileWithoutSpeakerLabelsKeepsTheReasonWithItsTranscript() {
+        let dropped = "This model returns no word timings, so the file was transcribed without speaker labels."
+        XCTAssertEqual(FileTranscriptionService.cloudSpeakerLabelingNotice(hasUnassignedWords: false, droppedNotice: dropped), dropped)
+        XCTAssertNil(FileTranscriptionService.cloudSpeakerLabelingNotice(hasUnassignedWords: false, droppedNotice: nil))
+        XCTAssertEqual(
+            FileTranscriptionService.cloudSpeakerLabelingNotice(hasUnassignedWords: true, droppedNotice: nil),
+            "Some words could not be assigned to one speaker. Their text is retained."
+        )
+    }
+
     // MARK: - Dashboard (DASH-1)
 
     func testAMissingKeyForAnyCloudProviderIsNamed() {
