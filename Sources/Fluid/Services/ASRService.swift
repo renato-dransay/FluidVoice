@@ -1456,7 +1456,8 @@ final class ASRService: ObservableObject {
             return (provider: "live-\(live.configuration.provider.rawValue)", model: live.configuration.modelID)
         }
         if self.isUsingCloudTranscription {
-            return (provider: CloudTranscriptionClients.historyProviderName(for: self.activeCloudProviderID), model: self.transcriptionProvider.name)
+            let modelID = self.frozenCloudConfiguration?.modelID ?? (self.transcriptionProvider as? CloudTranscriptionProvider)?.configuration.modelID
+            return (provider: CloudTranscriptionClients.historyProviderName(for: self.activeCloudProviderID), model: modelID ?? self.transcriptionProvider.name)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
@@ -4050,7 +4051,9 @@ final class ASRService: ObservableObject {
                 return ""
             }
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
-            DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
+            // A Cloud error's description names OpenRouter; its message names the provider in use.
+            let cloudProviderName = CloudTranscriptionClients.providerName(for: self.activeCloudProviderID)
+            DebugLogger.shared.error("Error details: \(CloudTranscriptionError.message(for: error, providerName: cloudProviderName))", source: "ASRService")
             let nsError = error as NSError
             DebugLogger.shared.error("Error domain: \(nsError.domain), code: \(nsError.code)", source: "ASRService")
             DebugLogger.shared.error("Error userInfo: \(nsError.userInfo)", source: "ASRService")
@@ -6950,7 +6953,8 @@ final class ASRService: ObservableObject {
             }
             self.finishModelDownloadAnalytics(operationID: operationID, outcome: .failed)
             DebugLogger.shared.error("ASR initialization failed with error: \(error)", source: "ASRService")
-            DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
+            // A Cloud error's description names OpenRouter; its message names the provider being prepared.
+            DebugLogger.shared.error("Error details: \(CloudTranscriptionError.message(for: error, providerName: provider.name))", source: "ASRService")
             if self.ensureReadyOperationID == operationID {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
