@@ -66,6 +66,46 @@ final class CloudProviderRoutingTests: XCTestCase {
         XCTAssertEqual(session.apiKey, "or-key")
     }
 
+    /// A retried non-OpenRouter Cloud recording gets the local text processing its first attempt would have
+    /// had (CLD-5). OpenRouter, Live cloud and "Transcribe locally" retries stay trimmed only, as before.
+    func testARetriedNonOpenRouterRecordingGetsTheLocalTextProcessing() {
+        func retried(_ failed: ASRService.FailedRemoteDictation, useLocal: Bool = false) -> String {
+            ASRService.retriedTranscript(
+                "  um fluid voice works \n",
+                of: failed,
+                useLocal: useLocal,
+                removeFillers: { $0.replacingOccurrences(of: "um ", with: "") },
+                applyDictionary: Self.dictionary,
+                formatPunctuation: { $0.trimmingCharacters(in: .whitespacesAndNewlines) + "." }
+            )
+        }
+        let samples: [Float] = [0.1]
+        for providerID in ["deepgram", "speechmatics", "soniox", "assemblyai", "gladia"] {
+            let configuration = CloudTranscriptionConfiguration(providerID: providerID, modelID: CloudTranscriptionCatalog.defaultModelID(for: providerID) ?? "")
+            XCTAssertEqual(retried(.cloud(samples: samples, configuration: configuration)), "FluidVoice works.", providerID)
+        }
+        XCTAssertEqual(retried(.cloud(samples: samples, configuration: CloudTranscriptionConfiguration())), "um fluid voice works", "OpenRouter is unchanged")
+        let deepgram = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-3")
+        XCTAssertEqual(retried(.cloud(samples: samples, configuration: deepgram), useLocal: true), "um fluid voice works", "Transcribe locally is unchanged")
+        let live = LiveTranscriptionConfiguration(provider: .soniox, modelID: "stt-rt-v5", languageCode: nil, languageHints: [])
+        XCTAssertEqual(retried(.live(samples: samples, configuration: live)), "um fluid voice works", "Live cloud retry is unchanged")
+    }
+
+    /// VE-5 item 7: the activation row of a provider other than OpenRouter names the missing verified text
+    /// provider. A speech check never counts, because only the text record is read.
+    func testCleanupStylesHintShowsForOtherProvidersWithoutAVerifiedTextProvider() {
+        typealias Model = VoiceEngineSettingsViewModel
+        for providerID in ["deepgram", "elevenlabs", "mistral", "speechmatics", "soniox", "assemblyai", "gladia"] {
+            XCTAssertTrue(Model.showsVerifiedTextProviderHint(providerID: providerID, verifiedTextProviderKeys: [], isTextVerified: { _ in true }), providerID)
+            XCTAssertTrue(
+                Model.showsVerifiedTextProviderHint(providerID: providerID, verifiedTextProviderKeys: ["openai"], isTextVerified: { _ in false }),
+                "A stale record is not a verified provider"
+            )
+            XCTAssertFalse(Model.showsVerifiedTextProviderHint(providerID: providerID, verifiedTextProviderKeys: ["openai"], isTextVerified: { $0 == "openai" }))
+        }
+        XCTAssertFalse(Model.showsVerifiedTextProviderHint(providerID: "openrouter", verifiedTextProviderKeys: [], isTextVerified: { _ in false }))
+    }
+
     /// A Deepgram dictation, from the frozen session to the transcript, never sends a request to openrouter.ai.
     func testNoRequestGoesToOpenRouterWhenTheCloudProviderIsDeepgram() async throws {
         let recorder = CloudRequestRecorder()

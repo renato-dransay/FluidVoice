@@ -4115,7 +4115,31 @@ final class ASRService: ObservableObject {
         let result = try await provider.transcribeFinal(failed.samples)
         try Task.checkCancellation()
         self.discardFailedCloudDictation()
-        return (result.cloudDictationOutput?.text ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.retriedTranscript(result.cloudDictationOutput?.text ?? result.text, of: failed, useLocal: useLocal)
+    }
+
+    /// The text a retried recording returns. A Cloud recording from a provider other than OpenRouter gets
+    /// the local text processing its first attempt would have had (CLD-5); an OpenRouter retry, a Live
+    /// cloud retry and "Transcribe locally" are only trimmed, as before. The steps are injectable for tests.
+    static func retriedTranscript(
+        _ text: String,
+        of failed: FailedRemoteDictation,
+        useLocal: Bool,
+        removeFillers: ((String) -> String)? = nil,
+        applyDictionary: ((String) -> String)? = nil,
+        formatPunctuation: ((String) -> String)? = nil
+    ) -> String {
+        var skipsLocalProcessing = true
+        if !useLocal, case .cloud(_, let configuration) = failed {
+            skipsLocalProcessing = Self.skipsLocalTextProcessing(cloudProviderID: configuration.providerID)
+        }
+        return Self.processedTranscript(
+            text,
+            skipsLocalProcessing: skipsLocalProcessing,
+            removeFillers: removeFillers,
+            applyDictionary: applyDictionary,
+            formatPunctuation: formatPunctuation
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func beginDeferredStopUIInvalidation() {

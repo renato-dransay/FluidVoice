@@ -166,7 +166,11 @@ struct CloudTranscriptionSettingsView: View {
                     .fluidGlassAction(quiet: true)
                 }
             }
-            if providerID != CloudTranscriptionPreferences.defaultProviderID, !self.hasVerifiedTextProvider {
+            if VoiceEngineSettingsViewModel.showsVerifiedTextProviderHint(
+                providerID: providerID,
+                verifiedTextProviderKeys: Array(self.settings.verifiedProviderFingerprints.keys),
+                isTextVerified: self.settings.isCommandModeProviderVerified
+            ) {
                 HStack(spacing: 8) {
                     Text("Cleanup Styles need a verified text provider.").font(.caption).foregroundStyle(.secondary)
                     Button("Open AI Providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
@@ -174,11 +178,6 @@ struct CloudTranscriptionSettingsView: View {
                 }
             }
         }
-    }
-
-    /// With a provider other than OpenRouter, Cleanup Styles run afterwards on a verified text provider.
-    private var hasVerifiedTextProvider: Bool {
-        self.settings.verifiedProviderFingerprints.keys.contains { self.settings.isCommandModeProviderVerified($0) }
     }
 
     // MARK: - Usage

@@ -307,6 +307,12 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         return captions
     }
 
+    /// VE-5 item 7: with a Cloud provider other than OpenRouter, Cleanup Styles run afterwards on the default
+    /// text provider, so the activation row points to AI Providers while no text provider is text-verified.
+    static func showsVerifiedTextProviderHint(providerID: String, verifiedTextProviderKeys: [String], isTextVerified: (String) -> Bool) -> Bool {
+        providerID != CloudTranscriptionPreferences.defaultProviderID && !verifiedTextProviderKeys.contains(where: isTextVerified)
+    }
+
     /// Why `Activate` is disabled for this Cloud provider, or nil when it can run.
     static func cloudActivationBlocker(hasKey: Bool, hasModel: Bool, isBusy: Bool) -> String? {
         if !hasKey { return "Add an API key in AI Providers first." }
