@@ -16,7 +16,7 @@ struct MeetingSummaryView: View {
 
     private var hint: String {
         guard let engine = self.controller.engine else {
-            return "Meeting summaries need an AI provider. Choose one in AI Settings."
+            return "Meeting summaries need an AI provider. Choose one in AI Providers."
         }
         if self.session == nil, self.controller.installed {
             return "Open a completed meeting to summarize its transcript."
@@ -44,6 +44,12 @@ struct MeetingSummaryView: View {
                 Text(self.hint)
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
+                if self.controller.engine == nil, !self.controller.checking {
+                    Button("Open AI Providers") { AppNavigationRouter.shared.request(.aiEnhancements) }
+                        .buttonStyle(.link)
+                        .font(self.theme.typography.bodySmall)
+                        .accessibilityIdentifier("meeting-summary-open-ai-providers")
+                }
             }
             if self.controller.engine != nil {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -74,9 +80,15 @@ struct MeetingSummaryView: View {
             }
             switch self.controller.engine {
             case let .cloud(route):
-                Label("\(route.providerName) · \(route.model) · Sends the transcript to this provider", systemImage: "cloud")
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.tertiaryText)
+                HStack(spacing: self.theme.metrics.spacing.sm) {
+                    Label("\(route.providerName) · \(route.model) · Sends the transcript to this provider", systemImage: "cloud")
+                        .foregroundStyle(self.theme.palette.tertiaryText)
+                    Button("Change") { AppNavigationRouter.shared.request(.aiEnhancements) }
+                        .buttonStyle(.link)
+                        .help("Choose the default text provider in AI Providers")
+                        .accessibilityIdentifier("meeting-summary-change-provider")
+                }
+                .font(self.theme.typography.caption)
             case .onDevice:
                 Label("On-device · English · Frees its memory when done", systemImage: "lock")
                     .font(self.theme.typography.caption)

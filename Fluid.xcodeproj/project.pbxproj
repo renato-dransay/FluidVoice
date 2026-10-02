@@ -105,6 +105,7 @@
 		51AB0E0100000000000000C2 /* AIProvidersPageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */; };
 		51AB0E0100000000000000D2 /* VoiceEngineSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */; };
 		51AB0E0100000000000000E2 /* CloudProviderRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */; };
+		51AB0E010000000000000182 /* ProviderConsumersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000181 /* ProviderConsumersTests.swift */; };
 		51AB0E0100000000000000F2 /* CloudVendorSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */; };
 		51AB0E010000000000000102 /* DeepgramTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */; };
 		51AB0E010000000000000112 /* ElevenLabsTranscriptionClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */; };
@@ -242,6 +243,7 @@
 		51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvidersPageTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceEngineSettingsTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudProviderRoutingTests.swift; sourceTree = "<group>"; };
+		51AB0E010000000000000181 /* ProviderConsumersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderConsumersTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudVendorSupportTests.swift; sourceTree = "<group>"; };
 		51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepgramTranscriptionClientTests.swift; sourceTree = "<group>"; };
 		51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevenLabsTranscriptionClientTests.swift; sourceTree = "<group>"; };
@@ -482,6 +484,7 @@
 				51AB0E0100000000000000C1 /* AIProvidersPageTests.swift */,
 				51AB0E0100000000000000D1 /* VoiceEngineSettingsTests.swift */,
 				51AB0E0100000000000000E1 /* CloudProviderRoutingTests.swift */,
+				51AB0E010000000000000181 /* ProviderConsumersTests.swift */,
 				51AB0E0100000000000000F1 /* CloudVendorSupportTests.swift */,
 				51AB0E010000000000000101 /* DeepgramTranscriptionClientTests.swift */,
 				51AB0E010000000000000111 /* ElevenLabsTranscriptionClientTests.swift */,
@@ -863,6 +866,7 @@
 				51AB0E0100000000000000C2 /* AIProvidersPageTests.swift in Sources */,
 				51AB0E0100000000000000D2 /* VoiceEngineSettingsTests.swift in Sources */,
 				51AB0E0100000000000000E2 /* CloudProviderRoutingTests.swift in Sources */,
+				51AB0E010000000000000182 /* ProviderConsumersTests.swift in Sources */,
 				51AB0E0100000000000000F2 /* CloudVendorSupportTests.swift in Sources */,
 				51AB0E010000000000000102 /* DeepgramTranscriptionClientTests.swift in Sources */,
 				51AB0E010000000000000112 /* ElevenLabsTranscriptionClientTests.swift in Sources */,

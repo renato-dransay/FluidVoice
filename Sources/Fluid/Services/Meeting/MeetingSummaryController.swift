@@ -111,7 +111,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
 }
 
 /// Where a summary runs. The on-device model wins when the build registers one; otherwise the
-/// transcript goes to the text AI provider configured in AI Settings.
+/// transcript goes to the text AI provider configured in AI Providers.
 nonisolated enum MeetingSummaryEngine: Equatable, Sendable {
     case onDevice(modelID: String)
     case cloud(MeetingCloudSummaryRoute)

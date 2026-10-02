@@ -387,6 +387,10 @@ struct CommandModeView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(self.theme.palette.warning)
                     Text(issue).font(self.theme.typography.caption)
+                    Button("Open AI Providers") { AppNavigationRouter.shared.request(self.providerSetupDestination) }
+                        .buttonStyle(.link)
+                        .font(self.theme.typography.caption)
+                        .accessibilityIdentifier("command-mode-open-ai-providers")
                 }
                 .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -493,7 +497,13 @@ struct CommandModeView: View {
                 options: self.modelOptions,
                 selectedProviderID: self.selectedModelProviderID,
                 selectedModelID: self.selectedModelID,
+                isAutomatic: self.settings.commandModeLinkedToGlobal,
                 onSelect: self.selectModel,
+                onSelectAutomatic: self.selectAutomatic,
+                onOpenAIProviders: {
+                    self.showModelPicker = false
+                    AppNavigationRouter.shared.request(self.providerSetupDestination)
+                },
                 onDismiss: { self.showModelPicker = false }
             )
         }
@@ -607,6 +617,25 @@ struct CommandModeView: View {
         self.modelOptions = options
         self.selectedModelProviderID = selected?.providerID ?? ""
         self.selectedModelID = selected?.modelID ?? ""
+    }
+
+    /// The provider Command Mode would use, in AI Providers; the Add sheet for text providers when none is set.
+    private var providerSetupDestination: AppNavigationDestination {
+        let providerID = self.settings.commandModeLinkedToGlobal
+            ? self.settings.selectedProviderID
+            : self.settings.commandModeSelectedProviderID
+        let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != PrivateAIProviderFeature.shared.providerID else {
+            return .addProvider(capability: .text, origin: .commandMode)
+        }
+        return .aiProvider(id: trimmed, origin: .commandMode)
+    }
+
+    private func selectAutomatic() {
+        guard self.canChangeSession else { return }
+        self.settings.selectCommandModeAutomatic()
+        self.refreshModelCatalog()
+        self.showModelPicker = false
     }
 
     private func selectModel(_ option: CommandModelOption) {

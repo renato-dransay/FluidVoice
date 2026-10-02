@@ -9,7 +9,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
     func testSelectedProviderWithKeyIsUsed() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "groq", providerKey: "groq", baseURL: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b", apiKey: "groq-key"),
-            openRouterKey: "voice-key"
+            openRouterSpeechKey: "voice-key"
         )
         XCTAssertEqual(route, MeetingCloudSummaryRoute(
             providerKey: "groq", providerName: "Groq", baseURL: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b", apiKey: "groq-key"
@@ -19,17 +19,25 @@ final class MeetingCloudSummaryTests: XCTestCase {
     func testSelectedOpenRouterWithoutTextKeyUsesVoiceEngineKey() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "openrouter", providerKey: "openrouter", baseURL: self.openRouterURL, model: "openai/gpt-oss-20b", apiKey: ""),
-            openRouterKey: " voice-key "
+            openRouterSpeechKey: " voice-key "
         )
         XCTAssertEqual(route?.model, "openai/gpt-oss-20b")
         XCTAssertEqual(route?.apiKey, "voice-key")
+    }
+
+    func testSelectedOpenRouterPrefersItsTextKeyOverItsSpeechKey() {
+        let route = self.resolve(
+            provider: DictationProviderRoute(providerID: "openrouter", providerKey: "openrouter", baseURL: self.openRouterURL, model: "openai/gpt-oss-20b", apiKey: "text-key"),
+            openRouterSpeechKey: "voice-key"
+        )
+        XCTAssertEqual(route?.apiKey, "text-key")
     }
 
     func testVoiceEngineReplacesTheHiddenOpenRouterTextModel() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "openrouter", providerKey: "openrouter", baseURL: self.openRouterURL, model: "openai/gpt-oss-20b", apiKey: ""),
             usesVoiceEngine: true,
-            openRouterKey: "voice-key",
+            openRouterSpeechKey: "voice-key",
             openRouterModel: "google/gemini-3.8-flash"
         )
         XCTAssertEqual(route, MeetingCloudSummaryRoute(
@@ -41,7 +49,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "groq", providerKey: "groq", baseURL: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b", apiKey: "groq-key"),
             usesVoiceEngine: true,
-            openRouterKey: "voice-key"
+            openRouterSpeechKey: "voice-key"
         )
         XCTAssertEqual(route?.providerKey, "groq")
     }
@@ -49,7 +57,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
     func testMissingProviderFallsBackToOpenRouterVoiceEngine() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: ""),
-            openRouterKey: "voice-key",
+            openRouterSpeechKey: "voice-key",
             openRouterModel: "google/gemini-3.8-flash"
         )
         XCTAssertEqual(route, MeetingCloudSummaryRoute(
@@ -61,7 +69,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
         let privateID = PrivateAIProviderFeature.shared.providerID
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: privateID, providerKey: privateID, baseURL: "", model: "local", apiKey: ""),
-            openRouterKey: "voice-key",
+            openRouterSpeechKey: "voice-key",
             openRouterModel: "google/gemini-3.8-flash"
         )
         XCTAssertEqual(route?.providerKey, "openrouter")
@@ -70,7 +78,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
     func testRemoteProviderWithoutAnyKeyIsUnavailable() {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "openai", providerKey: "openai", baseURL: "https://api.openai.com/v1", model: "gpt-5", apiKey: ""),
-            openRouterKey: ""
+            openRouterSpeechKey: ""
         )
         XCTAssertNil(route)
     }
@@ -79,7 +87,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
         let route = self.resolve(
             provider: DictationProviderRoute(providerID: "ollama", providerKey: "ollama", baseURL: "http://localhost:11434/v1", model: "llama3", apiKey: ""),
             isLocalEndpoint: true,
-            openRouterKey: ""
+            openRouterSpeechKey: ""
         )
         XCTAssertEqual(route?.model, "llama3")
         XCTAssertEqual(route?.apiKey, "")
@@ -144,7 +152,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool = false,
         usesVoiceEngine: Bool = false,
-        openRouterKey: String,
+        openRouterSpeechKey: String,
         openRouterModel: String? = "google/gemini-3.8-flash"
     ) -> MeetingCloudSummaryRoute? {
         MeetingCloudSummaryRouteResolver.resolve(
@@ -152,7 +160,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
             isLocalEndpoint: isLocalEndpoint,
             usesVoiceEngine: usesVoiceEngine,
             providerName: ModelRepository.shared.displayName(for: provider.providerID),
-            openRouterKey: openRouterKey,
+            openRouterSpeechKey: openRouterSpeechKey,
             openRouterModel: openRouterModel,
             openRouterBaseURL: self.openRouterURL
         )

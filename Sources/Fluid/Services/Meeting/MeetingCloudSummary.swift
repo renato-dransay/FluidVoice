@@ -20,24 +20,25 @@ nonisolated struct MeetingCloudSummaryRoute: Equatable, Sendable {
 enum MeetingCloudSummaryRouteResolver {
     static let openRouterProviderID = "openrouter"
 
-    /// Uses the AI provider selected in AI Settings. When that provider is missing, is Fluid
-    /// Intelligence or has no key, falls back to OpenRouter with the Voice Engine key, which
-    /// authorizes OpenRouter's chat endpoint as well. While Voice Engine is on, AI Settings hides
-    /// the OpenRouter text model, so a selected OpenRouter provider uses the Voice Engine model,
-    /// which the user picked and which their OpenRouter account is known to serve.
+    /// Uses the default text provider chosen in AI Providers, with the key text features read
+    /// (`getAPIKey`). When that provider is missing, is Fluid Intelligence or has no key, falls back to
+    /// OpenRouter with its speech key (`speechAPIKey(for: "openrouter")`, the key Voice Engine sends),
+    /// which authorizes OpenRouter's chat endpoint as well. While OpenRouter is the Cloud voice engine,
+    /// AI Providers hides the OpenRouter text model, so a selected OpenRouter provider uses the Voice
+    /// Engine style model, which the user picked and which their OpenRouter account is known to serve.
     static func resolve(
         provider: DictationProviderRoute,
         isLocalEndpoint: Bool,
         usesVoiceEngine: Bool,
         providerName: String,
-        openRouterKey: String,
+        openRouterSpeechKey: String,
         openRouterModel: String?,
         openRouterBaseURL: String
     ) -> MeetingCloudSummaryRoute? {
         let model = provider.model.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseURL = provider.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         var apiKey = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let voiceKey = openRouterKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let voiceKey = openRouterSpeechKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if apiKey.isEmpty, provider.providerID == self.openRouterProviderID {
             apiKey = voiceKey
         }
@@ -73,7 +74,7 @@ enum MeetingCloudSummaryRouteResolver {
             usesVoiceEngine: settings.usesCombinedCloudDictation,
             providerName: settings.savedProviders.first(where: { $0.id == provider.providerID })?.name
                 ?? repository.displayName(for: provider.providerID),
-            openRouterKey: settings.openRouterTranscriptionAPIKey,
+            openRouterSpeechKey: settings.speechAPIKey(for: self.openRouterProviderID),
             // The Voice Engine dictation model is an OpenRouter chat model that also accepts text.
             openRouterModel: settings.cloudDictationModelID,
             openRouterBaseURL: repository.defaultBaseURL(for: self.openRouterProviderID)
@@ -142,7 +143,7 @@ nonisolated enum MeetingCloudSummaryError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .emptyResponse: "The AI provider returned an empty summary. Try again or choose another model in AI Settings."
+        case .emptyResponse: "The AI provider returned an empty summary. Try again or choose another model in AI Providers."
         }
     }
 }

@@ -141,6 +141,12 @@ extension SettingsStore {
         return true
     }
 
+    /// The picker's "Automatic (AI Providers default)" row: Command Mode follows the default text provider
+    /// again. The last chosen provider and model stay stored for the next manual choice.
+    func selectCommandModeAutomatic() {
+        self.commandModeLinkedToGlobal = true
+    }
+
     private func supportedCommandModeProviderID(_ providerID: String) -> String? {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

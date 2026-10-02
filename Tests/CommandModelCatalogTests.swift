@@ -158,6 +158,16 @@ final class SettingsStore: ObservableObject {
         self.check(settings.rewriteModeSelectedProviderID == "anthropic" && settings.rewriteModeSelectedModel == "rewrite-model", "Edit Mode stays unchanged")
         self.check(settings.verifiedProviderFingerprints == fingerprints && settings.availableModelsByProvider == modelLists && settings.savedProviders == saved, "Selection never modifies verification or configured model lists")
         self.check(settings.writes == ["commandProvider", "commandModel"] && UserDefaults.standard.writes == ["CommandModeLinkedToGlobal"], "Only the three local Command Mode settings are written")
+
+        // The "Automatic (AI Providers default)" row links Command Mode to the default text provider again.
+        settings.writes = []
+        UserDefaults.standard.writes = []
+        settings.selectCommandModeAutomatic()
+        self.check(settings.commandModeLinkedToGlobal, "The Automatic row sets the linked flag")
+        self.check(settings.effectiveCommandModeProviderID == "openai", "Automatic resolves to the default text provider")
+        self.check(settings.commandModeSelectedProviderID == "custom-a" && settings.commandModeSelectedModel == "custom-chat", "The last chosen pair stays stored")
+        self.check(settings.writes.isEmpty && UserDefaults.standard.writes == ["CommandModeLinkedToGlobal"], "Automatic writes only the linked flag")
+        self.check(settings.selectCommandModeModel(option) && !settings.commandModeLinkedToGlobal, "Picking a model after Automatic unlinks again")
     }
 
     static func staleSelectionsHaveNoEffects() {

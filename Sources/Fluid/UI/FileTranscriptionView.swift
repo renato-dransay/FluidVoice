@@ -91,6 +91,7 @@ struct FileTranscriptionView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: self.theme.metrics.spacing.sm) {
+                self.engineLine
                 if let activity = self.conflictingActivity {
                     self.activityConflictCard(activity: activity)
                 }
@@ -198,6 +199,27 @@ struct FileTranscriptionView: View {
                 self.selectedFileURL = self.transcriptionService.currentFileURL
             }
         }
+    }
+
+    /// What a file is transcribed with, and the way to change it (FT-1).
+    private var engineLine: some View {
+        let line = self.settings.fileTranscriptionEngineLine
+        return HStack(spacing: self.theme.metrics.spacing.sm) {
+            Text(line.text)
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("Change") {
+                AppNavigationRouter.shared.request(.voiceEngine(tab: line.tab))
+            }
+            .buttonStyle(.link)
+            .font(self.theme.typography.caption)
+            .help("Choose the voice engine and model in Voice Engine")
+            .accessibilityIdentifier("file-transcription-engine-change")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("file-transcription-engine-line")
     }
 
     private func activityConflictCard(activity: ASRExclusiveActivity) -> some View {

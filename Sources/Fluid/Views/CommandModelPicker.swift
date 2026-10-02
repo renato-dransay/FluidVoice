@@ -4,7 +4,11 @@ struct CommandModelPicker: View {
     let options: [CommandModelOption]
     let selectedProviderID: String
     let selectedModelID: String
+    /// Command Mode follows the default text provider (`commandModeLinkedToGlobal`).
+    let isAutomatic: Bool
     let onSelect: (CommandModelOption) -> Void
+    let onSelectAutomatic: () -> Void
+    let onOpenAIProviders: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.theme) private var theme
@@ -46,10 +50,15 @@ struct CommandModelPicker: View {
         VStack(spacing: 0) {
             self.searchField
             Divider()
+            if self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.automaticRow
+                Divider()
+            }
             if self.options.isEmpty {
                 self.emptyState(
                     title: "No models available",
-                    message: "Verify a chat provider in AI Providers to make its models available here."
+                    message: "Verify a chat provider in AI Providers to make its models available here.",
+                    showsAIProvidersButton: true
                 )
             } else if filtered.isEmpty {
                 self.emptyState(
@@ -137,7 +146,7 @@ struct CommandModelPicker: View {
                         case let .model(option):
                             ModelRow(
                                 option: option,
-                                selected: option.id == selectedID,
+                                selected: !self.isAutomatic && option.id == selectedID,
                                 highlighted: option.id == highlightedID,
                                 onSelect: { self.onSelect(option) },
                                 onHighlight: { self.highlightedID = option.id }
@@ -212,12 +221,44 @@ struct CommandModelPicker: View {
         }
     }
 
-    private func emptyState(title: String, message: String) -> some View {
+    /// The first row: follow the default text provider chosen in AI Providers instead of a fixed model.
+    private var automaticRow: some View {
+        Button(action: self.onSelectAutomatic) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Automatic (AI Providers default)")
+                    .font(self.theme.typography.bodySmall)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "checkmark")
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.theme.palette.accent)
+                    .opacity(self.isAutomatic ? 1 : 0)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+            }
+            .frame(minHeight: 32)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(self.isAutomatic ? .isSelected : [])
+        .help("Use the default text provider and model chosen in AI Providers")
+        .accessibilityIdentifier("command-model-automatic")
+        .padding(.vertical, 6)
+    }
+
+    private func emptyState(title: String, message: String, showsAIProvidersButton: Bool = false) -> some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
             Text(title).font(self.theme.typography.bodySmallStrong)
             Text(message)
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
+            if showsAIProvidersButton {
+                Button("Open AI Providers", action: self.onOpenAIProviders)
+                    .buttonStyle(.link)
+                    .font(self.theme.typography.caption)
+            }
         }
         .multilineTextAlignment(.center)
         .padding(24)
