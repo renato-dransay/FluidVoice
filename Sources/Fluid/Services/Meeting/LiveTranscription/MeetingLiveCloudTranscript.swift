@@ -49,9 +49,9 @@ nonisolated enum MeetingLiveCloudTranscriptError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .missing:
-            "This meeting has no Live cloud transcript. It was recorded with another transcription option, or the app quit before the transcript was saved. Choose Local or OpenRouter in FluidMeet settings and retry."
+            "This meeting has no Live cloud transcript. It was recorded with another transcription option, or the app quit before the transcript was saved. Choose Local or Cloud in FluidMeet settings and retry."
         case .unreadable:
-            "The Live cloud transcript of this meeting could not be read. Choose Local or OpenRouter in FluidMeet settings and retry."
+            "The Live cloud transcript of this meeting could not be read. Choose Local or Cloud in FluidMeet settings and retry."
         }
     }
 }

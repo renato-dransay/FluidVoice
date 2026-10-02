@@ -701,7 +701,7 @@ final class ASRService: ObservableObject {
                 }
                 if activity == .dictation, let configuration = testConfiguration ?? SettingsStore.shared.liveDictationConfiguration {
                     let key = SettingsStore.shared.liveTranscriptionAPIKey(for: configuration.provider)
-                    // With no frozen provider yet, this is the cached local provider (Live cloud is not OpenRouter).
+                    // With no frozen provider yet, this is the cached local provider (Live cloud never uses the Cloud provider).
                     let localProvider = self.transcriptionProvider
                     self.asrReadyBeforeLiveLease = self.isAsrReady
                     self.frozenSpeechExecutionSource = .liveCloud

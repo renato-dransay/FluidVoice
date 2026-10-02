@@ -63,6 +63,16 @@ final class ProviderConsumersTests: XCTestCase {
         XCTAssertEqual(status.missingKeyProviderID, "deepgram")
     }
 
+    // MARK: - Mode names (COPY-3)
+
+    func testMeetingRecoveryNamesTheCloudChoiceByItsPickerTitle() {
+        for error in [MeetingLiveCloudTranscriptError.missing, .unreadable] {
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("Choose Local or Cloud in FluidMeet settings"), message)
+            XCTAssertFalse(message.contains("OpenRouter"), message)
+        }
+    }
+
     // MARK: - Meeting summary (SUM-1)
 
     func testTheSummaryErrorPointsToAIProviders() {

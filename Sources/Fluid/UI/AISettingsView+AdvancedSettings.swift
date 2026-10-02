@@ -476,7 +476,7 @@ extension AIEnhancementSettingsView {
         PromptCardModelPicker(
             summary: "OpenRouter · \(ModelDisplayName.forID(self.settings.cloudDictationModelID))",
             selectedModel: self.settings.cloudDictationModelID,
-            providerName: "OpenRouter (Voice Engine)"
+            providerName: "OpenRouter · Cloud"
         )
     }
 
@@ -944,7 +944,7 @@ extension AIEnhancementSettingsView {
                             title: SettingsStore.DictationModeLabels.externalDefault,
                             symbol: "textformat",
                             subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments)
-                                : (self.settings.usesCombinedCloudDictation ? "OpenRouter Voice Engine" : "External AI provider"),
+                                : (self.settings.usesCombinedCloudDictation ? "OpenRouter · Cloud" : "External AI provider"),
                             detail: assignments.isReady ? "Customizable cleanup" : "Setup required",
                             assignments: assignments,
                             isEnabled: true,

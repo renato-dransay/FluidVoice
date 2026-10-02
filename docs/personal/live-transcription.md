@@ -1,8 +1,8 @@
 # Live cloud transcription
 
-**Live cloud** is a third voice engine, next to **Local** and **OpenRouter**. It streams your dictation audio to a speech provider of your choice while you speak, using your own API key for that provider. Words appear in the overlay as you talk, the same way they do with a local model, and the final text arrives a few hundred milliseconds after you press the stop key.
+**Live cloud** is a third voice engine, next to **Local** and **Cloud**. It streams your dictation audio to a speech provider of your choice while you speak, using your own API key for that provider. Words appear in the overlay as you talk, the same way they do with a local model, and the final text arrives a few hundred milliseconds after you press the stop key.
 
-OpenRouter works differently: it has no streaming speech endpoint, so the app uploads the whole recording after you stop and waits for one response that carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the text provider and model chosen in **AI Settings > AI Providers**. Styles have no provider or model of their own.
+**Cloud** works differently: the app uploads the whole recording after you stop and waits for the provider's answer (see [Cloud transcription](cloud-transcription.md)); with OpenRouter one response carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the default text provider and model chosen in **AI Providers**. Styles have no provider or model of their own.
 
 ## Providers
 
@@ -19,16 +19,20 @@ OpenRouter works differently: it has no streaming speech endpoint, so the app up
 
 Prices and billing bases were read from each vendor's documentation on 2026-09-30 and change without notice; check the provider's own pricing page before relying on them. Providers that bill connection time (Soniox and AssemblyAI) charge for the whole time the connection is open, so the app closes the connection on every exit: the final text, cancelling with Escape, a recording discarded as silence, and every failure.
 
-## Adding, testing and activating a provider
+## Connecting, testing and activating a provider
 
-1. Open **AI Settings > Voice Engine** and choose the **Live cloud** tab. Browsing the tab never changes the voice engine.
-2. Choose **Add provider** and pick a provider from the grid. Adding a provider does not change your current dictation setup; its Manage sheet opens straight away.
-3. In the Manage sheet, paste the key into the API key field and choose **Save key**. The sheet shows **Key saved in macOS Keychain**, a **Get a <Provider> API key** link, and **Remove key**. Nothing is sent to the provider before a key is saved.
+Keys are entered in **AI Providers**, the one place where every provider is connected; Voice Engine never asks for a key.
+
+1. Open **Voice Engine** and choose the **Live cloud** tab. Browsing the tab never changes the voice engine. The tab lists the connected live providers first. Every other one is under **Not set up**, shown when nothing is connected and otherwise behind **Show <n> more providers**, with **Set up in AI Providers**.
+2. **Set up in AI Providers** opens that provider's connection form in AI Providers (or choose **Add provider** there and pick it from the grid). Paste the key and choose **Add provider**. Adding a provider does not change your current dictation setup, and nothing is sent to the provider when the key is saved. The confirmation offers **Back to Voice Engine**, which returns to the Live cloud tab.
+3. Back in the Live cloud tab, the provider is under the connected providers. **Manage** opens its sheet: a connection line with **Manage in AI Providers**, the model, the test and the usage. The key itself is replaced or removed in AI Providers.
 4. Optionally pick another model. The choice applies from your next recording.
 5. To try the provider without switching to it, choose **Test with your dictation shortcut**, then press your normal dictation shortcut, speak for a few seconds and stop. The next dictation uses this provider even if another engine is active, shows live words in the overlay, and the sheet shows the **Transcript** and **Final text <n> s after you stopped**. Nothing is typed, saved to history, or sent to Cleanup Styles, and the test does not change the voice engine. A test still uses a few seconds of the provider's paid usage. Closing the sheet, or **Stop testing**, disarms the test. A passing test marks the provider **Tested** in the list until its key is replaced or removed.
-6. Choose **Activate** on the provider's row, or **Activate for dictation** in the sheet. The app first checks the key with one authenticated request to the provider's REST API, without audio. If the check passes, the voice engine switches to Live cloud with that provider and the row shows a green **Active** badge. If it fails, the engine does not change and the row names the reason, for example a rejected key.
+6. Choose **Activate** on the provider's row or in the sheet's footer. The app first checks the key with one authenticated request to the provider's REST API, without audio. If the check passes, the voice engine switches to Live cloud with that provider and the button turns into a green **Active**. If it fails, the engine does not change and the row names the reason, for example a rejected key.
 
-Each row shows the model and a status: **Not tested**, **Tested**, **API key missing**, **Key rejected**, or **Needs a Primary language** for Speechmatics without one. Only one provider can be active. To leave Live cloud, activate a local model in the **Local** tab or turn on OpenRouter; either clears the active live provider. **Remove provider** in the Manage sheet deletes its key and model choice and, if it was active, returns dictation to the selected local model. Removing only the key leaves Live cloud selected but unusable, and dictation uses the selected local model until a key is saved again; settings then show that the provider's key is required.
+Each connected row shows the model and a status: **Not tested**, **Tested**, **API key missing**, **Key rejected**, or **Needs a Primary language** for Speechmatics without one. Only one provider can be active. To leave Live cloud, activate a local model in the **Local** tab or a provider in the **Cloud** tab; either clears the active live provider.
+
+A provider is removed in AI Providers, with **Remove key** or **Remove provider** in its Manage sheet; both are disabled while a recording is in progress. When dictation or FluidMeet uses the provider, the app asks first ("Remove <Provider>? Dictation switches to your selected local model.", plus "FluidMeet transcription switches to Local." when it applies). Removing it deletes its key and, if it was active, returns dictation to the selected local model. If the active provider's key goes missing in another way, Live cloud stays selected but dictation uses the selected local model until a key is saved again; the Voice Engine header and the Dashboard then say that the provider's key is required, and the row offers **Set up in AI Providers**.
 
 ## What uses Live cloud
 
@@ -38,24 +42,24 @@ With Live cloud active, these recordings stream to the active provider:
 - Command mode.
 - Rewrite mode.
 
-These always stay on the selected local model, even with Live cloud active and even if an OpenRouter key is saved:
+These always stay on the selected local model, even with Live cloud active and even if a Cloud provider is connected:
 
 - Imported audio and video files.
 - The local HTTP API.
 - Meetings, which have their own **Meeting transcription** setting with the same three choices (see [Meetings](#meetings-fluidmeet)).
 - Dictionary training captures, which compare against the local model's pronunciation.
 
-The selected local model must therefore still be downloaded for those features. The Local tab's header reads **Selected local model** while another engine is active, for this reason.
+The selected local model must therefore still be downloaded for those features. The Local tab's header reads **Selected local model** while another engine is active, for this reason, and File Transcription says that files use the local model.
 
 ## Meetings (FluidMeet)
 
-FluidMeet's **Meeting transcription** setting offers the same three choices as the voice engine: **Local**, **OpenRouter** and **Live cloud**. It is separate from dictation: Live cloud does not need to be the active voice engine, and activating a provider for dictation does not change meetings.
+FluidMeet's **Meeting transcription** setting offers the same three choices as the voice engine: **Local**, **Cloud** (OpenRouter, for meetings) and **Live cloud**. It is separate from dictation: Live cloud does not need to be the active voice engine, and activating a provider for dictation does not change meetings.
 
-1. Add the provider and save its key under **AI Settings > Voice Engine > Live cloud**, as for dictation.
-2. In FluidMeet's recording settings, choose **Live cloud** under **Meeting transcription**, then the provider under **Live provider**. The picker lists every added provider with a saved key; choosing Live cloud first selects the dictation's live provider, or else the first added one. The model is the one chosen in the provider's Manage sheet.
+1. Connect the provider in **AI Providers**, as for dictation. With no live provider connected, FluidMeet's settings offer **Set up a live provider in AI Providers**.
+2. In FluidMeet's recording settings, choose **Live cloud** under **Meeting transcription**, then the provider under **Live provider**. The picker lists every live provider with a saved key; choosing Live cloud first selects the dictation's live provider, or else the first connected one. The model is the one chosen in the provider's Manage sheet in Voice Engine, which **Manage live providers in Voice Engine** opens.
 3. The choice applies from the next recording.
 
-With Live cloud, the meeting streams to the provider while it records, and the provider makes both the live captions and the completed transcript, so nothing is uploaded or transcribed after you stop. Speaker detection still runs on this Mac with Nemotron, which must be installed, as for the other choices. With Local or OpenRouter, live captions run on this Mac in English.
+With Live cloud, the meeting streams to the provider while it records, and the provider makes both the live captions and the completed transcript, so nothing is uploaded or transcribed after you stop. Speaker detection still runs on this Mac with Nemotron, which must be installed, as for the other choices. With Local or Cloud, live captions run on this Mac in English.
 
 During a recording, the microphone streams on one connection and, in an online call, the call audio on a second one. Each connection is billed separately for the whole recording, including silence: a track that delivers no audio streams silence so providers that close idle connections keep it open. The **Transcript language** setting applies, with the dictation Primary and Secondary languages as hints. A language the provider does not list is detected automatically instead; Speechmatics, which cannot detect, uses the Primary language when the transcript language is automatic.
 
@@ -63,13 +67,13 @@ Turns are cut on the Mac: a caption bubble closes after a short pause once the p
 
 The connection is replaced at the first pause after 10 minutes (and after 30 minutes regardless); the old connection finishes its text first, and audio captured meanwhile waits for the new one. When a connection drops, the session reconnects once on its own and replays the audio after the last final text; if that fails, the captions card shows that captions are reconnecting, a new connection opens after a short backoff (1, 2, 5, 10, then every 30 seconds), and audio in between has no text in the transcript either. A rejected key, exhausted credits or an unsupported language stops the stream for the rest of the recording with a message that names the provider; the recording itself continues.
 
-A meeting without a saved Live cloud transcript (recorded with another choice, or interrupted by the app quitting) cannot be processed with Live cloud; choose Local or OpenRouter and retry, which transcribes the recorded audio. If only the provider's key is removed, the next recording streams nothing and says that the key is required; the app does not switch to another choice on its own. **Remove provider** in its Manage sheet returns meetings that used it to **Local**.
+A meeting without a saved Live cloud transcript (recorded with another choice, or interrupted by the app quitting) cannot be processed with Live cloud; choose Local or Cloud and retry, which transcribes the recorded audio. Removing the provider in AI Providers returns meetings that used it to **Local**. If its key goes missing in another way, the next recording streams nothing and says that the key is required; the app does not switch to another choice on its own.
 
 The recording screen's privacy line names the provider whenever audio leaves the Mac. Each recording's streams count towards the provider's **Streamed on this Mac** usage, one recording per stream.
 
 ## Languages and the overlay
 
-Live cloud shares the **Dictation language** settings with OpenRouter: an optional **Primary language** and **Secondary language**. By default dictation detects the language automatically, and the two preferences are hints where the provider accepts them (see the table). Once a Primary language is set, the overlay shows the globe language chip, offering Primary, Secondary and **Detect automatically**. Picking a language during a recording reconnects to the same provider with the new language and replays the audio recorded after the last finished segment, so the rest of the recording uses the new language. Languages the active provider does not list are disabled in the chip, and **Detect automatically** is disabled for Speechmatics. The Manage sheet warns when your Primary or Secondary language is not listed by that provider.
+Live cloud shares the **Dictation language** settings with Cloud: an optional **Primary language** and **Secondary language**. By default dictation detects the language automatically, and the two preferences are hints where the provider accepts them (see the table). Once a Primary language is set, the overlay shows the globe language chip, offering Primary, Secondary and **Detect automatically**. Picking a language during a recording reconnects to the same provider with the new language and replays the audio recorded after the last finished segment, so the rest of the recording uses the new language. Languages the active provider does not list are disabled in the chip, and **Detect automatically** is disabled for Speechmatics. The Manage sheet warns when your Primary or Secondary language is not listed by that provider.
 
 Mistral ignores every language choice: its realtime API takes no language, so the app sends none, and a pick in the overlay does not reconnect. Speechmatics is the opposite: it requires a set language, so a Primary language must be configured before it can be activated or tested.
 
@@ -91,7 +95,7 @@ Partial text is never inserted, and the app never switches to another engine on 
 - No network contact with a provider happens until you save its key.
 - Only audio and the session settings (model, and language where the provider takes it) are sent. App or window context, preceding text and Custom Dictionary terms are not sent to live providers.
 - Deepgram requests carry `mip_opt_out=true`, which opts them out of Deepgram's Model Improvement Program.
-- Keys are stored in the personal app's macOS Keychain item under `live-transcription.<provider>`, for example `live-transcription.soniox`. They are separate from AI Providers keys and from the OpenRouter voice engine key, and saving AI Providers keys never erases them.
+- Keys are entered in AI Providers and stored in the personal app's macOS Keychain item under the provider's ID, for example `soniox`, `openai` or `assemblyai`. A provider has one key for everything it does: OpenAI's key serves both its text models and Live cloud, and Mistral's and AssemblyAI's serve text, Cloud and Live cloud. A key saved by an earlier version under `live-transcription.<provider>` was copied to that entry on the first launch of this version; the old entry is kept, and still updated when the key is saved again, so an older build keeps working after a downgrade. A key changed in an older build after that copy is ignored by this version. When AI Providers already held a different key for the same provider, both are kept and the provider shows **Two keys** (see [Cloud transcription](cloud-transcription.md#keys-saved-before-this-version)).
 - The debug log records only metadata: the provider id, the model id, an error kind or provider error code, durations such as `LIVE_FINAL ... stopToFinalMs=<n> streamedMs=<n>`, and HTTP or WebSocket close codes. It never records audio, transcript or partial text, API keys, provider error bodies, or WebSocket close reasons.
 - Transcripts from live dictation are stored in local history like any other dictation, attributed to provider `live-<provider>` with its model id.
 

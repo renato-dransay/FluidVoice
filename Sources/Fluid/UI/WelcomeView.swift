@@ -265,7 +265,17 @@ struct OnboardingFlowView: View {
 
     private var cloudTranscriptionLinkTitle: String {
         if self.settings.usesLiveCloudDictation { return "Live cloud selected — configure in Voice Engine" }
-        return self.settings.usesCloudTranscription ? "OpenRouter selected — configure" : "Use OpenRouter cloud transcription"
+        guard self.settings.usesCloudTranscription else { return "Use Cloud transcription with OpenRouter" }
+        let engine = "\(self.settings.cloudTranscriptionProviderName) · Cloud selected"
+        return self.opensOnboardingCloudSetup ? "\(engine) — configure" : "\(engine) — configure in Voice Engine"
+    }
+
+    /// The onboarding sheet sets up OpenRouter only, so it opens unless another engine or another Cloud
+    /// provider is active; then the link only names the engine.
+    private var opensOnboardingCloudSetup: Bool {
+        if self.settings.usesLiveCloudDictation { return false }
+        return !self.settings.usesCloudTranscription
+            || self.settings.cloudTranscriptionProviderID == CloudTranscriptionPreferences.defaultProviderID
     }
 
     private var isVoiceModelReady: Bool {
@@ -1143,9 +1153,10 @@ struct OnboardingFlowView: View {
                                 self.showsCloudTranscriptionSetup = true
                             }
                             .buttonStyle(.link)
-                            // JUDGMENT: onboarding has no Live cloud setup, so with Live cloud active the link only
-                            // names the engine; opening the OpenRouter sheet from it would be misleading.
-                            .disabled(self.isModelPreparationInProgress || self.settings.usesLiveCloudDictation)
+                            // JUDGMENT: onboarding sets up OpenRouter only, so with Live cloud or another Cloud
+                            // provider active the link only names the engine; opening the OpenRouter sheet from it
+                            // would be misleading.
+                            .disabled(self.isModelPreparationInProgress || !self.opensOnboardingCloudSetup)
                             .padding(.top, 12)
 
                             Text("You can switch models later in Voice Engine settings.")

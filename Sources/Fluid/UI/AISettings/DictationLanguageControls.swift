@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Primary and Secondary dictation languages, shared by OpenRouter and Live cloud.
+/// Primary and Secondary dictation languages, shared by Cloud and Live cloud.
 struct DictationLanguageControls: View {
     @ObservedObject var settings: SettingsStore
     let caption: String
