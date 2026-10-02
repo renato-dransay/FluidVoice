@@ -78,6 +78,13 @@ final class SonioxTranscriptionClientTests: XCTestCase {
         XCTAssertNil(automatic?["language_hints"])
     }
 
+    func testABudgetErrorTypeReadsAsCreditsAndOthersAsAJobFailure() {
+        XCTAssertEqual(SonioxTranscriptionClient.jobError(forErrorType: "organization_monthly_budget_exhausted"), .creditsExhausted)
+        XCTAssertEqual(SonioxTranscriptionClient.jobError(forErrorType: "project_monthly_budget_exhausted"), .creditsExhausted)
+        XCTAssertEqual(SonioxTranscriptionClient.jobError(forErrorType: "model_not_available"), .jobFailed)
+        XCTAssertEqual(SonioxTranscriptionClient.jobError(forErrorType: nil), .jobFailed)
+    }
+
     func testTokensMergeIntoWords() {
         typealias Token = SonioxTranscriptionClient.Token
         let words = SonioxTranscriptionClient.words(from: [

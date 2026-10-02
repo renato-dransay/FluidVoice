@@ -170,11 +170,33 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
     private func transcriptionStatus(_ transcriptionID: String, key: String) async throws -> CloudJobStatus<Void> {
         guard let url = URL(string: "\(Self.baseURL)/transcriptions/\(transcriptionID)") else { throw CloudTranscriptionError.network }
         let (data, _) = try await self.http.send(CloudVendorHTTP.request(url, headers: Self.headers(key)), endpoint: "transcriptions/status")
-        struct Status: Decodable { let status: String }
-        switch try CloudVendorHTTP.decode(Status.self, from: data).status {
+        struct Status: Decodable {
+            let status: String
+            let errorType: String?
+
+            enum CodingKeys: String, CodingKey {
+                case status
+                case errorType = "error_type"
+            }
+        }
+        let status = try CloudVendorHTTP.decode(Status.self, from: data)
+        switch status.status {
         case "completed": return .completed(())
         case "queued", "processing": return .pending
-        default: return .failed()
+        default:
+            // `error_type` is a short code; `error_message` is a provider error body and is never logged.
+            DebugLogger.shared.warning("CLOUD_JOB_FAILED provider=soniox errorType=\(status.errorType ?? "none")", source: "CloudTranscription")
+            return .failed(Self.jobError(forErrorType: status.errorType))
+        }
+    }
+
+    /// EVIDENCE: https://soniox.com/docs/api-reference/errors (checked 2026-10-03): a failed transcription carries
+    /// an `error_type` such as `organization_monthly_budget_exhausted`, `project_monthly_budget_exhausted` or
+    /// `model_not_available`; anything else stays a plain job failure.
+    static func jobError(forErrorType errorType: String?) -> CloudTranscriptionError {
+        switch errorType {
+        case "organization_monthly_budget_exhausted", "project_monthly_budget_exhausted": .creditsExhausted
+        default: .jobFailed
         }
     }
 
