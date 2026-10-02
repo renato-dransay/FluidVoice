@@ -35,9 +35,10 @@ final class SpeechmaticsTranscriptionClientTests: XCTestCase {
             samples: [Float](repeating: 0.1, count: 16_000), configuration: self.configuration, apiKey: " sm-key ", wordTimings: true
         )
         XCTAssertEqual(result.text, "Hello, world.")
+        // Punctuation joins the word it attaches to, so a transcript rebuilt from the words keeps it.
         XCTAssertEqual(result.words, [
-            CloudTranscriptionWord(word: "Hello", start: 0.1, end: 0.4),
-            CloudTranscriptionWord(word: "world", start: 0.5, end: 0.9),
+            CloudTranscriptionWord(word: "Hello,", start: 0.1, end: 0.4),
+            CloudTranscriptionWord(word: "world.", start: 0.5, end: 0.9),
         ])
         XCTAssertNil(result.usage)
         XCTAssertEqual(stub.calls, [Self.create, Self.status, Self.status, Self.status, Self.transcript, Self.delete])
@@ -81,7 +82,32 @@ final class SpeechmaticsTranscriptionClientTests: XCTestCase {
         """#.utf8))
         let transcript = SpeechmaticsTranscriptionClient.transcript(from: results ?? [])
         XCTAssertEqual(transcript.text, "¿Qué? Bien")
-        XCTAssertEqual(transcript.words.map(\.word), ["Qué", "Bien"])
+        XCTAssertEqual(transcript.words.map(\.word), ["¿Qué?", "Bien"])
+    }
+
+    func testWordsCarryPunctuationSoARebuiltTranscriptKeepsIt() throws {
+        typealias Result = SpeechmaticsTranscriptionClient.TranscriptResponse.Result
+        let results = try JSONDecoder().decode([Result].self, from: Data(#"""
+        [{"type":"word","start_time":0,"end_time":0.2,"alternatives":[{"content":"A"}]},
+         {"type":"word","start_time":0.2,"end_time":0.5,"alternatives":[{"content":"well"}]},
+         {"type":"punctuation","attaches_to":"both","alternatives":[{"content":"-"}]},
+         {"type":"word","start_time":0.5,"end_time":0.9,"alternatives":[{"content":"known"}]},
+         {"type":"word","start_time":1.0,"end_time":1.3,"alternatives":[{"content":"fact"}]},
+         {"type":"punctuation","alternatives":[{"content":"."}]},
+         {"type":"punctuation","attaches_to":"next","alternatives":[{"content":"\""}]},
+         {"type":"word","start_time":1.5,"end_time":1.8,"alternatives":[{"content":"Yes"}]},
+         {"type":"punctuation","attaches_to":"previous","alternatives":[{"content":"!"}]},
+         {"type":"punctuation","attaches_to":"previous","alternatives":[{"content":"\""}]}]
+        """#.utf8))
+        let transcript = SpeechmaticsTranscriptionClient.transcript(from: results)
+        XCTAssertEqual(transcript.text, #"A well-known fact. "Yes!""#)
+        XCTAssertEqual(transcript.words, [
+            CloudTranscriptionWord(word: "A", start: 0, end: 0.2),
+            CloudTranscriptionWord(word: "well-known", start: 0.2, end: 0.9),
+            CloudTranscriptionWord(word: "fact.", start: 1.0, end: 1.3),
+            CloudTranscriptionWord(word: #""Yes!""#, start: 1.5, end: 1.8),
+        ])
+        XCTAssertEqual(transcript.words.map(\.word).joined(separator: " "), transcript.text, "Joining the words gives back the transcript")
     }
 
     func testErrorsAreMappedAndCarryNoServerText() async throws {
@@ -146,7 +172,9 @@ final class SpeechmaticsTranscriptionClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "\(error)")
         }
-        XCTAssertEqual(stub.requests(Self.delete).count, 1)
+        // The cancelled caller does not wait for the delete, which still goes out.
+        try await stub.waitForRequests(Self.delete, count: 1)
+        XCTAssertEqual(stub.requests(Self.delete).first?.timeoutInterval, CloudVendorHTTP.deleteTimeout)
     }
 
     func testKeyCheckListsOneJobWithoutAudio() async throws {

@@ -17,7 +17,7 @@ import Foundation
 /// `result.transcription.full_transcript` and `utterances[].words[]` with `word`, `start` and `end` in seconds.
 /// EVIDENCE: https://docs.gladia.io/api-reference/v2/pre-recorded/delete (checked 2026-10-02):
 /// `DELETE /v2/pre-recorded/{id}` removes the job "and all its data (audio file, transcription)"; a job
-/// that is still processing cannot be deleted (403).
+/// that is not in a deletable state, as while it is still processing, gets 403, so the delete is retried.
 /// EVIDENCE: https://docs.gladia.io/chapters/limits-and-specifications/concurrency (checked 2026-10-02): 429 when
 /// the concurrency limit is reached. The current documentation names no status for exhausted credits; a
 /// 402 keeps the shared mapping.
@@ -35,10 +35,12 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
 
     private let http: CloudVendorHTTP
     private let poller: CloudJobPoller
+    private let cleanupRetry: CloudCleanupRetry
 
-    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller()) {
+    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller(), cleanupRetry: CloudCleanupRetry = CloudCleanupRetry()) {
         self.http = CloudVendorHTTP(providerID: Self.id, session: session ?? CloudVendorHTTP.makeSession())
         self.poller = poller
+        self.cleanupRetry = cleanupRetry
     }
 
     var providerID: String { Self.id }
@@ -58,10 +60,13 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         let audio = try CloudEncodedAudio.best(samples: samples)
         let started = ProcessInfo.processInfo.systemUptime
-        let job = try await CloudRemoteCleanup.run(providerID: Self.id) { cleanup in
+        let job = try await CloudRemoteCleanup.run(providerID: Self.id, retry: self.cleanupRetry) { cleanup in
             let audioURL = try await self.upload(audio: audio, key: key, audioSamples: samples.count)
             let jobID = try await self.createJob(audioURL: audioURL, configuration: configuration, key: key)
-            cleanup.register("job") { try await self.deleteJob(jobID, key: key) }
+            // A job that is still processing cannot be deleted yet; the cleanup tries again until it can.
+            cleanup.register("job", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 403)) {
+                try await self.deleteJob(jobID, key: key)
+            }
             return try await self.poller.poll(audioSeconds: CloudVendorHTTP.audioSeconds(samples.count)) {
                 try await self.jobStatus(jobID, key: key)
             }
@@ -137,7 +142,12 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
 
     private func deleteJob(_ jobID: String, key: String) async throws {
         guard let url = URL(string: "\(Self.baseURL)/pre-recorded/\(jobID)") else { throw CloudTranscriptionError.network }
-        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key)), endpoint: "pre-recorded/delete")
+        // Gladia answers 403 for a job that is not deletable yet, not for a rejected key, so it keeps its status.
+        _ = try await self.http.send(
+            CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key), timeout: CloudVendorHTTP.deleteTimeout),
+            endpoint: "pre-recorded/delete",
+            classify: { status, _ in status == 403 ? .server(403) : nil }
+        )
     }
 
     struct Job: Decodable, Sendable {

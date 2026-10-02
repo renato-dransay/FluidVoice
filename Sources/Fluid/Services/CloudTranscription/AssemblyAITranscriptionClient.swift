@@ -17,7 +17,11 @@ import Foundation
 /// EVIDENCE: https://www.assemblyai.com/docs/api-reference/transcripts/delete (checked 2026-10-02):
 /// `DELETE /v2/transcript/{id}`; "Files uploaded via the `/upload` endpoint are immediately deleted
 /// alongside the transcript". An upload that never got a transcript is removed by AssemblyAI after
-/// 24 to 48 hours (https://assemblyai.com/docs/faq/how-long-does-aai-retain-data).
+/// 24 to 48 hours (https://assemblyai.com/docs/faq/how-long-does-aai-retain-data). The reference lists 400
+/// among the delete responses without naming its cause; AssemblyAI's deletion guide
+/// (https://docs.assemblyai.com/all-guides/deleting-a-transcription-from-the-api, unreachable on 2026-10-02,
+/// quoted by search results) says a transcript can be deleted only after it has completed, so a 400 on a
+/// delete is retried as a transcript that is still processing.
 /// EVIDENCE: https://www.assemblyai.com/docs/pre-recorded-audio/guides/common_errors_and_solutions (checked
 /// 2026-10-02): an invalid key is 401; a negative balance is 400 with "Your current account balance is
 /// negative"; rate limiting is 429.
@@ -37,10 +41,12 @@ nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
 
     private let http: CloudVendorHTTP
     private let poller: CloudJobPoller
+    private let cleanupRetry: CloudCleanupRetry
 
-    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller()) {
+    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller(), cleanupRetry: CloudCleanupRetry = CloudCleanupRetry()) {
         self.http = CloudVendorHTTP(providerID: Self.id, session: session ?? CloudVendorHTTP.makeSession())
         self.poller = poller
+        self.cleanupRetry = cleanupRetry
     }
 
     var providerID: String { Self.id }
@@ -60,10 +66,14 @@ nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         let audio = try CloudEncodedAudio.best(samples: samples)
         let started = ProcessInfo.processInfo.systemUptime
-        let transcript = try await CloudRemoteCleanup.run(providerID: Self.id) { cleanup in
+        let transcript = try await CloudRemoteCleanup.run(providerID: Self.id, retry: self.cleanupRetry) { cleanup in
             let uploadURL = try await self.upload(audio: audio, key: key, audioSamples: samples.count)
             let transcriptID = try await self.createTranscript(uploadURL: uploadURL, configuration: configuration, key: key)
-            cleanup.register("transcript") { try await self.deleteTranscript(transcriptID, key: key) }
+            // A transcript can be deleted only once it is completed or failed (400 before that); the cleanup
+            // tries again until it can.
+            cleanup.register("transcript", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 400)) {
+                try await self.deleteTranscript(transcriptID, key: key)
+            }
             return try await self.poller.poll(audioSeconds: CloudVendorHTTP.audioSeconds(samples.count)) {
                 try await self.transcriptStatus(transcriptID, key: key)
             }
@@ -153,7 +163,7 @@ nonisolated struct AssemblyAITranscriptionClient: CloudTranscriptionClient {
 
     private func deleteTranscript(_ transcriptID: String, key: String) async throws {
         guard let url = URL(string: "\(Self.baseURL)/transcript/\(transcriptID)") else { throw CloudTranscriptionError.network }
-        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key)), endpoint: "transcript/delete")
+        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key), timeout: CloudVendorHTTP.deleteTimeout), endpoint: "transcript/delete")
     }
 
     private struct ErrorBody: Decodable { let error: String }

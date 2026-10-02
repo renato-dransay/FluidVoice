@@ -35,7 +35,7 @@ final class DeepgramTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(components.host, "api.deepgram.com")
         XCTAssertEqual(components.path, "/v1/listen")
         let query = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-        XCTAssertEqual(query, ["model": "nova-3", "smart_format": "true", "detect_language": "true"])
+        XCTAssertEqual(query, ["model": "nova-3", "smart_format": "true", "mip_opt_out": "true", "detect_language": "true"])
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Token dg-key")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "audio/flac")
         XCTAssertEqual(request.httpBody?.prefix(4), Data("fLaC".utf8), "The raw audio is the whole body")
@@ -47,6 +47,7 @@ final class DeepgramTranscriptionClientTests: XCTestCase {
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertEqual(items.first { $0.name == "language" }?.value, "de")
         XCTAssertFalse(items.contains { $0.name == "detect_language" })
+        XCTAssertEqual(items.first { $0.name == "mip_opt_out" }?.value, "true", "Every request opts out of the Model Improvement Program")
     }
 
     func testPlainTranscriptOmitsWordsAndMissingTimingsFail() async throws {

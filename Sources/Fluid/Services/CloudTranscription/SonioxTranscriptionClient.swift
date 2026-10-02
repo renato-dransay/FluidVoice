@@ -18,7 +18,9 @@ import Foundation
 /// ("Beau", "ti", "ful"); a token that starts a word carries its leading space, as the live adapter relies on.
 /// EVIDENCE: https://soniox.com/docs/api-reference/stt/transcriptions/delete_transcription (checked 2026-10-02):
 /// `DELETE /v1/transcriptions/{id}` keeps the uploaded file and answers 409 while the transcription is
-/// processing; https://soniox.com/docs/api-reference/stt/files/delete_file: `DELETE /v1/files/{id}`.
+/// processing ("Wait until `status` reaches `completed` or `error` ... then retry the delete");
+/// https://soniox.com/docs/api-reference/stt/files/delete_file: `DELETE /v1/files/{id}`, which succeeds
+/// whatever the transcription's state but should wait until it has finished, so it follows the transcription.
 /// EVIDENCE: https://soniox.com/docs/api-reference/errors (checked 2026-10-02): 401 unauthenticated, 402 for an
 /// exhausted balance or monthly budget, 403 `permission_denied`, 429 `limit_exceeded`.
 /// EVIDENCE: https://soniox.com/docs/stt/models (checked 2026-10-02): `stt-async-v5` is the current async model.
@@ -36,10 +38,12 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
 
     private let http: CloudVendorHTTP
     private let poller: CloudJobPoller
+    private let cleanupRetry: CloudCleanupRetry
 
-    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller()) {
+    init(session: URLSession? = nil, poller: CloudJobPoller = CloudJobPoller(), cleanupRetry: CloudCleanupRetry = CloudCleanupRetry()) {
         self.http = CloudVendorHTTP(providerID: Self.id, session: session ?? CloudVendorHTTP.makeSession())
         self.poller = poller
+        self.cleanupRetry = cleanupRetry
     }
 
     var providerID: String { Self.id }
@@ -59,11 +63,15 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         let audio = try CloudEncodedAudio.best(samples: samples)
         let started = ProcessInfo.processInfo.systemUptime
-        let transcript = try await CloudRemoteCleanup.run(providerID: Self.id) { cleanup in
+        let transcript = try await CloudRemoteCleanup.run(providerID: Self.id, retry: self.cleanupRetry) { cleanup in
             let fileID = try await self.uploadFile(audio: audio, key: key, audioSamples: samples.count)
             cleanup.register("file") { try await self.delete("files/\(fileID)", key: key) }
             let transcriptionID = try await self.createTranscription(fileID: fileID, configuration: configuration, key: key)
-            cleanup.register("transcription") { try await self.delete("transcriptions/\(transcriptionID)", key: key) }
+            // A transcription that is still processing cannot be deleted yet (409); the cleanup tries again
+            // until it can, and deletes the file after it.
+            cleanup.register("transcription", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 409)) {
+                try await self.delete("transcriptions/\(transcriptionID)", key: key)
+            }
             try await self.poller.poll(audioSeconds: CloudVendorHTTP.audioSeconds(samples.count)) {
                 try await self.transcriptionStatus(transcriptionID, key: key)
             }
@@ -96,8 +104,9 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
     }
 
     /// Tokens are words or pieces of words. A token that starts with whitespace begins a new word; one
-    /// without continues the previous word, as do punctuation marks. A word spans its first piece's start
-    /// to its last piece's end, in seconds.
+    /// without continues the previous word, as do punctuation marks. Scripts written without spaces
+    /// (Chinese, Japanese, Thai and the like) have no whitespace to merge at, so each of their tokens is a
+    /// word of its own. A word spans its first piece's start to its last piece's end, in seconds.
     static func words(from tokens: [Token]) -> [CloudTranscriptionWord] {
         var words: [CloudTranscriptionWord] = []
         var startsNewWord = true
@@ -111,7 +120,11 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
             }
             let start = Double(token.startMs) / 1000
             let end = Double(token.endMs) / 1000
-            if let last = words.last, !startsNewWord, !beginsWithSpace {
+            let isPunctuation = piece.allSatisfy(\.isPunctuation)
+            let isUnspacedScript = piece.unicodeScalars.first.map(CloudTranscriptionWord.isWrittenWithoutSpaces) ?? false
+            let followsUnspacedScript = words.last?.word.unicodeScalars.last.map(CloudTranscriptionWord.isWrittenWithoutSpaces) ?? false
+            let continuesWord = isPunctuation || (!isUnspacedScript && !followsUnspacedScript)
+            if let last = words.last, !startsNewWord, !beginsWithSpace, continuesWord {
                 words[words.count - 1] = CloudTranscriptionWord(word: last.word + piece, start: last.start, end: max(last.end, end))
             } else {
                 words.append(CloudTranscriptionWord(word: piece, start: start, end: end))
@@ -170,7 +183,7 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
     private func delete(_ path: String, key: String) async throws {
         guard let url = URL(string: "\(Self.baseURL)/\(path)") else { throw CloudTranscriptionError.network }
         let endpoint = path.hasPrefix("files") ? "files/delete" : "transcriptions/delete"
-        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key)), endpoint: endpoint)
+        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key), timeout: CloudVendorHTTP.deleteTimeout), endpoint: endpoint)
     }
 
     private struct Created: Decodable { let id: String }

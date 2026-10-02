@@ -96,11 +96,15 @@ nonisolated struct SpeechmaticsTranscriptionClient: CloudTranscriptionClient {
     }
 
     /// Words joined by spaces, with punctuation attached to the side Speechmatics names. Only words carry
-    /// timings; punctuation is part of the text alone.
+    /// timings, so a punctuation mark joins the text of the word it attaches to, as the other vendors return
+    /// it: a transcript rebuilt from the words (speaker labels, chunked files) keeps its punctuation.
     static func transcript(from results: [TranscriptResponse.Result]) -> (text: String, words: [CloudTranscriptionWord]) {
         var text = ""
         var words: [CloudTranscriptionWord] = []
         var attachesToNext = false
+        // Punctuation that attaches to a word not yet read, such as an opening quotation mark.
+        var pendingPrefix = ""
+        var joinsPreviousWord = false
         for item in results {
             guard let content = item.alternatives.first?.content, !content.isEmpty else { continue }
             let isPunctuation = item.type == "punctuation"
@@ -109,8 +113,26 @@ nonisolated struct SpeechmaticsTranscriptionClient: CloudTranscriptionClient {
             text += content
             attachesToNext = isPunctuation && ["next", "both"].contains(item.attachesTo ?? "")
             if item.type == "word", let start = item.startTime, let end = item.endTime {
-                words.append(CloudTranscriptionWord(word: content, start: start, end: end))
+                if joinsPreviousWord, let last = words.last {
+                    // A mark attached to both sides, such as the hyphen in "well-known", makes one word.
+                    words[words.count - 1] = CloudTranscriptionWord(word: last.word + content, start: last.start, end: max(last.end, end))
+                } else {
+                    words.append(CloudTranscriptionWord(word: pendingPrefix + content, start: start, end: end))
+                }
+                pendingPrefix = ""
+                joinsPreviousWord = false
+            } else if isPunctuation {
+                if attachesToPrevious, pendingPrefix.isEmpty, let last = words.last {
+                    words[words.count - 1] = CloudTranscriptionWord(word: last.word + content, start: last.start, end: last.end)
+                    joinsPreviousWord = attachesToNext
+                } else {
+                    pendingPrefix += content
+                }
             }
+        }
+        // Punctuation after the last word, with nothing left to attach to, closes that word.
+        if !pendingPrefix.isEmpty, let last = words.last {
+            words[words.count - 1] = CloudTranscriptionWord(word: last.word + pendingPrefix, start: last.start, end: last.end)
         }
         return (text, words)
     }
@@ -164,7 +186,7 @@ nonisolated struct SpeechmaticsTranscriptionClient: CloudTranscriptionClient {
     /// `force` also stops a job that is still running, as after a cancelled transcription.
     private func deleteJob(_ jobID: String, key: String) async throws {
         guard let url = URL(string: "\(Self.jobsEndpoint)/\(jobID)?force=true") else { throw CloudTranscriptionError.network }
-        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key)), endpoint: "jobs/delete")
+        _ = try await self.http.send(CloudVendorHTTP.request(url, method: "DELETE", headers: Self.headers(key), timeout: CloudVendorHTTP.deleteTimeout), endpoint: "jobs/delete")
     }
 
     struct TranscriptResponse: Decodable {

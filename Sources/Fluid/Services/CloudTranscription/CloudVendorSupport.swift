@@ -11,6 +11,8 @@ nonisolated struct CloudVendorHTTP: Sendable {
     static let maximumRequestSeconds = 780
     /// A single request may take 60 s plus the length of its audio.
     static let baseRequestTimeout: TimeInterval = 60
+    /// A delete of remote data is small and best-effort, so it gives up sooner than a transcription request.
+    static let deleteTimeout: TimeInterval = 15
 
     /// An ephemeral session without caches or cookies, sized for the longest single request.
     static func makeSession() -> URLSession {
@@ -206,58 +208,147 @@ nonisolated struct CloudJobPoller: Sendable {
     }
 }
 
+/// When a delete the vendor refused because its job was still processing is tried again (CLD-3): every
+/// 5 s for the first minute, then every 15 s, giving up 10 minutes after the first refusal. Clock and
+/// sleep are injected so tests run instantly.
+nonisolated struct CloudCleanupRetry: Sendable {
+    var now: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var sleep: @Sendable (TimeInterval) async throws -> Void = { seconds in
+        try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+    }
+
+    static let giveUpAfter: TimeInterval = 600
+
+    static func interval(afterElapsed elapsed: TimeInterval) -> TimeInterval {
+        elapsed < 60 ? 5 : 15
+    }
+}
+
 /// Remote data a job vendor created for one transcription (an upload, a job, a transcript). Everything
 /// registered is deleted after the result is read, after a failure and on cancellation, best-effort:
 /// a failed delete is logged by kind only and never fails the transcription (CLD-3).
+///
+/// Some vendors refuse to delete a job that is still processing, as after a cancellation or a polling
+/// timeout. Such a refusal is retried in the background on the `CloudCleanupRetry` schedule, so the job
+/// is deleted once the vendor finishes it; the deletions registered before it wait for it, in order.
 nonisolated final class CloudRemoteCleanup: @unchecked Sendable {
     typealias Deletion = @Sendable () async throws -> Void
+    /// Whether a failed delete means the vendor will accept it later, once its job has finished.
+    typealias Refusal = @Sendable (Error) -> Bool
+
+    private struct Entry: Sendable {
+        let kind: String
+        let isRefusedWhileProcessing: Refusal
+        let delete: Deletion
+    }
 
     let providerID: String
+    private let retry: CloudCleanupRetry
     private let lock = NSLock()
-    private var deletions: [(kind: String, delete: Deletion)] = []
+    private var deletions: [Entry] = []
 
-    init(providerID: String) {
+    init(providerID: String, retry: CloudCleanupRetry = CloudCleanupRetry()) {
         self.providerID = providerID
+        self.retry = retry
     }
 
     /// Registers how to delete one created resource, such as `upload` or `transcript`.
-    func register(_ kind: String, delete: @escaping Deletion) {
-        self.lock.withLock { self.deletions.append((kind, delete)) }
+    /// `refusedWhileProcessing` names the vendor's documented answer to a delete that came too early.
+    func register(_ kind: String, refusedWhileProcessing: @escaping Refusal = { _ in false }, delete: @escaping Deletion) {
+        self.lock.withLock { self.deletions.append(Entry(kind: kind, isRefusedWhileProcessing: refusedWhileProcessing, delete: delete)) }
     }
 
-    /// Runs every registered deletion once, newest first. The deletions run in a detached task, so
-    /// they still go out when the transcription itself was cancelled.
-    func deleteAll() async {
+    /// A refusal the vendor answers with an HTTP status that the shared mapping keeps as `.server(status)`.
+    static func refused(withStatus status: Int) -> Refusal {
+        { ($0 as? CloudTranscriptionError) == .server(status) }
+    }
+
+    /// Runs every registered deletion once, newest first, in a detached task, so the deletes still go
+    /// out when the transcription itself was cancelled. With `waits` false the caller does not wait for
+    /// them. A delete refused while the job is processing is retried in the background either way.
+    func deleteAll(waits: Bool = true) async {
         let pending = self.lock.withLock {
             defer { self.deletions.removeAll() }
             return Array(self.deletions.reversed())
         }
         guard !pending.isEmpty else { return }
         let providerID = self.providerID
-        await Task.detached(priority: .utility) {
-            for deletion in pending {
-                do {
-                    try await deletion.delete()
-                } catch {
-                    DebugLogger.shared.warning(
-                        "Cloud remote cleanup failed: provider=\(providerID) kind=\(deletion.kind) error=\(CloudTranscriptionFailureSummary.kind(of: error))",
-                        source: "CloudTranscription"
-                    )
-                }
+        let retry = self.retry
+        let task = Task.detached(priority: .utility) {
+            let refused = await Self.attempt(pending, providerID: providerID)
+            if !refused.isEmpty {
+                Self.retryInBackground(refused, providerID: providerID, retry: retry)
             }
-        }.value
+        }
+        if waits { await task.value }
     }
 
-    /// Runs `body` and deletes what it registered, whether it returned, failed or was cancelled.
-    static func run<Value: Sendable>(providerID: String, _ body: (CloudRemoteCleanup) async throws -> Value) async throws -> Value {
-        let cleanup = CloudRemoteCleanup(providerID: providerID)
+    /// Runs `body` and deletes what it registered, whether it returned, failed or was cancelled. A
+    /// cancelled caller does not wait for the deletes.
+    static func run<Value: Sendable>(
+        providerID: String,
+        retry: CloudCleanupRetry = CloudCleanupRetry(),
+        _ body: (CloudRemoteCleanup) async throws -> Value
+    ) async throws -> Value {
+        let cleanup = CloudRemoteCleanup(providerID: providerID, retry: retry)
         do {
             let value = try await body(cleanup)
             await cleanup.deleteAll()
             return value
         } catch {
-            await cleanup.deleteAll()
+            await cleanup.deleteAll(waits: !(error is CancellationError || Task.isCancelled))
             throw error
         }
+    }
+
+    /// Runs the deletions in order. When one is refused because its job is still processing, it and
+    /// every deletion after it are returned for a later attempt.
+    private static func attempt(_ deletions: [Entry], providerID: String) async -> [Entry] {
+        for (index, deletion) in deletions.enumerated() {
+            do {
+                try await deletion.delete()
+            } catch where deletion.isRefusedWhileProcessing(error) {
+                return Array(deletions[index...])
+            } catch {
+                Self.logFailure(providerID: providerID, kind: deletion.kind, error: error)
+            }
+        }
+        return []
+    }
+
+    private static func retryInBackground(_ refused: [Entry], providerID: String, retry: CloudCleanupRetry) {
+        Task.detached(priority: .utility) {
+            let started = retry.now()
+            var remaining = refused
+            var attempts = 0
+            while let first = remaining.first {
+                let elapsed = retry.now() - started
+                guard elapsed < CloudCleanupRetry.giveUpAfter else {
+                    DebugLogger.shared.warning(
+                        "Cloud remote cleanup gave up: provider=\(providerID) kind=\(first.kind) attempts=\(attempts)",
+                        source: "CloudTranscription"
+                    )
+                    return
+                }
+                do {
+                    try await retry.sleep(min(CloudCleanupRetry.interval(afterElapsed: elapsed), CloudCleanupRetry.giveUpAfter - elapsed))
+                } catch {
+                    return
+                }
+                attempts += 1
+                remaining = await Self.attempt(remaining, providerID: providerID)
+            }
+            DebugLogger.shared.info(
+                "Cloud remote cleanup finished after retry: provider=\(providerID) kind=\(refused[0].kind) attempts=\(attempts)",
+                source: "CloudTranscription"
+            )
+        }
+    }
+
+    private static func logFailure(providerID: String, kind: String, error: Error) {
+        DebugLogger.shared.warning(
+            "Cloud remote cleanup failed: provider=\(providerID) kind=\(kind) error=\(CloudTranscriptionFailureSummary.kind(of: error))",
+            source: "CloudTranscription"
+        )
     }
 }
