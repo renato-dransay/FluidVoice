@@ -10,6 +10,12 @@ enum CloudDictationDeliveryPolicy {
         let requiresSeparateCleanup: Bool
     }
 
+    /// Only a Cleanup Style needs the audio chat model. With cleanup Off the transcript is the
+    /// result, so the recording goes to the speech model on the transcription endpoint.
+    static func usesCombinedRequest(isDictation: Bool, cloudStylesActive: Bool, styleEnabled: Bool) -> Bool {
+        isDictation && cloudStylesActive && styleEnabled
+    }
+
     static func resolve(
         transcript: String,
         combinedText: String?,

@@ -44,6 +44,7 @@ struct OnboardingCloudTranscriptionSetupView: View {
     private func activate() {
         guard !self.isActivating else { return }
         let modelID = self.settings.cloudDictationModelID
+        let speechModelID = self.settings.cloudTranscriptionModelID
         let apiKey = self.settings.openRouterTranscriptionAPIKey
         let primaryLanguageCode = self.settings.cloudTranscriptionPrimaryLanguageCode
         let secondaryLanguageCode = self.settings.cloudTranscriptionSecondaryLanguageCode
@@ -58,8 +59,11 @@ struct OnboardingCloudTranscriptionSetupView: View {
             do {
                 let models = try await OpenRouterTranscriptionClient.shared.validateAudioDictation(apiKey: apiKey)
                 let availableModelIDs = Set(models.map(\.id))
+                // Dictation without a Cleanup Style runs on the speech model, so both must be listed.
+                let speechModels = try await OpenRouterTranscriptionClient.shared.validate(apiKey: apiKey)
                 try Task.checkCancellation()
                 guard self.settings.cloudDictationModelID == modelID,
+                      self.settings.cloudTranscriptionModelID == speechModelID,
                       self.settings.openRouterTranscriptionAPIKey == apiKey,
                       self.settings.cloudTranscriptionPrimaryLanguageCode == primaryLanguageCode,
                       self.settings.cloudTranscriptionSecondaryLanguageCode == secondaryLanguageCode,
@@ -68,8 +72,12 @@ struct OnboardingCloudTranscriptionSetupView: View {
                     self.errorMessage = "Voice settings changed during validation. Try activating OpenRouter again."
                     return
                 }
+                guard speechModels.contains(where: { $0.id == speechModelID }) else {
+                    self.errorMessage = "The selected speech model is unavailable on OpenRouter. Choose another model."
+                    return
+                }
                 guard availableModelIDs.contains(modelID) else {
-                    self.errorMessage = "The selected dictation model is unavailable on OpenRouter. Choose another model."
+                    self.errorMessage = "The selected style model is unavailable on OpenRouter. Choose another model."
                     return
                 }
                 self.settings.speechExecutionSource = .openRouter

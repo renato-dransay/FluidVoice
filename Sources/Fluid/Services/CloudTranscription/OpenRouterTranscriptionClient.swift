@@ -141,14 +141,28 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
             // swiftlint:disable:next discouraged_optional_collection
             let outputModalities: [String]?
         }
+        /// OpenRouter prices a router at -1, because the model behind it changes per request.
+        struct Pricing: Decodable {
+            let isVariable: Bool
+
+            init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                self.isVariable = (try? values.decode(String.self, forKey: .prompt)) == "-1"
+            }
+
+            private enum CodingKeys: String, CodingKey { case prompt }
+        }
+
         let id: String
         let name: String?
         let architecture: Architecture?
         // swiftlint:disable:next discouraged_optional_collection
         let supportedParameters: [String]?
+        let pricing: Pricing?
 
-        /// Batch variants answer asynchronously, the routers pick an arbitrary model, and the
-        /// tilde aliases are moving targets; none can serve a dictation request predictably.
+        /// Batch variants answer asynchronously, the routers pick an arbitrary model (OpenRouter's
+        /// own by prefix, third-party ones by their variable price), and the tilde aliases are
+        /// moving targets; none can serve a dictation request predictably.
         var acceptsAudioDictation: Bool {
             self.architecture?.inputModalities?.contains("audio") == true
                 && self.architecture?.outputModalities?.contains("text") == true
@@ -156,6 +170,7 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
                 && self.supportedParameters?.contains("structured_outputs") == true
                 && !self.id.hasSuffix(":batch")
                 && !self.id.hasPrefix("openrouter/")
+                && self.pricing?.isVariable != true
                 && !self.id.hasPrefix("~")
         }
     }
