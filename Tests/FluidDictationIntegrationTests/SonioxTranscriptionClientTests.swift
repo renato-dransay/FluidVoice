@@ -211,8 +211,8 @@ final class SonioxTranscriptionClientTests: XCTestCase {
     }
 
     /// Soniox answers 409 to a delete while the transcription is processing. The delete is tried again in
-    /// the background, and the file is deleted only after the transcription is gone.
-    func testADeleteRefusedWhileProcessingIsRetriedAndTheFileFollows() async throws {
+    /// the background; the file, which Soniox deletes in any state, is deleted at once and does not wait.
+    func testADeleteRefusedWhileProcessingIsRetriedAndTheFileIsDeletedAtOnce() async throws {
         var routes = self.routes(status: [(0, "")])
         routes[Self.deleteTranscription] = [
             (409, #"{"status_code":409,"error_type":"invalid_state","message":"PRIVATE"}"#),
@@ -230,11 +230,12 @@ final class SonioxTranscriptionClientTests: XCTestCase {
         try await stub.waitForRequest(Self.status)
         task.cancel()
         _ = try? await task.value
-        try await stub.waitForRequests(Self.deleteFile, count: 1)
+        try await stub.waitForRequests(Self.deleteTranscription, count: 3)
         XCTAssertEqual(
             stub.calls.filter { $0.hasPrefix("DELETE") },
-            [Self.deleteTranscription, Self.deleteTranscription, Self.deleteTranscription, Self.deleteFile]
+            [Self.deleteTranscription, Self.deleteFile, Self.deleteTranscription, Self.deleteTranscription]
         )
+        XCTAssertEqual(stub.requests(Self.deleteFile).count, 1)
         XCTAssertEqual(retryClock.sleeps, [5, 5])
     }
 

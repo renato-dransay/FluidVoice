@@ -19,8 +19,12 @@ import Foundation
 /// EVIDENCE: https://soniox.com/docs/api-reference/stt/transcriptions/delete_transcription (checked 2026-10-02):
 /// `DELETE /v1/transcriptions/{id}` keeps the uploaded file and answers 409 while the transcription is
 /// processing ("Wait until `status` reaches `completed` or `error` ... then retry the delete");
-/// https://soniox.com/docs/api-reference/stt/files/delete_file: `DELETE /v1/files/{id}`, which succeeds
-/// whatever the transcription's state but should wait until it has finished, so it follows the transcription.
+/// EVIDENCE: https://soniox.com/docs/api-reference/stt/files/delete_file (checked 2026-10-02): `DELETE
+/// /v1/files/{id}` works in any state; a transcription that has not started yet and still references the
+/// file then fails with `file_not_found`, which is why the page suggests waiting for a transcription that
+/// should still produce a result. The file is deleted once the transcript was read, or after a failure or a
+/// cancellation, when no result is wanted any more, so its delete goes out at once and never waits behind a
+/// transcription delete that is refused while processing.
 /// EVIDENCE: https://soniox.com/docs/api-reference/errors (checked 2026-10-02): 401 unauthenticated, 402 for an
 /// exhausted balance or monthly budget, 403 `permission_denied`, 429 `limit_exceeded`.
 /// EVIDENCE: https://soniox.com/docs/stt/models (checked 2026-10-02): `stt-async-v5` is the current async model.
@@ -68,7 +72,7 @@ nonisolated struct SonioxTranscriptionClient: CloudTranscriptionClient {
             cleanup.register("file") { try await self.delete("files/\(fileID)", key: key) }
             let transcriptionID = try await self.createTranscription(fileID: fileID, configuration: configuration, key: key)
             // A transcription that is still processing cannot be deleted yet (409); the cleanup tries again
-            // until it can, and deletes the file after it.
+            // until it can. The file is deleted at once either way.
             cleanup.register("transcription", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 409)) {
                 try await self.delete("transcriptions/\(transcriptionID)", key: key)
             }

@@ -93,6 +93,29 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
         try LiveHTTPStatus.request("https://api.elevenlabs.io/v1/models", headers: ["xi-api-key": apiKey])
     }
 
+    // EVIDENCE: https://elevenlabs.io/docs/eleven-api/resources/errors and
+    // https://elevenlabs.io/docs/api-reference/service-accounts/api-keys/list (checked 2026-10-02): a key can be
+    // limited to some endpoints, and `GET /v1/models` needs `models_read`, so a key restricted to speech to
+    // text is refused the list with 403 `insufficient_permissions` (legacy `missing_permissions`). That key
+    // authenticated, so the check accepts it, as the Cloud client's check does; a missing speech-to-text
+    // permission shows when the stream opens. A legacy 401 `quota_exceeded` means no credits, not a bad key.
+    // Any other 401 or 403 is a rejected key.
+    func keyCheckFailure(status: Int, body: Data) -> LiveTranscriptionError? {
+        if (200 ..< 300).contains(status) { return nil }
+        let codes = Self.errorCodes(in: body)
+        if status == 403, codes.contains(where: { $0 == "insufficient_permissions" || $0 == "missing_permissions" }) { return nil }
+        if status == 401, codes.contains("quota_exceeded") { return .quotaExhausted }
+        return LiveHTTPStatus.failure(for: status)
+    }
+
+    /// `detail.code` and `detail.status` of an ElevenLabs error body.
+    private static func errorCodes(in body: Data) -> [String] {
+        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+              let detail = object["detail"] as? [String: Any]
+        else { return [] }
+        return [detail["code"], detail["status"]].compactMap { $0 as? String }
+    }
+
     // EVIDENCE: https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/event-reference (checked 2026-10-01):
     // with include_timestamps one commit sends both messages, `committed_transcript_with_timestamps` "after the
     // committed transcript". A commit of the other kind with the same text right after the previous one is

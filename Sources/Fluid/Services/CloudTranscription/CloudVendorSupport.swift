@@ -301,19 +301,21 @@ nonisolated final class CloudRemoteCleanup: @unchecked Sendable {
         }
     }
 
-    /// Runs the deletions in order. When one is refused because its job is still processing, it and
-    /// every deletion after it are returned for a later attempt.
+    /// Runs every deletion once, in order. A deletion refused because its job is still processing is
+    /// returned for a later attempt; the others go out now and never wait behind it, so an upload is
+    /// deleted at once even while its job cannot be.
     private static func attempt(_ deletions: [Entry], providerID: String) async -> [Entry] {
-        for (index, deletion) in deletions.enumerated() {
+        var refused: [Entry] = []
+        for deletion in deletions {
             do {
                 try await deletion.delete()
             } catch where deletion.isRefusedWhileProcessing(error) {
-                return Array(deletions[index...])
+                refused.append(deletion)
             } catch {
                 Self.logFailure(providerID: providerID, kind: deletion.kind, error: error)
             }
         }
-        return []
+        return refused
     }
 
     private static func retryInBackground(_ refused: [Entry], providerID: String, retry: CloudCleanupRetry) {

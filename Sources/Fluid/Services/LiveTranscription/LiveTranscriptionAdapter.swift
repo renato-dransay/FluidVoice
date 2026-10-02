@@ -20,6 +20,9 @@ nonisolated protocol LiveTranscriptionAdapter: Sendable {
     var maximumReplaySpeed: Double? { get }
     mutating func parse(_ message: LiveTransportMessage) -> [LiveTranscriptUpdate]
     func keyCheckRequest(apiKey: String) throws -> URLRequest
+    /// How the key check reads the provider's answer: nil when the key is accepted. The body is read for
+    /// documented error codes only and never logged.
+    func keyCheckFailure(status: Int, body: Data) -> LiveTranscriptionError?
     func failure(closeCode: Int, reason: String?) -> LiveTranscriptionError
 }
 
@@ -33,6 +36,9 @@ nonisolated extension LiveTranscriptionAdapter {
     func audioMessage(_ pcm16: Data) -> LiveTransportMessage { .data(pcm16) }
     var trailingSilenceMilliseconds: Int { 0 }
     var maximumReplaySpeed: Double? { nil }
+    func keyCheckFailure(status: Int, body: Data) -> LiveTranscriptionError? {
+        (200 ..< 300).contains(status) ? nil : LiveHTTPStatus.failure(for: status)
+    }
     /// Network-level closes read as a lost connection; any other code names itself.
     func failure(closeCode: Int, reason: String?) -> LiveTranscriptionError {
         [1000, 1001, 1005, 1006, 1011].contains(closeCode) ? .connectionLost : .sessionClosed("close \(closeCode)")

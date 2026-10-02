@@ -315,7 +315,7 @@ final class CloudVendorSupportTests: XCTestCase {
         await self.fulfillment(of: [deleteStarted], timeout: 2)
     }
 
-    func testARefusedDeleteIsRetriedInTheBackgroundAndTheOlderDeletesWaitForIt() async throws {
+    func testARefusedDeleteIsRetriedInTheBackgroundAndTheOtherDeletesDoNotWaitForIt() async throws {
         let clock = FakeClock()
         let retry = CloudCleanupRetry(now: { clock.now }, sleep: { clock.advance($0) })
         let log = DeletionLog()
@@ -333,7 +333,7 @@ final class CloudVendorSupportTests: XCTestCase {
         }
         XCTAssertEqual(value, "result")
         try await log.waitForEntries(2)
-        XCTAssertEqual(log.entries, ["transcription", "file"], "The file follows the transcription it belongs to")
+        XCTAssertEqual(log.entries, ["file", "transcription"], "The file is deleted at once, not behind the refused transcription")
         XCTAssertEqual(clock.sleeps, [5, 5, 5])
     }
 

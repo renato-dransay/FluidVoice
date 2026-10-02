@@ -129,6 +129,40 @@ final class LiveTranscriptionProviderTests: XCTestCase {
         }
     }
 
+    /// The Live check agrees with the ElevenLabs Cloud check: a key restricted to other endpoints than the
+    /// model list authenticated; a plain 401, another 403 or a 403 without a permission code is rejected.
+    func testElevenLabsKeyCheckAcceptsAPermissionRestrictedKeyLikeTheCloudCheck() async throws {
+        for code in ["insufficient_permissions", "missing_permissions"] {
+            let session = LiveKeyCheckURLProtocol.session(status: 403, body: #"{"detail":{"status":"\#(code)","message":"PRIVATE"}}"#)
+            try await LiveTranscriptionKeyChecker.check(provider: .elevenLabs, apiKey: "k", session: session)
+        }
+        let cases: [(Int, String, LiveTranscriptionError)] = [
+            (401, #"{"detail":{"status":"invalid_api_key"}}"#, .authentication),
+            (403, #"{"detail":{"status":"forbidden"}}"#, .authentication),
+            (403, "{}", .authentication),
+            (401, #"{"detail":{"status":"quota_exceeded"}}"#, .quotaExhausted),
+        ]
+        for (status, body, expected) in cases {
+            let session = LiveKeyCheckURLProtocol.session(status: status, body: body)
+            do {
+                try await LiveTranscriptionKeyChecker.check(provider: .elevenLabs, apiKey: "k", session: session)
+                XCTFail("Expected \(expected) for HTTP \(status) \(body)")
+            } catch {
+                XCTAssertEqual(error as? LiveTranscriptionError, expected, "HTTP \(status) \(body)")
+            }
+        }
+    }
+
+    func testOtherProvidersStillRejectAPermissionRestricted403() async {
+        let session = LiveKeyCheckURLProtocol.session(status: 403, body: #"{"detail":{"status":"insufficient_permissions"}}"#)
+        do {
+            try await LiveTranscriptionKeyChecker.check(provider: .deepgram, apiKey: "k", session: session)
+            XCTFail("Expected a rejected key")
+        } catch {
+            XCTAssertEqual(error as? LiveTranscriptionError, .authentication)
+        }
+    }
+
     func testKeyCheckWithAnEmptyKeySendsNoRequest() async {
         let session = LiveKeyCheckURLProtocol.session(status: 200)
         do {
@@ -167,13 +201,15 @@ final class LiveTranscriptionProviderTests: XCTestCase {
 final class LiveKeyCheckURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var status = 200
+    nonisolated(unsafe) private static var body = "{}"
     nonisolated(unsafe) private static var requests = 0
 
     static var requestCount: Int { self.lock.withLock { self.requests } }
 
-    static func session(status: Int) -> URLSession {
+    static func session(status: Int, body: String = "{}") -> URLSession {
         self.lock.withLock {
             self.status = status
+            self.body = body
             self.requests = 0
         }
         let configuration = URLSessionConfiguration.ephemeral
@@ -185,9 +221,9 @@ final class LiveKeyCheckURLProtocol: URLProtocol, @unchecked Sendable {
     override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let status = Self.lock.withLock { () -> Int in
+        let (status, body) = Self.lock.withLock { () -> (Int, String) in
             Self.requests += 1
-            return Self.status
+            return (Self.status, Self.body)
         }
         guard let url = self.request.url,
               let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
@@ -196,7 +232,7 @@ final class LiveKeyCheckURLProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        self.client?.urlProtocol(self, didLoad: Data("{}".utf8))
+        self.client?.urlProtocol(self, didLoad: Data(body.utf8))
         self.client?.urlProtocolDidFinishLoading(self)
     }
 
