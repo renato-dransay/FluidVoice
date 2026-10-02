@@ -26,11 +26,22 @@ enum DictationDefaultProviderTests {
         precondition(DictationDefaultProvider.setupIssue(requiresAPIKey: false, hasAPIKey: false, hasModel: true, isVerified: true, verificationFailed: false) == nil)
         precondition(DictationDefaultProvider.setupIssue(requiresAPIKey: true, hasAPIKey: true, hasModel: false, isVerified: false, verificationFailed: false) == "Choose a model")
         precondition(
-            DictationDefaultProvider.setupIssue(requiresAPIKey: true, hasAPIKey: true, hasModel: true, isVerified: false, verificationFailed: false) == nil,
-            "Optional verification must not block a configured provider"
+            DictationDefaultProvider.setupIssue(requiresAPIKey: true, hasAPIKey: true, hasModel: true, isVerified: false, verificationFailed: false) == "Not verified",
+            "A configured provider that was never verified says so"
+        )
+        precondition(
+            DictationDefaultProvider.setupIssue(requiresAPIKey: true, hasAPIKey: true, hasModel: true, isVerified: true, verificationFailed: false) == nil,
+            "A verified provider has no setup issue"
         )
         precondition(DictationDefaultProvider
             .setupIssue(requiresAPIKey: true, hasAPIKey: true, hasModel: true, isVerified: false, verificationFailed: true) == "Verification failed")
-        print("PASS: 7 default-provider cases and 5 setup-status cases")
+        precondition(DictationDefaultProvider
+            .setupIssue(requiresAPIKey: false, hasAPIKey: false, hasModel: true, isVerified: false, verificationFailed: false) == "Not verified")
+        // The default text provider no longer depends on the main shortcut's Cleanup Style.
+        precondition(DictationDefaultProvider.isDefaultTextProvider("openai", selectedProviderID: "openai"))
+        precondition(DictationDefaultProvider.isDefaultTextProvider("openai", selectedProviderID: " openai "))
+        precondition(!DictationDefaultProvider.isDefaultTextProvider("openai", selectedProviderID: "anthropic"))
+        precondition(!DictationDefaultProvider.isDefaultTextProvider("", selectedProviderID: ""))
+        print("PASS: 7 default-provider cases, 7 setup-status cases and 4 default-text-provider cases")
     }
 }

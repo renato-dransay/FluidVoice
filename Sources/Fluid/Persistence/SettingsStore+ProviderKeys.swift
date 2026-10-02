@@ -199,6 +199,24 @@ struct ProviderKeyStore {
         }
     }
 
+    /// True when FluidMeet transcribes with this provider: its cloud backend (OpenRouter's) or its live
+    /// backend with this provider as the meeting's live provider.
+    func isFluidMeetProvider(_ providerID: String) -> Bool {
+        let backend = SettingsStore.meetingTranscriptionBackendID(in: self.defaults)
+        let meetingLiveProviderID = SettingsStore.meetingLiveCloudProvider(in: self.defaults).map(ProviderRegistry.providerID(for:))
+        return (backend == .openRouterNemotron && providerID == CloudTranscriptionPreferences.defaultProviderID)
+            || (backend == .liveCloudNemotron && meetingLiveProviderID == providerID)
+    }
+
+    /// What removing this provider's key would switch to Local; the removal confirmation names it.
+    func removalImpact(for providerID: String) -> ProviderRemovalImpact {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        return ProviderRemovalImpact(
+            switchesDictationToLocal: self.isActiveEngineProvider(id),
+            switchesFluidMeetToLocal: self.isFluidMeetProvider(id)
+        )
+    }
+
     /// Settings that could only keep running with the removed key fall back to what works without it.
     private func applyRemovalEffects(for providerID: String) {
         var cloud = CloudTranscriptionPreferences(defaults: self.defaults)
@@ -211,17 +229,94 @@ struct ProviderKeyStore {
             cloud.providerID = CloudTranscriptionPreferences.defaultProviderID
         }
 
-        let backend = SettingsStore.meetingTranscriptionBackendID(in: self.defaults)
         let meetingLiveProviderID = SettingsStore.meetingLiveCloudProvider(in: self.defaults).map(ProviderRegistry.providerID(for:))
-        // FluidMeet's cloud backend is OpenRouter's; its live backend uses the meeting's live provider.
-        let meetingUsesProvider = (backend == .openRouterNemotron && providerID == CloudTranscriptionPreferences.defaultProviderID)
-            || (backend == .liveCloudNemotron && meetingLiveProviderID == providerID)
+        let meetingUsesProvider = self.isFluidMeetProvider(providerID)
         if meetingUsesProvider {
             SettingsStore.setMeetingTranscriptionBackendID(.parakeetNemotron, in: self.defaults)
         }
         if meetingUsesProvider || meetingLiveProviderID == providerID {
             SettingsStore.setMeetingLiveCloudProvider(nil, in: self.defaults)
         }
+    }
+
+    // MARK: - Two keys (KEY-3)
+
+    /// True while Voice Engine uses a different key for this provider from the one AI Providers saved.
+    func hasSeparateSpeechKey(_ providerID: String) -> Bool {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        let value = self.entries()[ProviderKeyMigration.speechKeyEntry(for: id)]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !value.isEmpty
+    }
+
+    /// "Use this key everywhere": speech features switch to the key AI Providers saved. One aggregate write;
+    /// the speech verification of the old Voice Engine key is cleared.
+    @discardableResult
+    func useTextKeyEverywhere(for providerID: String) throws -> ProviderAPIKeyChange {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        guard !id.isEmpty else { throw ProviderAPIKeyError.missingProviderID }
+        self.migrateIfNeeded()
+        let affectedActiveEngine = self.isActiveEngineProvider(id)
+        let speechKeyEntry = ProviderKeyMigration.speechKeyEntry(for: id)
+        let oldVoiceEntries = ProviderKeyMigration.oldVoiceEntries(for: id)
+        try self.keychain.updateKeys { entries in
+            entries.removeValue(forKey: speechKeyEntry)
+            // An older build reads the Voice Engine entry, so it follows the key now used everywhere.
+            if let textKey = entries[id], !textKey.isEmpty {
+                for entry in oldVoiceEntries where entries[entry] != nil {
+                    entries[entry] = textKey
+                }
+            }
+        }
+        self.clearSpeechVerification(for: id)
+        return self.postKeyChange(providerID: id, affectedActiveEngine: affectedActiveEngine)
+    }
+
+    /// "Use the Voice Engine key everywhere": text features switch to the key Voice Engine used. One
+    /// aggregate write; the text verification of the old AI Providers key is cleared.
+    @discardableResult
+    func useSpeechKeyEverywhere(for providerID: String) throws -> ProviderAPIKeyChange {
+        let id = ModelRepository.shared.providerKey(for: providerID)
+        guard !id.isEmpty else { throw ProviderAPIKeyError.missingProviderID }
+        self.migrateIfNeeded()
+        let affectedActiveEngine = self.isActiveEngineProvider(id)
+        let speechKeyEntry = ProviderKeyMigration.speechKeyEntry(for: id)
+        try self.keychain.updateKeys { entries in
+            guard let speechKey = entries[speechKeyEntry]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !speechKey.isEmpty
+            else { return }
+            entries[id] = speechKey
+            entries.removeValue(forKey: speechKeyEntry)
+        }
+        var fingerprints = SettingsStore.verifiedProviderFingerprints(in: self.defaults)
+        if fingerprints.removeValue(forKey: id) != nil {
+            SettingsStore.setVerifiedProviderFingerprints(fingerprints, in: self.defaults)
+        }
+        return self.postKeyChange(providerID: id, affectedActiveEngine: affectedActiveEngine)
+    }
+
+    private func postKeyChange(providerID: String, affectedActiveEngine: Bool) -> ProviderAPIKeyChange {
+        let change = ProviderAPIKeyChange(providerID: providerID, removed: false, affectedActiveEngine: affectedActiveEngine)
+        self.notificationCenter.post(name: .providerAPIKeyChanged, object: nil, userInfo: change.userInfo)
+        return change
+    }
+}
+
+/// What a key removal switches to Local (KEY-6). Removal asks first whenever either applies.
+struct ProviderRemovalImpact: Equatable {
+    let switchesDictationToLocal: Bool
+    let switchesFluidMeetToLocal: Bool
+
+    var needsConfirmation: Bool { self.switchesDictationToLocal || self.switchesFluidMeetToLocal }
+
+    func confirmationTitle(providerName: String) -> String {
+        "Remove \(providerName)?"
+    }
+
+    var confirmationMessage: String {
+        var sentences: [String] = []
+        if self.switchesDictationToLocal { sentences.append("Dictation switches to your selected local model.") }
+        if self.switchesFluidMeetToLocal { sentences.append("FluidMeet transcription switches to Local.") }
+        return sentences.joined(separator: " ")
     }
 }
 
@@ -288,5 +383,23 @@ extension SettingsStore {
     func clearSpeechVerification(for providerID: String) {
         self.objectWillChange.send()
         self.providerKeyStore.clearSpeechVerification(for: providerID)
+    }
+
+    func hasSeparateSpeechKey(_ providerID: String) -> Bool {
+        self.providerKeyStore.hasSeparateSpeechKey(providerID)
+    }
+
+    func useTextKeyEverywhere(for providerID: String) throws {
+        self.objectWillChange.send()
+        try self.providerKeyStore.useTextKeyEverywhere(for: providerID)
+    }
+
+    func useSpeechKeyEverywhere(for providerID: String) throws {
+        self.objectWillChange.send()
+        try self.providerKeyStore.useSpeechKeyEverywhere(for: providerID)
+    }
+
+    func providerRemovalImpact(for providerID: String) -> ProviderRemovalImpact {
+        self.providerKeyStore.removalImpact(for: providerID)
     }
 }

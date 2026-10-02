@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// A second header button beside `Done`, such as `Back to Voice Engine`.
+struct FluidManagementSheetAction {
+    let title: String
+    let action: () -> Void
+}
+
 /// Shared presentation only: callers retain dismissal guards and all settings ownership.
 struct FluidManagementSheet<Content: View>: View {
     @Environment(\.theme) private var theme
@@ -8,6 +14,7 @@ struct FluidManagementSheet<Content: View>: View {
     let symbol: String
     var dismissDisabled = false
     var height: CGFloat = 650
+    var returnAction: FluidManagementSheetAction?
     let close: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -24,6 +31,11 @@ struct FluidManagementSheet<Content: View>: View {
                     Text(self.subtitle).font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 Spacer()
+                if let returnAction = self.returnAction {
+                    Button(returnAction.title, action: returnAction.action)
+                        .fluidGlassAction()
+                        .disabled(self.dismissDisabled)
+                }
                 Button("Done", action: self.close)
                     .fluidGlassAction()
                     .keyboardShortcut(.cancelAction)

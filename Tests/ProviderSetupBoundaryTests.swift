@@ -74,7 +74,7 @@ final class AIEnhancementSettingsViewModel {
     func updateProviderAPIKey(_ value: String, for id: String) { self.providerAPIKeys[id] = value }
     /// Mirrors the production save: one provider's entry goes through the single write path; an empty
     /// draft removes it. Other providers' drafts are never written by it.
-    func saveProviderAPIKey(for id: String? = nil) -> Bool {
+    func saveProviderAPIKey(for id: String? = nil, allowsRemoval: Bool = false) -> Bool {
         self.keySaves += 1
         guard !self.failKeychain else { return false }
         let key = id ?? self.selectedProviderID
@@ -215,13 +215,27 @@ final class AIEnhancementSettingsViewModel {
             .components(separatedBy: "private var legacyAIConfigurationCard")[0]
         check(!manager.contains("Use for shortcut") && !manager.contains("Edit details"), "External manager has no duplicate editor or shortcut assignment action")
         check(source.contains(".onSubmit {") && source.contains("self.viewModel.addNewModel()"), "Manual model input retains Enter-to-add behavior")
-        check(source.contains(".accessibilityLabel(\"Add model\")"), "Model add button remains accessible")
-        check(source.contains("if isCustom || managementLayout"), "Built-in management exposes removal")
+        // The Manage sheet AI Providers routes to: Connection, Models and Used for.
+        let management = try String(contentsOfFile: "Sources/Fluid/UI/AISettingsView+ProviderManagement.swift", encoding: .utf8)
+        check(management.contains(".accessibilityLabel(\"Add model\")"), "Model add button remains accessible")
+        let connection = management.components(separatedBy: "private func providerConnectionGroup")[1]
+            .components(separatedBy: "private func apiKeyBinding")[0]
+        check(connection.contains("Label(\"Remove provider\""), "Built-in management exposes removal")
+        check(source.contains("self.providerManagementContent(for: providerID)"), "The routed Manage sheet shows the new sections")
+        // The default control changes the provider only; the main shortcut's style is left alone.
         let makeDefault = source.components(separatedBy: "private func makePrimaryDefaultProvider")[1]
-            .components(separatedBy: "private func modelBinding")[0]
+            .components(separatedBy: "func modelBinding")[0]
         check(
-            makeDefault.contains("saveManagedProviderAPIKeyIfNeeded") && !makeDefault.contains("saveProviderAPIKey("),
-            "Making a provider default only persists an active credential edit"
+            makeDefault.contains("makeDefaultTextProvider") && !makeDefault.contains("setDictationPromptSelection(.default"),
+            "Making a provider default leaves the main shortcut's Cleanup Style unchanged"
+        )
+        let providerList = try String(contentsOfFile: "Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel+ProviderList.swift", encoding: .utf8)
+        let makeDefaultText = providerList.components(separatedBy: "func makeDefaultTextProvider")[1]
+            .components(separatedBy: "static func setDefaultAfterVerification")[0]
+        check(
+            makeDefaultText.contains("saveManagedProviderAPIKeyIfNeeded") && !makeDefaultText.contains("saveProviderAPIKey(")
+                && !makeDefaultText.contains("setDictationPromptSelection"),
+            "Making a provider default only persists an active credential edit and never changes a style"
         )
         let removal = AIEnhancementSettingsViewModel()
         removal.providerAPIKeys = ["openai": "remove-key", "other": "keep-key"]

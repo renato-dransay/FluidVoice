@@ -103,21 +103,26 @@ private struct FluidRecordInvitationSurface: View {
     }
 }
 
+/// The default text provider control. It changes the provider only, never a Cleanup Style.
 struct ProviderDefaultButton: View {
     enum Purpose {
         case dictation
+        /// OpenRouter applies Cleanup Styles itself, so the default serves the other text features.
         case textActions
     }
 
     let isCurrent: Bool
     let isEnabled: Bool
     let purpose: Purpose
+    /// An unverified provider is verified first, with one small request, before it becomes the default.
+    let isVerified: Bool
     let action: () -> Void
 
-    init(isCurrent: Bool, isEnabled: Bool, purpose: Purpose = .dictation, action: @escaping () -> Void) {
+    init(isCurrent: Bool, isEnabled: Bool, purpose: Purpose = .dictation, isVerified: Bool = true, action: @escaping () -> Void) {
         self.isCurrent = isCurrent
         self.isEnabled = isEnabled
         self.purpose = purpose
+        self.isVerified = isVerified
         self.action = action
     }
 
@@ -132,10 +137,14 @@ struct ProviderDefaultButton: View {
         }
         .fluidGlassAction()
         .disabled(self.isCurrent || !self.isEnabled)
-        .help(self.purpose == .textActions
-            ? "Default for Edit, Write, and other text actions linked to the global provider. Dictation still uses OpenRouter."
-            : (self.isCurrent ? "Used by your main dictation shortcut. App-specific cleanup styles can override it."
-                : "Use this provider for your main dictation shortcut. Choose a model and complete setup first; verification is optional."))
+        .help(self.help)
+    }
+
+    private var help: String {
+        let base = "Default text provider for Cleanup Styles, Command Mode, Edit and meeting summaries."
+        guard !self.isCurrent else { return base }
+        if !self.isEnabled { return base + " Choose a model and add its API key first." }
+        return self.isVerified ? base : base + " It is verified first with one small request."
     }
 }
 

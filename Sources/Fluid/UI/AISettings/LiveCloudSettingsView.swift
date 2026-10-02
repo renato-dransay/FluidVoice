@@ -1,30 +1,41 @@
 import SwiftUI
 
-/// The Live cloud tab: the providers the user added, never the whole catalog (UX Design 1).
+/// Which live providers the Live cloud tab lists as connected: those with a saved key, plus the stored
+/// active provider even when its key is gone. Every other live provider is "Not set up".
+enum LiveCloudProviderGroups {
+    static func make(
+        hasKey: (LiveTranscriptionProviderID) -> Bool,
+        activeProvider: LiveTranscriptionProviderID?
+    ) -> (connected: [LiveTranscriptionProviderID], notSetUp: [LiveTranscriptionProviderID]) {
+        let all = LiveTranscriptionCatalog.all.map(\.id)
+        let connected = all.filter { hasKey($0) || $0 == activeProvider }
+        return (connected, all.filter { !connected.contains($0) })
+    }
+}
+
+/// The Live cloud tab: connected providers first, then every other live provider under "Not set up".
+/// Keys are entered in AI Providers.
 struct LiveCloudSettingsView: View {
     @Environment(\.theme) private var theme
     @ObservedObject var settings: SettingsStore
     @ObservedObject var viewModel: VoiceEngineSettingsViewModel
     /// Rows show "Tested" as soon as a test passes in the Manage sheet.
     @ObservedObject private var test = LiveProviderTestCoordinator.shared
-    @State private var isAddingProvider = false
-    @State private var providerToManageAfterAdding: LiveTranscriptionProviderID?
     @State private var managedProvider: LiveTranscriptionProviderID?
+    @State private var showsAllNotSetUp = false
 
-    private var added: [LiveTranscriptionProviderID] { LiveTranscriptionPreferences(defaults: .standard).addedProviders }
+    private var groups: (connected: [LiveTranscriptionProviderID], notSetUp: [LiveTranscriptionProviderID]) {
+        LiveCloudProviderGroups.make(
+            hasKey: { !self.settings.liveTranscriptionAPIKey(for: $0).isEmpty },
+            activeProvider: self.settings.activeLiveProvider
+        )
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             self.content
                 .padding(16)
                 .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
-        }
-        .sheet(isPresented: self.$isAddingProvider, onDismiss: self.openManageSheetAfterAdding) {
-            AddLiveProviderSheet(added: Set(self.added)) { provider in
-                self.viewModel.addLiveProvider(provider)
-                self.providerToManageAfterAdding = provider
-                self.isAddingProvider = false
-            }
         }
         .sheet(item: self.$managedProvider) { provider in
             LiveCloudProviderSheet(provider: provider, settings: self.settings, viewModel: self.viewModel)
@@ -34,29 +45,32 @@ struct LiveCloudSettingsView: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let groups = self.groups
+        return VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Live cloud providers").font(.headline)
                 Spacer()
-                Button("Add provider", systemImage: "plus") { self.isAddingProvider = true }
-                    .fluidGlassAction()
-                    .disabled(self.added.count == LiveTranscriptionCatalog.all.count)
-                    .accessibilityIdentifier("live-cloud-add-provider")
-            }
-            Text("Words appear while you speak; the final text arrives moments after you stop. Audio streams to the provider while you record. Each provider uses your own API key.")
-                .font(.callout).foregroundStyle(.secondary)
-            if self.added.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("No live providers yet.")
-                    Text("Add one to try it. Adding a provider won't change your voice engine.")
-                        .font(.caption).foregroundStyle(.secondary)
+                Button("Add provider", systemImage: "plus") {
+                    AppNavigationRouter.shared.request(.addProvider(capability: .liveTranscription, origin: .voiceEngine(tab: .liveCloud)))
                 }
+                .fluidGlassAction()
+                .disabled(groups.notSetUp.isEmpty)
+                .accessibilityIdentifier("live-cloud-add-provider")
+            }
+            Text("Words appear while you speak; the final text arrives moments after you stop. Audio streams to the provider while you record. Each provider uses your own API key, entered in AI Providers.")
+                .font(.callout).foregroundStyle(.secondary)
+            if groups.connected.isEmpty {
+                Text("No live provider is connected yet. Setting one up won't change your voice engine.")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(self.added) { provider in
+                    ForEach(groups.connected) { provider in
                         self.row(for: provider)
                     }
                 }
+            }
+            if !groups.notSetUp.isEmpty {
+                self.notSetUpGroup(groups.notSetUp, expanded: groups.connected.isEmpty || self.showsAllNotSetUp)
             }
             if !self.settings.enableStreamingPreview {
                 Text("Turn on Live Preview in Settings › Overlay to see words while you speak.")
@@ -79,6 +93,51 @@ struct LiveCloudSettingsView: View {
         }
     }
 
+    /// Expanded when nothing is connected, otherwise behind "Show N more providers".
+    @ViewBuilder
+    private func notSetUpGroup(_ providers: [LiveTranscriptionProviderID], expanded: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Not set up").font(self.theme.typography.bodySmallStrong).foregroundStyle(.secondary)
+            if expanded {
+                ForEach(providers) { provider in
+                    self.notSetUpRow(for: provider)
+                }
+            } else {
+                Button("Show \(providers.count) more providers") { self.showsAllNotSetUp = true }
+                    .buttonStyle(.link)
+                    .accessibilityIdentifier("live-cloud-show-not-set-up")
+            }
+        }
+    }
+
+    private func notSetUpRow(for provider: LiveTranscriptionProviderID) -> some View {
+        let info = LiveTranscriptionCatalog.info(for: provider)
+        return HStack(spacing: 12) {
+            LiveProviderBadge(name: info.name)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(info.name).font(self.theme.typography.bodyStrong)
+                Text("Needs an API key").font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
+            }
+            Spacer()
+            self.setUpButton(for: provider)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.cardBorder.opacity(0.25), lineWidth: 1))
+        .accessibilityIdentifier("live-cloud-not-set-up-\(provider.rawValue)")
+    }
+
+    private func setUpButton(for provider: LiveTranscriptionProviderID) -> some View {
+        Button("Set up in AI Providers") {
+            AppNavigationRouter.shared.request(.aiProvider(
+                id: ProviderRegistry.providerID(for: provider),
+                origin: .voiceEngine(tab: .liveCloud)
+            ))
+        }
+        .fluidGlassAction(quiet: true)
+        .accessibilityIdentifier("live-cloud-set-up-\(provider.rawValue)")
+    }
+
     private func row(for provider: LiveTranscriptionProviderID) -> some View {
         let info = LiveTranscriptionCatalog.info(for: provider)
         let isActive = self.settings.activeLiveProvider == provider
@@ -89,7 +148,7 @@ struct LiveCloudSettingsView: View {
             LiveProviderBadge(name: info.name)
             VStack(alignment: .leading, spacing: 2) {
                 Text(info.name).font(self.theme.typography.bodyStrong)
-                Text(self.statusLine(for: provider, info: info, hasKey: hasKey))
+                Label(self.statusLine(for: provider, info: info, hasKey: hasKey), systemImage: self.statusIcon(for: provider, hasKey: hasKey))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(isProblem ? Color.red : Color.secondary)
                 if let message = self.viewModel.liveActivationStatus[provider] {
@@ -101,6 +160,9 @@ struct LiveCloudSettingsView: View {
                 }
             }
             Spacer()
+            if isActive, !hasKey {
+                self.setUpButton(for: provider)
+            }
             if isActive {
                 Text("Active")
                     .font(self.theme.typography.bodySmallStrong)
@@ -108,6 +170,8 @@ struct LiveCloudSettingsView: View {
                     .padding(.vertical, 4)
                     .background(Capsule().fill(Color.fluidGreen.opacity(0.25)))
                     .foregroundStyle(Color.fluidGreen)
+            } else if !hasKey {
+                self.setUpButton(for: provider)
             } else {
                 Button(self.viewModel.liveProviderBeingChecked == provider ? "Checking…" : "Activate") {
                     Task { await self.viewModel.activateLiveProvider(provider) }
@@ -140,6 +204,14 @@ struct LiveCloudSettingsView: View {
         return "Use this provider for dictation. The key is checked first."
     }
 
+    /// The icon the status badge uses for the matching state: a problem, tested, or not tested yet.
+    private func statusIcon(for provider: LiveTranscriptionProviderID, hasKey: Bool) -> String {
+        if !hasKey || self.settings.liveProviderNeedsPrimaryLanguage(provider) { return "exclamationmark.circle" }
+        if self.viewModel.liveRejectedKeys.contains(provider) { return "exclamationmark.circle.fill" }
+        if self.viewModel.liveProviderBeingChecked == provider { return "arrow.triangle.2.circlepath" }
+        return self.test.hasPassed(provider) ? "checkmark.circle.fill" : "circle.dashed"
+    }
+
     private func statusLine(for provider: LiveTranscriptionProviderID, info: LiveTranscriptionProviderInfo, hasKey: Bool) -> String {
         guard hasKey else { return "API key missing" }
         // UX §E4: a provider without automatic detection cannot run until a Primary language is set.
@@ -149,13 +221,6 @@ struct LiveCloudSettingsView: View {
         if self.viewModel.liveProviderBeingChecked == provider { return "\(model) · Checking…" }
         if self.viewModel.liveRejectedKeys.contains(provider) { return "\(model) · Key rejected" }
         return "\(model) · \(self.test.hasPassed(provider) ? "Tested" : "Not tested")"
-    }
-
-    /// The Manage sheet opens once the Add sheet is gone; macOS drops a sheet presented while another dismisses.
-    private func openManageSheetAfterAdding() {
-        guard let provider = self.providerToManageAfterAdding else { return }
-        self.providerToManageAfterAdding = nil
-        self.managedProvider = provider
     }
 }
 

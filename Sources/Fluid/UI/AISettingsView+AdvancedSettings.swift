@@ -775,27 +775,25 @@ extension AIEnhancementSettingsView {
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 if !self.isSelectedExternalProviderReady {
-                    Button("Set up AI provider") { self.showingPromptProviderSetup = true }
+                    Button("Set up AI provider", action: self.openAIProvidersForCleanupStyles)
                         .buttonStyle(.plain)
                         .foregroundStyle(self.theme.palette.accent)
                 }
             }
             .frame(width: AISettingsLayout.promptEditorControlColumnWidth, alignment: .leading)
         }
-        .sheet(isPresented: self.$showingPromptProviderSetup) {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("AI Providers").font(self.theme.typography.title)
-                    Spacer()
-                    Button("Done") { self.showingPromptProviderSetup = false }
-                        .fluidGlassAction()
-                }
-                ScrollView { self.addedExternalProvidersSection }
-            }
-            .padding(24)
-            .frame(width: 640, height: 520)
-            .appTheme(self.theme)
-        }
+    }
+
+    /// Opens AI Providers on the default text provider, or on the Add sheet for text providers when
+    /// there is none, instead of a second copy of the provider list in a sheet. The style editor closes.
+    private func openAIProvidersForCleanupStyles() {
+        let providerID = self.defaultExternalPromptProviderID
+        self.viewModel.closePromptEditor()
+        AppNavigationRouter.shared.request(
+            providerID.isEmpty
+                ? .addProvider(capability: .text, origin: .cleanupStyles)
+                : .aiProvider(id: providerID, origin: .cleanupStyles)
+        )
     }
 
     private func promptEditorConfigRow<Content: View>(

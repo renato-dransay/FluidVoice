@@ -78,7 +78,7 @@ struct LiveCloudProviderSheet: View {
                     Label("Get a \(self.info.name) API key", systemImage: "arrow.up.right").font(self.theme.typography.caption)
                 }
             }
-            Text("Voice Engine keys are stored separately from AI Providers keys.")
+            Text("This is the same key AI Providers uses for \(self.info.name).")
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if !self.status.isEmpty {
                 Text(self.status).font(self.theme.typography.caption).textSelection(.enabled)

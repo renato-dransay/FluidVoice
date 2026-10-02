@@ -46,18 +46,22 @@ extension AIEnhancementSettingsView {
 
     // MARK: - AI Configuration Card
 
+    /// The provider list serves AI Providers in every build; only the Fluid Intelligence section above
+    /// it depends on that feature. The legacy card keeps serving Cleanup Styles.
     @ViewBuilder var aiConfigurationCard: some View {
-        if self.selectedConfigurationSection == .providers, PrivateAIProviderFeature.shared.isAvailable {
+        if self.selectedConfigurationSection == .providers {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                FluidIntelligenceLiveSection(
-                    controller: self.privateAIController,
-                    backendID: self.settings.privateAIBackendPreference.rawValue,
-                    isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
-                    isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
-                    usesCombinedCloudDictation: self.settings.usesCombinedCloudDictation,
-                    makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
-                ) {
-                    self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
+                if PrivateAIProviderFeature.shared.isAvailable {
+                    FluidIntelligenceLiveSection(
+                        controller: self.privateAIController,
+                        backendID: self.settings.privateAIBackendPreference.rawValue,
+                        isPrimary: self.primaryDefaultProviderID == PrivateAIProviderFeature.shared.providerID,
+                        isVerified: self.isPrivateAIModelVerified(self.privateAIController.selectedPrivateAIModel),
+                        usesCombinedCloudDictation: self.settings.usesCombinedCloudDictation,
+                        makePrimary: { self.makePrimaryDefaultProvider(PrivateAIProviderFeature.shared.providerID, isPrivateAI: true) }
+                    ) {
+                        self.privateAIManagementSettings(isBusy: self.privateAIController.isBusy)
+                    }
                 }
                 self.addedExternalProvidersSection
             }
@@ -68,63 +72,45 @@ extension AIEnhancementSettingsView {
     }
 
     var addedExternalProvidersSection: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+        let rows = self.viewModel.cachedAddedProviderItems
+        let showsFilter = AIProviderListFilter.isShown(rowCount: rows.count)
+        let filter = showsFilter ? self.providerListFilter : .all
+        let visibleRows = rows.filter { filter.matches(AIProviderCatalog.capabilities(for: $0.id)) }
+        return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
             HStack {
-                if !self.viewModel.cachedAddedProviderItems.isEmpty {
-                    Text("Other providers").font(self.theme.typography.sectionTitle)
-                }
+                Text("Providers").font(self.theme.typography.sectionTitle)
                 Spacer()
-                Button("Add Provider", systemImage: "plus") { self.showingAddProviderSheet = true }
+                Button("Add provider", systemImage: "plus") { self.addProviderRequest = AddProviderRequest() }
                     .fluidGlassAction()
                     .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .accessibilityIdentifier("ai-providers-add")
             }
-            ForEach(self.viewModel.cachedAddedProviderItems) { provider in
-                let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
-                let setupIssue = DictationDefaultProvider.setupIssue(
-                    requiresAPIKey: !self.viewModel.isLocalEndpoint(self.providerBaseURL(for: item)),
-                    hasAPIKey: !self.viewModel.providerAPIKey(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    hasModel: !self.viewModel.selectedModel(for: provider.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    isVerified: self.viewModel.connectionStatus(for: provider.id) == .success,
-                    verificationFailed: self.viewModel.connectionStatus(for: provider.id) == .failed
-                )
-                HStack(spacing: self.theme.metrics.spacing.md) {
-                    self.providerLogoView(for: item).frame(width: 30, height: 30)
-                    Text(provider.name).font(self.theme.typography.bodySmallStrong)
-                    Spacer()
-                    if self.viewModel.connectionStatus(for: provider.id) == .testing {
-                        Text("Verifying…")
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                    } else if let setupIssue {
-                        Label(setupIssue, systemImage: "exclamationmark.circle")
-                            .font(self.theme.typography.caption)
-                            .foregroundStyle(.red)
+            if showsFilter {
+                Picker("Show", selection: self.$providerListFilter) {
+                    ForEach(AIProviderListFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
                     }
-                    ProviderDefaultButton(
-                        isCurrent: self.settings.usesCombinedCloudDictation
-                            ? self.settings.selectedProviderID == provider.id
-                            : self.primaryDefaultProviderID == provider.id,
-                        isEnabled: self.viewModel.canUseProviderWithoutVerification(provider.id)
-                            && !self.viewModel.isFetchingModels && !self.viewModel.isTestingConnection,
-                        purpose: self.settings.usesCombinedCloudDictation ? .textActions : .dictation
-                    ) {
-                        self.makePrimaryDefaultProvider(provider.id, isPrivateAI: false)
-                    }
-                    Button("Manage") {
-                        self.viewModel.configureProvider(provider.id)
-                        self.managedExternalProviderID = provider.id
-                    }
-                    .fluidGlassAction()
-                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                 }
-                .padding(self.theme.metrics.spacing.lg)
-                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous))
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityIdentifier("ai-providers-filter")
+            }
+            if rows.isEmpty {
+                Text("No providers yet. Add one for Cleanup Styles, Command Mode and Edit, or for cloud and live transcription.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            ForEach(visibleRows) { provider in
+                self.providerRow(provider)
             }
         }
-        .sheet(isPresented: self.$showingAddProviderSheet) {
-            AddProviderSheet(viewModel: self.viewModel) { id, name in
+        .sheet(item: self.$addProviderRequest) { request in
+            AddProviderSheet(viewModel: self.viewModel, request: request) { id, name in
                 self.providerLogoView(for: ProviderItem(id: id, name: name, isBuiltIn: true))
-            }.appTheme(self.theme)
+            } goBack: { origin in
+                self.navigate(to: origin.returnDestination)
+            }
+            .appTheme(self.theme)
         }
         .sheet(isPresented: Binding(
             get: { self.managedExternalProviderID != nil },
@@ -134,50 +120,81 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private func closeExternalProviderManager() {
-        guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
-        if let providerID = self.managedExternalProviderID,
-           !self.viewModel.saveManagedProviderBeforeClosing(providerID)
-        { return }
+    @discardableResult
+    func closeExternalProviderManager() -> Bool {
+        guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return false }
+        if let providerID = self.managedExternalProviderID {
+            if self.viewModel.isSpeechOnlyProvider(providerID) {
+                // Done saves a typed key, like the text providers' fields; an empty field removes nothing.
+                if !self.speechKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   case let .failure(message) = self.viewModel.saveSpeechProviderKey(self.speechKeyDraft, for: providerID)
+                {
+                    self.managedProviderResult = .failure(message)
+                    return false
+                }
+            } else if !self.viewModel.saveManagedProviderBeforeClosing(providerID) {
+                return false
+            }
+        }
         self.viewModel.clearEditProviderDraft()
         self.viewModel.showingAddModel = false
         self.viewModel.newModelName = ""
         self.viewModel.showingReasoningConfig = false
-        self.viewModel.finishConfiguringProvider()
+        if let providerID = self.managedExternalProviderID, !self.viewModel.isSpeechOnlyProvider(providerID) {
+            self.viewModel.finishConfiguringProvider()
+        }
         self.managedExternalProviderID = nil
+        self.managedProviderOrigin = nil
+        self.managedProviderResult = nil
+        self.pendingProviderRemoval = nil
+        self.speechKeyDraft = ""
+        return true
     }
 
     private var externalProviderManager: some View {
-        FluidManagementSheet(
-            title: self.viewModel.cachedProviderItems.first(where: { $0.id == self.managedExternalProviderID })?.name ?? "Provider",
-            subtitle: "Connection and models.",
+        let providerID = self.managedExternalProviderID ?? ""
+        let name = self.viewModel.providerName(for: providerID)
+        let removal = self.pendingProviderRemoval
+        return FluidManagementSheet(
+            title: name,
+            subtitle: self.viewModel.isSpeechOnlyProvider(providerID) ? "Connection." : "Connection and models.",
             symbol: "network",
             dismissDisabled: self.viewModel.isFetchingModels || self.viewModel.isTestingConnection,
-            height: 520,
-            close: self.closeExternalProviderManager
-        ) {
-            if let provider = self.viewModel.cachedProviderItems.first(where: { $0.id == self.managedExternalProviderID }) {
-                let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                    self.providerDetailsSection(for: item, managementLayout: true)
-                        .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+            height: 620,
+            returnAction: self.managedProviderOrigin.map { origin in
+                FluidManagementSheetAction(title: "Back to \(origin.title)") {
+                    guard self.closeExternalProviderManager() else { return }
+                    self.navigate(to: origin.returnDestination)
                 }
+            },
+            close: { self.closeExternalProviderManager() }
+        ) {
+            if !providerID.isEmpty {
+                self.providerManagementContent(for: providerID)
+                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
             }
         }
         .interactiveDismissDisabled()
-        .alert("Remove provider?", isPresented: self.$showingRemoveProviderConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Remove", role: .destructive) {
-                guard self.viewModel.selectedProviderID == self.managedExternalProviderID,
-                      self.viewModel.deleteCurrentProvider()
-                else { return }
-                self.expandedProviderID = nil
-                self.closeExternalProviderManager()
+        .alert(
+            removal.map { $0.impact.needsConfirmation ? $0.impact.confirmationTitle(providerName: name) : "Remove provider?" } ?? "",
+            isPresented: Binding(
+                get: { self.pendingProviderRemoval != nil },
+                set: { if !$0 { self.pendingProviderRemoval = nil } }
+            ),
+            presenting: removal
+        ) { removal in
+            Button("Cancel", role: .cancel) { self.pendingProviderRemoval = nil }
+            Button("Remove", role: .destructive) { self.performProviderRemoval(removal) }
+        } message: { removal in
+            if removal.impact.needsConfirmation {
+                Text(removal.impact.confirmationMessage)
+            } else if self.viewModel.isSpeechOnlyProvider(removal.providerID) {
+                Text("This removes its saved API key. You can add the provider again later.")
+            } else {
+                Text("This removes its saved API key and model setup, and clears any default or prompt assignments using it. Your prompts and shortcuts are kept. You can add the provider again later.")
             }
-        } message: {
-            Text("This removes its saved API key and model setup, and clears any default or prompt assignments using it. Your prompts and shortcuts are kept. You can add the provider again later.")
         }
-        .onChange(of: self.viewModel.cachedProviderItems.map(\.id)) { _, ids in
+        .onChange(of: self.viewModel.cachedAddedProviderItems.map(\.id)) { _, ids in
             if let id = self.managedExternalProviderID, !ids.contains(id) { self.closeExternalProviderManager() }
         }
     }
@@ -507,7 +524,7 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private struct ProviderItem: Identifiable, Hashable {
+    struct ProviderItem: Identifiable, Hashable {
         let id: String
         let name: String
         let isBuiltIn: Bool
@@ -1325,7 +1342,7 @@ extension AIEnhancementSettingsView {
                         }
                         .fluidGlassAction(prominent: true)
                         .disabled(self.viewModel.isTestingConnection)
-                        .help("Optional: send a small request to test this model. You can use it without running this check.")
+                        .help("Send a small request to check this key and model.")
                         .frame(maxWidth: managementLayout ? .infinity : nil, alignment: .trailing)
                     }
                 } else {
@@ -1695,7 +1712,7 @@ extension AIEnhancementSettingsView {
         return ""
     }
 
-    private func providerLogoView(for item: ProviderItem) -> some View {
+    func providerLogoView(for item: ProviderItem) -> some View {
         let name = self.providerLogoName(for: item)
         let bgColor = self.providerBackgroundColor(for: item)
 
@@ -1821,30 +1838,21 @@ extension AIEnhancementSettingsView {
         )
     }
 
+    /// The default control changes the default text provider only; the main shortcut's Cleanup Style
+    /// is left as it is. Fluid Intelligence is still chosen through the main shortcut's style.
     private func makePrimaryDefaultProvider(_ providerID: String, isPrivateAI: Bool) {
         guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
-        if self.settings.usesCombinedCloudDictation {
-            guard !isPrivateAI,
-                  providerID != self.settings.selectedProviderID,
-                  self.viewModel.canUseProviderWithoutVerification(providerID),
-                  self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
-            self.activateProvider(providerID)
-            return
-        }
-        guard providerID != self.primaryDefaultProviderID else { return }
         if isPrivateAI {
-            guard !self.privateAIController.isBusy, self.viewModel.isPrivateAIPromptAvailable() else { return }
+            guard !self.settings.usesCombinedCloudDictation,
+                  providerID != self.primaryDefaultProviderID,
+                  !self.privateAIController.isBusy, self.viewModel.isPrivateAIPromptAvailable() else { return }
             self.viewModel.setDictationPromptSelection(.privateAI, for: .primary)
             return
         }
-
-        guard self.viewModel.canUseProviderWithoutVerification(providerID),
-              self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
-        self.activateProvider(providerID)
-        self.viewModel.setDictationPromptSelection(.default, for: .primary)
+        Task { await self.viewModel.makeDefaultTextProvider(providerID) }
     }
 
-    private func modelBinding(for providerID: String) -> Binding<String> {
+    func modelBinding(for providerID: String) -> Binding<String> {
         Binding(
             get: {
                 let key = self.viewModel.providerKey(for: providerID)

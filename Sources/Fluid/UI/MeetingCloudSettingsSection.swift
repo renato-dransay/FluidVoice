@@ -84,7 +84,7 @@ struct MeetingCloudSettingsSection: View {
                 Text(model.name).tag(model.id)
             }
             if !self.supportedModels.contains(where: { $0.id == self.settings.meetingCloudModelID }) {
-                Text("\(self.name(for: self.settings.meetingCloudModelID)) (not verified)").tag(self.settings.meetingCloudModelID)
+                Text("\(self.name(for: self.settings.meetingCloudModelID)) (word timings not checked)").tag(self.settings.meetingCloudModelID)
             }
         }
         .disabled(self.checkProgress != nil)

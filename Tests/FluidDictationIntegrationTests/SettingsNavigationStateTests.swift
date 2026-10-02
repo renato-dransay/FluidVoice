@@ -73,6 +73,65 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(AppNavigationDestination.history.sidebarItem, .history)
         XCTAssertEqual(AppNavigationDestination.meetingTranscription.sidebarItem, .meetingTranscription)
         XCTAssertNil(AppNavigationDestination.dictationShortcuts.sidebarItem)
+        XCTAssertEqual(AppNavigationDestination.cleanupStyles.sidebarItem, .cleanupStyles)
+        XCTAssertEqual(AppNavigationDestination.commandMode.sidebarItem, .commandMode)
+        XCTAssertEqual(AppNavigationDestination.fileTranscription.sidebarItem, .fileTranscription)
+    }
+
+    func testAProviderRequestOpensManageForAConnectedProviderAndTheAddFormOtherwise() {
+        let connected: Set<String> = ["openai", "deepgram"]
+        XCTAssertEqual(
+            ProviderSheetRoute.route(for: .aiProvider(id: "deepgram", origin: .voiceEngine(tab: .liveCloud)), connectedProviderIDs: connected),
+            .manage(providerID: "deepgram", origin: .voiceEngine(tab: .liveCloud))
+        )
+        XCTAssertEqual(
+            ProviderSheetRoute.route(for: .aiProvider(id: "soniox", origin: .voiceEngine(tab: .liveCloud)), connectedProviderIDs: connected),
+            .add(capability: nil, providerID: "soniox", origin: .voiceEngine(tab: .liveCloud))
+        )
+        XCTAssertEqual(
+            ProviderSheetRoute.route(for: .addProvider(capability: .liveTranscription, origin: .fluidMeet), connectedProviderIDs: connected),
+            .add(capability: .liveTranscription, providerID: nil, origin: .fluidMeet)
+        )
+        XCTAssertEqual(
+            ProviderSheetRoute.route(for: .addProvider(capability: nil, origin: nil), connectedProviderIDs: []),
+            .add(capability: nil, providerID: nil, origin: nil)
+        )
+        XCTAssertNil(ProviderSheetRoute.route(for: .voiceEngine(tab: .cloud), connectedProviderIDs: connected))
+        XCTAssertNil(ProviderSheetRoute.route(for: .aiEnhancements, connectedProviderIDs: connected))
+    }
+
+    func testAProviderRequestIsReadOnceAndAnotherPageDropsIt() {
+        var requests = AppNavigationRequests()
+        requests.request(.aiProvider(id: "soniox", origin: .voiceEngine(tab: .liveCloud)))
+        XCTAssertEqual(requests.consumeDestination(), .aiProvider(id: "soniox", origin: .voiceEngine(tab: .liveCloud)))
+        XCTAssertNil(requests.consumeVoiceEngineTab())
+        XCTAssertEqual(requests.consumeProviderSetup(), .aiProvider(id: "soniox", origin: .voiceEngine(tab: .liveCloud)))
+        XCTAssertNil(requests.consumeProviderSetup())
+
+        requests.request(.addProvider(capability: .text, origin: .cleanupStyles))
+        requests.request(.history)
+        XCTAssertNil(requests.consumeProviderSetup())
+        requests.request(.addProvider(capability: .text, origin: .cleanupStyles))
+        requests.request(.voiceEngine(tab: .liveCloud))
+        XCTAssertNil(requests.consumeProviderSetup())
+        XCTAssertEqual(requests.consumeVoiceEngineTab(), .liveCloud)
+    }
+
+    func testEachOriginReturnsToTheScreenItCameFrom() {
+        XCTAssertEqual(ProviderSetupOrigin.voiceEngine(tab: .liveCloud).returnDestination, .voiceEngine(tab: .liveCloud))
+        XCTAssertEqual(ProviderSetupOrigin.voiceEngine(tab: .cloud).returnDestination, .voiceEngine(tab: .cloud))
+        XCTAssertEqual(ProviderSetupOrigin.fluidMeet.returnDestination, .meetingTranscription)
+        XCTAssertEqual(ProviderSetupOrigin.cleanupStyles.returnDestination, .cleanupStyles)
+        XCTAssertEqual(ProviderSetupOrigin.commandMode.returnDestination, .commandMode)
+        XCTAssertEqual(ProviderSetupOrigin.fileTranscription.returnDestination, .fileTranscription)
+        XCTAssertEqual(ProviderSetupOrigin.voiceEngine(tab: .local).title, "Voice Engine")
+        XCTAssertEqual(ProviderSetupOrigin.fluidMeet.title, "FluidMeet")
+        XCTAssertEqual(ProviderSetupOrigin.cleanupStyles.title, "Cleanup Styles")
+        XCTAssertEqual(ProviderSetupOrigin.commandMode.title, "Command Mode")
+        XCTAssertEqual(ProviderSetupOrigin.fileTranscription.title, "File Transcription")
+        // A return lands on the page of that screen.
+        XCTAssertEqual(ProviderSetupOrigin.cleanupStyles.returnDestination.sidebarItem, .cleanupStyles)
+        XCTAssertEqual(ProviderSetupOrigin.voiceEngine(tab: .liveCloud).returnDestination.sidebarItem, .voiceEngine)
     }
 
     func testARequestedVoiceEngineTabIsConsumedOnceAndWinsOverTheActiveEngine() {

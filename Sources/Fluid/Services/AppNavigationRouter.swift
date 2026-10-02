@@ -7,6 +7,28 @@ enum ProviderSetupOrigin: Equatable {
     case cleanupStyles
     case commandMode
     case fileTranscription
+
+    /// The words after "Back to" on the provider sheets.
+    var title: String {
+        switch self {
+        case .voiceEngine: "Voice Engine"
+        case .fluidMeet: "FluidMeet"
+        case .cleanupStyles: "Cleanup Styles"
+        case .commandMode: "Command Mode"
+        case .fileTranscription: "File Transcription"
+        }
+    }
+
+    /// Where `Back to …` goes: the screen the setup was opened from, on the same Voice Engine tab.
+    var returnDestination: AppNavigationDestination {
+        switch self {
+        case let .voiceEngine(tab): .voiceEngine(tab: tab)
+        case .fluidMeet: .meetingTranscription
+        case .cleanupStyles: .cleanupStyles
+        case .commandMode: .commandMode
+        case .fileTranscription: .fileTranscription
+        }
+    }
 }
 
 enum AppNavigationDestination: Equatable {
@@ -14,6 +36,9 @@ enum AppNavigationDestination: Equatable {
     case history
     case dictationShortcuts
     case meetingTranscription
+    case cleanupStyles
+    case commandMode
+    case fileTranscription
     /// AI Providers, on the given provider.
     case aiProvider(id: String, origin: ProviderSetupOrigin?)
     /// AI Providers, adding a provider, optionally limited to one capability.
@@ -28,25 +53,61 @@ enum AppNavigationDestination: Equatable {
         case .history: .history
         case .dictationShortcuts: nil
         case .meetingTranscription: .meetingTranscription
+        case .cleanupStyles: .cleanupStyles
+        case .commandMode: .commandMode
+        case .fileTranscription: .fileTranscription
         case .voiceEngine: .voiceEngine
         }
     }
 }
 
-/// Pending navigation requests. A requested Voice Engine tab is kept apart from the destination
-/// because the page consumes it when it appears, after the app has switched pages.
+/// The sheet AI Providers opens for a provider request (NAV-2, NAV-3).
+enum ProviderSheetRoute: Equatable {
+    /// The Manage sheet of a connected provider.
+    case manage(providerID: String, origin: ProviderSetupOrigin?)
+    /// The Add sheet: on one provider's connection form when `providerID` is set, else on the grid,
+    /// limited to one capability when one is given.
+    case add(capability: ProviderCapability?, providerID: String?, origin: ProviderSetupOrigin?)
+
+    static func route(for destination: AppNavigationDestination, connectedProviderIDs: Set<String>) -> ProviderSheetRoute? {
+        switch destination {
+        case let .aiProvider(id, origin):
+            if connectedProviderIDs.contains(id) { return .manage(providerID: id, origin: origin) }
+            return .add(capability: nil, providerID: id, origin: origin)
+        case let .addProvider(capability, origin):
+            return .add(capability: capability, providerID: nil, origin: origin)
+        default:
+            return nil
+        }
+    }
+}
+
+/// Pending navigation requests. A requested Voice Engine tab and a provider request are kept apart
+/// from the destination because the page consumes them when it appears, after the app has switched pages.
 struct AppNavigationRequests: Equatable {
     private var pendingDestination: AppNavigationDestination?
     private var pendingVoiceEngineTab: SpeechExecutionSource?
+    private var pendingProviderSetup: AppNavigationDestination?
 
     mutating func request(_ destination: AppNavigationDestination) {
         self.pendingDestination = destination
-        // A later request to another page drops a tab nobody browsed.
-        if case let .voiceEngine(tab) = destination {
+        // A later request to another page drops a tab or a provider request nobody read.
+        self.pendingVoiceEngineTab = nil
+        self.pendingProviderSetup = nil
+        switch destination {
+        case let .voiceEngine(tab):
             self.pendingVoiceEngineTab = tab
-        } else {
-            self.pendingVoiceEngineTab = nil
+        case .aiProvider, .addProvider:
+            self.pendingProviderSetup = destination
+        default:
+            break
         }
+    }
+
+    /// The provider request (`.aiProvider` or `.addProvider`) AI Providers has not opened yet, once.
+    mutating func consumeProviderSetup() -> AppNavigationDestination? {
+        defer { self.pendingProviderSetup = nil }
+        return self.pendingProviderSetup
     }
 
     mutating func consumeDestination() -> AppNavigationDestination? {
@@ -80,6 +141,11 @@ final class AppNavigationRouter {
     /// The Voice Engine tab a request asked for, once; the page browses it instead of the active engine's tab.
     func consumeRequestedVoiceEngineTab() -> SpeechExecutionSource? {
         self.requests.consumeVoiceEngineTab()
+    }
+
+    /// The provider request AI Providers should open as a sheet, once.
+    func consumeRequestedProviderSetup() -> AppNavigationDestination? {
+        self.requests.consumeProviderSetup()
     }
 }
 

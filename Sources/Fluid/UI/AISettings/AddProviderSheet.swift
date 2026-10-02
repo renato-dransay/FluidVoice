@@ -1,112 +1,197 @@
 import SwiftUI
 
+/// The one Add a provider sheet, for text, cloud transcription and live providers.
 struct AddProviderSheet<Logo: View>: View {
+    private enum Step: Equatable {
+        case grid
+        case form
+        /// After a successful Add opened from another screen: the way back.
+        case connected(name: String)
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
     @ObservedObject var viewModel: AIEnhancementSettingsViewModel
+    let request: AddProviderRequest
     @ViewBuilder let logo: (String, String) -> Logo
+    let goBack: (ProviderSetupOrigin) -> Void
     @State private var draft = ProviderSetupDraft()
-    @State private var isEditing = false
-    @State private var saveFailed = false
+    @State private var step: Step = .grid
+    @State private var didOpenRequestedProvider = false
+    @State private var saveResult: ProviderActionResult?
     @State private var modelFetchTask: Task<Void, Never>?
     @State private var modelFetchID: UUID?
     @State private var modelFetchError: String?
     @State private var showingManualModel = false
 
-    private var providers: [AIEnhancementSettingsViewModel.ProviderItemData] {
-        let added = Set(self.viewModel.cachedAddedProviderItems.map(\.id))
-        return self.viewModel.cachedProviderItems.filter {
-            $0.isBuiltIn && $0.id != PrivateAIProviderFeature.shared.providerID && !added.contains($0.id)
+    private var providers: [ProviderDescriptor] {
+        AIProviderCatalog.addableProviders(
+            capability: self.request.capability,
+            connectedProviderIDs: Set(self.viewModel.cachedAddedProviderItems.map(\.id))
+        )
+    }
+
+    private var isSpeechOnlyDraft: Bool {
+        AIProviderCatalog.isSpeechOnly(self.draft.providerID)
+    }
+
+    private var canAdd: Bool {
+        if self.isSpeechOnlyDraft {
+            return !self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        return self.modelFetchID == nil && self.draft.isValid && !self.viewModel.isTestingConnection && !self.viewModel.isFetchingModels
     }
 
     var body: some View {
         FluidGlassControlGroup {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                HStack {
-                    if self.isEditing && !self.draft.providerID.isEmpty {
-                        self.logo(self.draft.providerID, self.draft.name)
-                    } else {
-                        Image(systemName: "square.stack.3d.up")
-                            .font(.fluidSystem(size: 26)).foregroundStyle(FluidBrandColors.blue)
-                            .frame(width: 48, height: 48)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(self.isEditing ? self.draft.name : "Add a provider").font(self.theme.typography.title)
-                        Text(self.isEditing ? "Add connection details to get started." : "Your preferred models. Connected to FluidVoice.")
-                            .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
-                    }
-                    Spacer()
-                    Button("Cancel") { self.dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                        .fluidGlassAction()
-                }
+                self.header
                 Divider()
-                if self.isEditing {
+                switch self.step {
+                case .grid:
+                    self.grid
+                    self.reassurance
+                case .form:
                     self.form
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            Text("Choose a provider").font(self.theme.typography.bodyStrong)
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                                ForEach(self.providers) { provider in
-                                    Button {
-                                        self.draft = ProviderSetupDraft(
-                                            providerID: provider.id,
-                                            name: provider.name,
-                                            baseURL: ModelRepository.shared.defaultBaseURL(for: provider.id)
-                                        )
-                                        self.isEditing = true
-                                    } label: {
-                                        HStack(spacing: 14) {
-                                            self.logo(provider.id, provider.name).accessibilityHidden(true)
-                                            VStack(alignment: .leading, spacing: 5) {
-                                                Text(provider.name).font(self.theme.typography.bodyStrong)
-                                                Text(["ollama", "lmstudio"].contains(provider.id) ? "Local connection" : "Connect with an API key")
-                                                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                                            }
-                                            Spacer()
-                                            Image(systemName: "chevron.right").accessibilityHidden(true)
-                                        }
-                                        .padding(16).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
-                                        .contentShape(RoundedRectangle(cornerRadius: 16))
-                                    }
-                                    .buttonStyle(ProviderChoiceStyle())
-                                }
-                                Button {
-                                    self.draft = ProviderSetupDraft(name: "Custom Provider")
-                                    self.isEditing = true
-                                } label: {
-                                    HStack(spacing: 14) {
-                                        Image(systemName: "server.rack").font(.fluidSystem(size: 24))
-                                            .foregroundStyle(FluidBrandColors.blue).frame(width: 38, height: 38)
-                                        VStack(alignment: .leading, spacing: 5) {
-                                            Text("Custom Provider").font(self.theme.typography.bodyStrong)
-                                            Text("Your service or server")
-                                                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "plus").foregroundStyle(FluidBrandColors.blue)
-                                    }.padding(16).contentShape(RoundedRectangle(cornerRadius: 16))
-                                }
-                                .buttonStyle(ProviderChoiceStyle())
-                            }
-                        }
-                    }
-                    Label("Adding a provider won’t change your current dictation setup.", systemImage: "info.circle")
-                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                case let .connected(name):
+                    self.connected(name: name)
                 }
             }
         }
         .padding(28)
         .frame(width: 720, height: 650)
         .background(self.theme.palette.windowBackground)
+        .onAppear(perform: self.openRequestedProvider)
         .onChange(of: self.draft.connectionIdentity) { _, _ in
             self.cancelModelFetch()
             self.modelFetchError = nil
         }
         .onDisappear { self.cancelModelFetch() }
     }
+
+    private var header: some View {
+        HStack {
+            if self.step == .form, !self.draft.providerID.isEmpty {
+                self.logo(self.draft.providerID, self.draft.name)
+            } else {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.fluidSystem(size: 26)).foregroundStyle(FluidBrandColors.blue)
+                    .frame(width: 48, height: 48)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(self.step == .form ? self.draft.name : "Add a provider").font(self.theme.typography.title)
+                Text(self.subtitle)
+                    .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
+            }
+            Spacer()
+            if case .connected = self.step {
+                EmptyView()
+            } else {
+                Button("Cancel") { self.dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .fluidGlassAction()
+            }
+        }
+    }
+
+    private var subtitle: String {
+        switch self.step {
+        case .form: "Add connection details to get started."
+        case .connected: "Ready to use."
+        case .grid:
+            switch self.request.capability {
+            case .text: "Providers for Cleanup Styles, Command Mode and Edit."
+            case .cloudTranscription: "Providers that transcribe a recording after you stop."
+            case .liveTranscription: "Providers that transcribe while you speak."
+            case nil: "Your preferred models. Connected to FluidVoice."
+            }
+        }
+    }
+
+    private var reassurance: some View {
+        Label("Adding a provider won’t change your current dictation setup.", systemImage: "info.circle")
+            .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+    }
+
+    // MARK: - Grid
+
+    private var grid: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("Choose a provider").font(self.theme.typography.bodyStrong)
+                if self.providers.isEmpty, !AIProviderCatalog.offersCustomProvider(for: self.request.capability) {
+                    Text("Every provider of this kind is already connected.")
+                        .font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
+                }
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(self.providers) { provider in
+                        Button {
+                            self.choose(provider)
+                        } label: {
+                            HStack(spacing: 14) {
+                                self.logo(provider.id, provider.name).accessibilityHidden(true)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(provider.name).font(self.theme.typography.bodyStrong)
+                                    Text(AIProviderCatalog.capabilitySummary(for: provider.id))
+                                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right").accessibilityHidden(true)
+                            }
+                            .padding(16).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+                            .contentShape(RoundedRectangle(cornerRadius: 16))
+                        }
+                        .buttonStyle(ProviderChoiceStyle())
+                        .accessibilityIdentifier("add-provider-\(provider.id)")
+                    }
+                    if AIProviderCatalog.offersCustomProvider(for: self.request.capability) {
+                        Button {
+                            self.draft = ProviderSetupDraft(name: "Custom Provider")
+                            self.saveResult = nil
+                            self.step = .form
+                        } label: {
+                            HStack(spacing: 14) {
+                                Image(systemName: "server.rack").font(.fluidSystem(size: 24))
+                                    .foregroundStyle(FluidBrandColors.blue).frame(width: 38, height: 38)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text("Custom Provider").font(self.theme.typography.bodyStrong)
+                                    Text("Your service or server")
+                                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                                }
+                                Spacer()
+                                Image(systemName: "plus").foregroundStyle(FluidBrandColors.blue)
+                            }.padding(16).contentShape(RoundedRectangle(cornerRadius: 16))
+                        }
+                        .buttonStyle(ProviderChoiceStyle())
+                        .accessibilityIdentifier("add-provider-custom")
+                    }
+                }
+            }
+        }
+    }
+
+    private func choose(_ provider: ProviderDescriptor) {
+        self.draft = ProviderSetupDraft(
+            providerID: provider.id,
+            name: provider.name,
+            baseURL: AIProviderCatalog.isSpeechOnly(provider.id) ? "" : ModelRepository.shared.defaultBaseURL(for: provider.id)
+        )
+        self.saveResult = nil
+        self.showingManualModel = false
+        self.step = .form
+    }
+
+    /// NAV-2: a request for a provider that is not connected opens its form directly, skipping the grid.
+    private func openRequestedProvider() {
+        guard !self.didOpenRequestedProvider else { return }
+        self.didOpenRequestedProvider = true
+        guard let providerID = self.request.providerID,
+              let provider = self.providers.first(where: { $0.id == providerID })
+        else { return }
+        self.choose(provider)
+    }
+
+    // MARK: - Form
 
     private var form: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
@@ -117,34 +202,82 @@ struct AddProviderSheet<Logo: View>: View {
                             self.field("Name") { TextField("Custom Provider", text: self.$draft.name) }
                             self.field("Server URL") { TextField("https://your-server.com/v1", text: self.$draft.baseURL) }
                         }
-                        self.field(self.draft.requiresAPIKey ? "API key" : "API key · Optional") {
-                            SecureField("Enter API key", text: self.$draft.apiKey)
-                        }
-                        if let website = ModelRepository.shared.providerWebsiteURL(for: self.draft.providerID), let url = URL(string: website.url) {
-                            Link(destination: url) { Label(website.label, systemImage: "arrow.up.right").font(self.theme.typography.caption) }
-                        }
+                        ProviderAPIKeyField(
+                            text: self.$draft.apiKey,
+                            hasSavedKey: false,
+                            isOptional: !self.draft.requiresAPIKey,
+                            link: AIProviderCatalog.keyLink(for: self.draft.providerID),
+                            onFocus: { self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
+                        )
                     }
-                    self.modelSection
-                    Label("Your current dictation setup stays unchanged.", systemImage: "info.circle")
-                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    if !self.isSpeechOnlyDraft {
+                        self.modelSection
+                    }
+                    self.reassurance
                 }
             }
             .textFieldStyle(.roundedBorder)
-            if self.saveFailed {
-                Text("Couldn’t save this provider. Check Keychain access and try again.")
-                    .font(self.theme.typography.caption).foregroundStyle(.red)
+            if let saveResult = self.saveResult {
+                ProviderActionResultLabel(result: saveResult)
             }
             Spacer()
             HStack {
-                Button("Back") { self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false }
-                    .fluidGlassAction()
-                Spacer()
-                Button("Add Provider") {
-                    if self.viewModel.addProvider(self.draft) { self.dismiss() } else { self.saveFailed = true }
+                Button("Back") {
+                    self.cancelModelFetch()
+                    self.step = .grid
+                    self.saveResult = nil
+                    self.showingManualModel = false
                 }
-                .keyboardShortcut(.defaultAction)
-                .fluidGlassAction(prominent: true)
-                .disabled(self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+                .fluidGlassAction()
+                Spacer()
+                Button("Add provider", action: self.add)
+                    .keyboardShortcut(.defaultAction)
+                    .fluidGlassAction(prominent: true)
+                    .disabled(!self.canAdd)
+                    .accessibilityIdentifier("add-provider-confirm")
+            }
+        }
+    }
+
+    /// Saves the key (and, for a text provider, its record and models). Makes no network request.
+    private func add() {
+        let name = self.draft.trimmedName.isEmpty ? self.draft.name : self.draft.trimmedName
+        if self.isSpeechOnlyDraft {
+            let result = self.viewModel.saveSpeechProviderKey(self.draft.apiKey, for: self.draft.providerID)
+            guard case .success = result else {
+                self.saveResult = result
+                return
+            }
+        } else if !self.viewModel.addProvider(self.draft) {
+            self.saveResult = .failure("Couldn’t save this provider. Check Keychain access and try again.")
+            return
+        }
+        if self.request.origin != nil {
+            self.step = .connected(name: name)
+        } else {
+            self.dismiss()
+        }
+    }
+
+    private func connected(name: String) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Label("\(name) is connected.", systemImage: "checkmark.circle.fill")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(Color.fluidGreen)
+            Spacer()
+            HStack {
+                Spacer()
+                if let origin = self.request.origin {
+                    Button("Back to \(origin.title)") {
+                        self.dismiss()
+                        self.goBack(origin)
+                    }
+                    .fluidGlassAction(prominent: true)
+                    .accessibilityIdentifier("add-provider-back")
+                }
+                Button("Done") { self.dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .fluidGlassAction()
             }
         }
     }

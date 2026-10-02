@@ -249,13 +249,6 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     // MARK: - Live cloud
 
-    /// Adding a provider never changes the voice engine.
-    func addLiveProvider(_ provider: LiveTranscriptionProviderID) {
-        var preferences = LiveTranscriptionPreferences(defaults: .standard)
-        preferences.addedProviders.append(provider)
-        self.settings.objectWillChange.send()
-    }
-
     /// Saves or, for an empty key, removes the provider's key and returns the status line to show.
     /// `setProviderAPIKey` applies the effects of a removal; observers clear the status of the old key.
     func saveLiveKey(_ key: String, for provider: LiveTranscriptionProviderID) -> String {

@@ -47,7 +47,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var currentProvider: String = ""
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
     private var persistsSelectedProvider = true
-    private var managedOriginalKey: String?
+    var managedOriginalKey: String?
     @Published var selectedProviderID: String {
         didSet {
             guard self.persistsSelectedProvider else { return }
@@ -64,6 +64,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var connectionErrorMessageByProvider: [String: String] = [:]
     @Published var fetchedModelsProviders: Set<String> = []
     @Published var editingAPIKeyProviders: Set<String> = []
+    /// Speech key checks of providers without Text that are running or failed. A passed check is the
+    /// speech verification record itself.
+    @Published var speechCheckStates: [String: ProviderSpeechCheckState] = [:]
 
     // UI State
     @Published var showHelp: Bool = false
@@ -317,7 +320,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         self.cachedProviderItems = items
-        self.cachedAddedProviderItems = self.addedProviderItems(from: items)
+        // The rows of AI Providers: the text providers above plus every speech-only provider with a key.
+        self.cachedAddedProviderItems = Self.providerRows(textRows: self.addedProviderItems(from: items), apiKeys: self.providerAPIKeys)
         self.cachedVerifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) == .success }
         self.cachedUnverifiedProviderItems = items.filter { self.connectionStatus(for: $0.id) != .success }
     }
@@ -495,16 +499,25 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     /// Persists one provider's key draft through `SettingsStore.setProviderAPIKey`, the single write
-    /// path; an empty draft removes the key. Other providers' drafts are not written. An unchanged key
-    /// is not written again, so saving before a model refresh or a check keeps its verification.
+    /// path. Other providers' drafts are not written. An unchanged key is not written again, so saving
+    /// before a model refresh or a check keeps its verification. An empty draft removes the key only
+    /// when `allowsRemoval` is set (`Remove key`, `Remove provider`) or the provider's key is optional:
+    /// emptying the field of a provider that requires a key keeps the saved key.
     @discardableResult
-    func saveProviderAPIKey(for providerID: String? = nil) -> Bool {
+    func saveProviderAPIKey(for providerID: String? = nil, allowsRemoval: Bool = false) -> Bool {
         let target = providerID ?? self.selectedProviderID
         let key = self.providerKey(for: target)
         guard !key.isEmpty else { return true }
         let draft = self.providerAPIKey(for: target).trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let stored = (self.settings.providerAPIKeys[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if draft.isEmpty, !stored.isEmpty, !allowsRemoval, AIProviderCatalog.requiresAPIKey(target) {
+                self.providerAPIKeys[key] = stored
+                if target == self.selectedProviderID, self.managedOriginalKey != nil {
+                    self.managedOriginalKey = stored
+                }
+                return true
+            }
             if draft != stored {
                 try self.settings.setProviderAPIKey(draft.isEmpty ? nil : draft, for: key)
                 guard (self.settings.providerAPIKeys[key] ?? "") == draft else {
@@ -752,7 +765,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         return message
     }
 
-    private func showKeychainPersistenceFailure(_ error: Error) {
+    func showKeychainPersistenceFailure(_ error: Error) {
         self.keychainPermissionMessage = self.keychainPersistenceExplanation(for: error)
         self.showKeychainPermissionAlert = true
     }
@@ -1157,7 +1170,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         if key != deletedProviderID {
             self.providerAPIKeys.removeValue(forKey: deletedProviderID)
         }
-        if hadPersistedKey, !self.saveProviderAPIKey(for: deletedProviderID) {
+        if hadPersistedKey, !self.saveProviderAPIKey(for: deletedProviderID, allowsRemoval: true) {
             self.providerAPIKeys = previousKeys
             return false
         }
@@ -1339,7 +1352,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.syncPromptSelectionForSelectedProvider()
         }
         if changed {
-            self.updateConnectionStatus(self.isModelVerified(for: providerID) ? .success : .unknown, for: providerID)
+            // Choosing another model never makes a verified provider unverified: text verification
+            // covers the key and server. The model check stays a separate signal on the model row.
+            self.updateConnectionStatus(Self.connectionStatusAfterModelChange(isTextVerified: self.isTextVerified(providerID)), for: providerID)
         }
     }
 
@@ -1479,6 +1494,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.connectionStatusByProvider[providerID] = .unknown
             self.clearConnectionError(for: providerID)
         }
+    }
+
+    /// True when the text verification record matches this provider's current server and key.
+    func isTextVerified(_ providerID: String) -> Bool {
+        let key = self.providerKey(for: providerID)
+        guard let stored = self.settings.verifiedProviderFingerprints[key] else { return false }
+        return self.fingerprint(baseURL: self.providerBaseURL(for: providerID), apiKey: self.providerAPIKey(for: providerID)) == stored
+    }
+
+    static func connectionStatusAfterModelChange(isTextVerified: Bool) -> AIConnectionStatus {
+        isTextVerified ? .success : .unknown
     }
 
     private func invalidateVerification(for providerID: String) {
