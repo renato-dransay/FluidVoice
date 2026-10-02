@@ -29,6 +29,19 @@ final class LiveTranscriptionDeepgramTests: XCTestCase {
         XCTAssertTrue(request.url?.query?.contains("language=pt") == true)
     }
 
+    func testEachModelGetsTheLanguageItSupports() {
+        func language(_ modelID: String, chosen: String? = nil, hints: [String] = []) -> String {
+            DeepgramLiveAdapter.language(for: LiveTranscriptionConfiguration(provider: .deepgram, modelID: modelID, languageCode: chosen, languageHints: hints))
+        }
+        XCTAssertEqual(language("nova-3", hints: ["de"]), "multi")
+        XCTAssertEqual(language("nova-2", hints: ["de"]), "de", "Nova-2's multi covers only Spanish and English")
+        XCTAssertEqual(language("nova-2"), "multi")
+        XCTAssertEqual(language("nova-2", chosen: "fr", hints: ["de"]), "fr")
+        XCTAssertEqual(language("nova-3-medical", chosen: "de"), "en", "English only")
+        XCTAssertEqual(language("a-retired-model"), "multi", "An unlisted stored model keeps Nova-3's request")
+        XCTAssertEqual(LiveTranscriptionCatalog.info(for: .deepgram).models.map(\.id), ["nova-3", "nova-2", "nova-3-medical"])
+    }
+
     func testInterimReplacesPendingAndFinalAppendsWithItsEndTime() {
         var adapter = DeepgramLiveAdapter()
         XCTAssertEqual(

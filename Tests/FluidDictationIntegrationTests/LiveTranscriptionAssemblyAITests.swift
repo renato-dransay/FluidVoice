@@ -42,6 +42,34 @@ final class LiveTranscriptionAssemblyAITests: XCTestCase {
         XCTAssertEqual(LiveTranscriptionCatalog.info(for: .assemblyAI).languageCodes, AssemblyAILiveAdapter.steerableLanguageCodes)
     }
 
+    func testEachStreamingModelGetsItsOwnParameters() throws {
+        func query(_ modelID: String, language: String? = nil, hints: [String]) throws -> [String: String] {
+            let configuration = LiveTranscriptionConfiguration(provider: .assemblyAI, modelID: modelID, languageCode: language, languageHints: hints)
+            let url = try XCTUnwrap(AssemblyAILiveAdapter().connectionRequest(apiKey: "k", configuration: configuration).url)
+            return Dictionary(uniqueKeysWithValues: (URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        }
+        let previous = try query("universal-3-5-pro", hints: ["de", "en"])
+        XCTAssertEqual(previous["language_codes"], #"["de","en"]"#)
+        XCTAssertNil(previous["format_turns"])
+        XCTAssertNil(try query("universal-3-5-pro", hints: ["ko", "en"])["language_codes"], "Universal-3.5 Pro does not take Korean")
+        XCTAssertEqual(try query("universal-3-6-pro", hints: ["ko", "en"])["language_codes"], #"["ko","en"]"#)
+        let english = try query("universal-streaming-english", hints: ["de"])
+        XCTAssertEqual(english["format_turns"], "true")
+        XCTAssertNil(english["language_codes"])
+        XCTAssertNil(english["language_detection"], "The English model reports no language")
+    }
+
+    func testTheCatalogOffersEveryStreamingModelWithItsLanguages() {
+        let info = LiveTranscriptionCatalog.info(for: .assemblyAI)
+        XCTAssertEqual(info.models.map(\.id), ["universal-3-6-pro", "universal-3-5-pro", "universal-streaming-multilingual", "universal-streaming-english"])
+        XCTAssertEqual(info.defaultModelID, "universal-3-6-pro")
+        XCTAssertTrue(info.supports(languageCode: "ko", modelID: "universal-3-6-pro"))
+        XCTAssertFalse(info.supports(languageCode: "ko", modelID: "universal-3-5-pro"))
+        XCTAssertFalse(info.supports(languageCode: "de", modelID: "universal-streaming-english"))
+        XCTAssertTrue(info.supports(languageCode: "de", modelID: "universal-streaming-multilingual"))
+        XCTAssertTrue(info.supports(languageCode: "ko", modelID: "a-retired-model"), "An unlisted model falls back to the provider's list")
+    }
+
     func testBeginIsReadyAndTurnsAreReplacedUntilFormattedEnd() {
         var adapter = AssemblyAILiveAdapter()
         XCTAssertTrue(adapter.waitsForReady)

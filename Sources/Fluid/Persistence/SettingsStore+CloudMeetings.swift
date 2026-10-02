@@ -93,9 +93,10 @@ extension SettingsStore {
         // JUDGMENT: a transcript language the provider does not list would end the stream as unsupported;
         // a provider that detects languages transcribes it automatically instead. One that cannot detect
         // (Speechmatics) keeps the language and reports it if the provider refuses.
-        let language = requested.flatMap { info.supports(languageCode: $0) || !info.detectsLanguageAutomatically ? $0 : nil }
+        let model = modelID(provider)
+        let language = requested.flatMap { info.supports(languageCode: $0, modelID: model) || !info.detectsLanguageAutomatically ? $0 : nil }
         return .cloud(
-            LiveTranscriptionConfiguration(provider: provider, modelID: modelID(provider), languageCode: language, languageHints: languageHints),
+            LiveTranscriptionConfiguration(provider: provider, modelID: model, languageCode: language, languageHints: languageHints),
             apiKey: key
         )
     }

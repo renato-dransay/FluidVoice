@@ -173,7 +173,8 @@ struct MeetingCloudSettingsSection: View {
         guard code != MeetingCloudLanguage.automatic else {
             return info.detectsLanguageAutomatically ? nil : "\(info.name) cannot detect the language, so it uses your Primary language from Voice Engine."
         }
-        guard info.supports(languageCode: code) || !info.detectsLanguageAutomatically else {
+        let modelID = LiveTranscriptionPreferences(defaults: .standard).modelID(for: provider)
+        guard info.supports(languageCode: code, modelID: modelID) || !info.detectsLanguageAutomatically else {
             let name = Locale.current.localizedString(forLanguageCode: code) ?? code
             return "\(info.name) does not list \(name), so it detects the language automatically."
         }

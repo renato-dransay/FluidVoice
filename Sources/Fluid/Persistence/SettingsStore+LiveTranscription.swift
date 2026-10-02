@@ -25,10 +25,12 @@ struct LiveTranscriptionPreferences {
         set { self.defaults.set(newValue?.rawValue, forKey: "LiveTranscriptionActiveProvider") }
     }
 
+    /// The chosen model, otherwise the provider's default. A stored model the catalog no longer lists stays
+    /// chosen and is still sent, so an update never switches a user's model silently; the picker shows it
+    /// as no longer listed.
     func modelID(for provider: LiveTranscriptionProviderID) -> String {
-        let info = LiveTranscriptionCatalog.info(for: provider)
-        let stored = self.defaults.string(forKey: "LiveTranscriptionModel.\(provider.rawValue)") ?? ""
-        return info.models.contains { $0.id == stored } ? stored : info.defaultModelID
+        let stored = self.defaults.string(forKey: "LiveTranscriptionModel.\(provider.rawValue)")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? LiveTranscriptionCatalog.info(for: provider).defaultModelID : stored
     }
 
     mutating func setModelID(_ modelID: String, for provider: LiveTranscriptionProviderID) {
@@ -89,7 +91,8 @@ extension SettingsStore {
     func liveProviderLackingLanguage(_ code: String) -> String? {
         guard let provider = self.activeLiveProvider else { return nil }
         let info = LiveTranscriptionCatalog.info(for: provider)
-        return info.supports(languageCode: code) ? nil : info.name
+        let modelID = LiveTranscriptionPreferences(defaults: .standard).modelID(for: provider)
+        return info.supports(languageCode: code, modelID: modelID) ? nil : info.name
     }
 
     /// True when the provider needs one set language (Speechmatics) and no Primary language is set (UX §E4).

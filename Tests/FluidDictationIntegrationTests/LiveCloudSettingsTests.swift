@@ -26,14 +26,30 @@ final class LiveCloudSettingsTests: XCTestCase {
         XCTAssertEqual(LiveTranscriptionPreferences(defaults: defaults).addedProviders, [.soniox])
     }
 
-    func testModelSelectionFallsBackToTheDefaultWhenWithdrawn() throws {
+    /// An update that drops a model from the catalog never switches the user's model silently: the stored
+    /// choice stays and is sent; only an empty value reads as the default.
+    func testAWithdrawnModelStaysSelected() throws {
         let (defaults, cleanup) = try self.defaults()
         defer { cleanup() }
         var preferences = LiveTranscriptionPreferences(defaults: defaults)
         preferences.setModelID("universal-streaming-multilingual", for: .assemblyAI)
         XCTAssertEqual(preferences.modelID(for: .assemblyAI), "universal-streaming-multilingual")
         defaults.set("withdrawn-model", forKey: "LiveTranscriptionModel.assemblyAI")
+        XCTAssertEqual(preferences.modelID(for: .assemblyAI), "withdrawn-model")
+        defaults.set(" ", forKey: "LiveTranscriptionModel.assemblyAI")
         XCTAssertEqual(preferences.modelID(for: .assemblyAI), "universal-3-6-pro")
+    }
+
+    func testLiveDefaultsAreUnchanged() {
+        let expected: [LiveTranscriptionProviderID: String] = [
+            .soniox: "stt-rt-v5", .deepgram: "nova-3", .assemblyAI: "universal-3-6-pro", .elevenLabs: "scribe_v2_realtime",
+            .mistral: "voxtral-mini-transcribe-realtime-2602", .openAI: "gpt-live-transcribe", .speechmatics: "enhanced", .gladia: "solaria-1",
+        ]
+        for provider in LiveTranscriptionProviderID.allCases {
+            let info = LiveTranscriptionCatalog.info(for: provider)
+            XCTAssertEqual(info.defaultModelID, expected[provider], provider.rawValue)
+            XCTAssertEqual(Set(info.models.map(\.id)).count, info.models.count, "No model listed twice: \(provider.rawValue)")
+        }
     }
 
     func testUnknownModelIsNotStored() throws {

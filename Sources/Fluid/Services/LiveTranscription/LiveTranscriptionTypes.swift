@@ -20,6 +20,10 @@ nonisolated enum LiveTranscriptionProviderID: String, Codable, CaseIterable, Ide
 nonisolated struct LiveTranscriptionModel: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
+    /// A short line the model picker shows under the name, such as "English only".
+    var note: String?
+    /// The languages of a model that covers fewer than its provider lists. Nil means the provider's list.
+    var languageCodes: Set<String>? // swiftlint:disable:this discouraged_optional_collection
 }
 
 nonisolated struct LiveTranscriptionProviderInfo: Identifiable, Sendable {
@@ -38,8 +42,13 @@ nonisolated struct LiveTranscriptionProviderInfo: Identifiable, Sendable {
 
     var defaultModelID: String { self.models.first?.id ?? "" }
 
-    func supports(languageCode: String) -> Bool {
-        self.languageCodes?.contains(languageCode) ?? true
+    /// The languages of a model: its own list when it has one, otherwise the provider's.
+    func languageCodes(modelID: String?) -> Set<String>? { // swiftlint:disable:this discouraged_optional_collection
+        self.models.first { $0.id == modelID }?.languageCodes ?? self.languageCodes
+    }
+
+    func supports(languageCode: String, modelID: String? = nil) -> Bool {
+        self.languageCodes(modelID: modelID)?.contains(languageCode) ?? true
     }
 
     /// True when this provider cannot run until a Primary language is set.

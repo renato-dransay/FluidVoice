@@ -19,13 +19,29 @@ nonisolated struct DeepgramLiveAdapter: LiveTranscriptionAdapter {
             URLQueryItem(name: "smart_format", value: "true"),
             // Code-switching works best with short endpointing (Deepgram multilingual guide).
             URLQueryItem(name: "endpointing", value: "100"),
-            URLQueryItem(name: "language", value: configuration.languageCode ?? "multi"),
+            URLQueryItem(name: "language", value: Self.language(for: configuration)),
             // No `mip_opt_out`: opting out of Deepgram's Model Improvement Program forfeits its discount.
         ]
         guard let url = components?.url else { throw LiveTranscriptionError.connectionFailed }
         var request = URLRequest(url: url)
         request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
         return request
+    }
+
+    // EVIDENCE: https://developers.deepgram.com/docs/multilingual-code-switching and
+    // https://developers.deepgram.com/docs/models-languages-overview (checked 2026-10-02): streaming takes
+    // `language=multi` for code-switching; streaming has no `detect_language`. Nova-3's `multi` covers ten
+    // languages, Nova-2's only Spanish and English, and Nova-3 Medical is documented for English only.
+    static let englishOnlyModelIDs: Set<String> = ["nova-3-medical"]
+    static let olderModelID = "nova-2"
+
+    /// The chosen language, otherwise `multi` (Nova-3) or the Primary language (Nova-2, whose `multi` covers
+    /// only Spanish and English); always English for an English-only model.
+    static func language(for configuration: LiveTranscriptionConfiguration) -> String {
+        if self.englishOnlyModelIDs.contains(configuration.modelID) { return "en" }
+        if let language = configuration.languageCode { return language }
+        if configuration.modelID == self.olderModelID, let primary = configuration.languageHints.first { return primary }
+        return "multi"
     }
 
     func finishMessages() -> [LiveTransportMessage] { [.text(#"{"type":"CloseStream"}"#)] }

@@ -2,12 +2,15 @@ import Foundation
 
 nonisolated enum LiveTranscriptionCatalog {
     // EVIDENCE for every entry: docs/superpowers/plans/2026-09-30-live-cloud-provider-protocols.md,
-    // read against each vendor's documentation on 2026-09-30.
+    // read against each vendor's documentation on 2026-09-30. Model lists re-read on 2026-10-02; each
+    // entry names what it checked, and models left out are named with the reason.
     static let all: [LiveTranscriptionProviderInfo] = [
         LiveTranscriptionProviderInfo(
             id: .soniox,
             name: "Soniox",
             // stt-rt-v5 released 2026-06-16; stt-rt-v4 became an alias of it.
+            // EVIDENCE: https://soniox.com/docs/stt/models (checked 2026-10-02): stt-rt-v5 is the only active real-time
+            // model; the v4 and v3 IDs are aliases or retired.
             models: [.init(id: "stt-rt-v5", name: "Soniox v5 Realtime")],
             detectsLanguageAutomatically: true,
             languageCodes: nil,
@@ -17,7 +20,16 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .deepgram,
             name: "Deepgram",
-            models: [.init(id: "nova-3", name: "Nova-3")],
+            // EVIDENCE: https://developers.deepgram.com/docs/models-languages-overview and
+            // https://developers.deepgram.com/docs/model (checked 2026-10-02): Nova-3 and Nova-2 stream on the same
+            // endpoint; Nova-3 Medical takes the same request for English only. Left out: Flux (another endpoint
+            // and protocol, `/v2/listen`), Nova-3 Pharma and the Nova-2 domain variants (niche, English only), and
+            // the legacy models. `DeepgramLiveAdapter.language(for:)` sends each its language.
+            models: [
+                .init(id: "nova-3", name: "Nova-3"),
+                .init(id: "nova-2", name: "Nova-2", note: "Older · Uses your Primary language"),
+                .init(id: "nova-3-medical", name: "Nova-3 Medical", note: "English only · Medical terms", languageCodes: ["en"]),
+            ],
             detectsLanguageAutomatically: true,
             // Nova-3 streaming code-switching covers these with language=multi.
             languageCodes: ["en", "es", "fr", "de", "hi", "ru", "pt", "ja", "it", "nl"],
@@ -27,9 +39,19 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .assemblyAI,
             name: "AssemblyAI",
+            // EVIDENCE: https://www.assemblyai.com/docs/streaming/select-the-speech-model (checked 2026-10-02); the
+            // request differences are in `AssemblyAILiveAdapter`. Left out: the deprecated `u3-*` and
+            // `universal-3-pro` streaming IDs.
             models: [
                 .init(id: "universal-3-6-pro", name: "Universal-3.6 Pro"),
-                .init(id: "universal-streaming-multilingual", name: "Universal-Streaming Multilingual"),
+                .init(id: "universal-3-5-pro", name: "Universal-3.5 Pro", note: "Previous version", languageCodes: AssemblyAILiveAdapter.previousProSteerableLanguageCodes),
+                .init(
+                    id: "universal-streaming-multilingual",
+                    name: "Universal-Streaming Multilingual",
+                    note: "English, Spanish, German, French, Portuguese, Italian",
+                    languageCodes: AssemblyAILiveAdapter.multilingualLanguageCodes
+                ),
+                .init(id: AssemblyAILiveAdapter.englishModelID, name: "Universal-Streaming English", note: "English only", languageCodes: ["en"]),
             ],
             detectsLanguageAutomatically: true,
             // The languages Universal-3.6 Pro can be steered toward; Universal-Streaming Multilingual takes no
@@ -41,6 +63,8 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .elevenLabs,
             name: "ElevenLabs",
+            // EVIDENCE: https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime (checked
+            // 2026-10-02): `scribe_v2_realtime` is the only realtime `model_id`.
             models: [.init(id: "scribe_v2_realtime", name: "Scribe v2 Realtime")],
             // 90+ languages; omitting language_code detects automatically.
             detectsLanguageAutomatically: true,
@@ -51,6 +75,9 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .mistral,
             name: "Mistral",
+            // EVIDENCE: https://docs.mistral.ai/studio/audio/speech_to_text/realtime_transcription (checked 2026-10-02):
+            // the only realtime model the guide uses. The model card's `voxtral-mini-realtime-latest` alias is left
+            // out until the realtime endpoint is confirmed to take it.
             models: [.init(id: "voxtral-mini-transcribe-realtime-2602", name: "Voxtral Mini Transcribe Realtime")],
             // Detects the language on its own; the realtime session takes no language or hints.
             detectsLanguageAutomatically: true,
@@ -65,9 +92,14 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .openAI,
             name: "OpenAI",
+            // EVIDENCE: https://developers.openai.com/api/docs/guides/realtime-transcription and
+            // https://developers.openai.com/api/docs/deprecations (checked 2026-10-02): gpt-live-transcribe is
+            // recommended and gpt-realtime-whisper stays supported. Left out: gpt-transcribe, which transcribes only
+            // after a commit, so one commit at the end of a long dictation outlasts the finish deadline; and
+            // gpt-4o-transcribe, gpt-4o-mini-transcribe and whisper-1, deprecated on 2026-08-26.
             models: [
                 .init(id: "gpt-live-transcribe", name: "GPT Live Transcribe"),
-                .init(id: "gpt-realtime-whisper", name: "GPT Realtime Whisper"),
+                .init(id: "gpt-realtime-whisper", name: "GPT Realtime Whisper", note: "Takes one language"),
             ],
             // Takes `languages` as hints; transcribes without them too.
             detectsLanguageAutomatically: true,
@@ -78,9 +110,11 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .speechmatics,
             name: "Speechmatics",
+            // EVIDENCE: https://docs.speechmatics.com/speech-to-text/models (checked 2026-10-02): realtime takes
+            // `enhanced` and `standard`. Melia 1 realtime is a preview on another endpoint and is left out.
             models: [
                 .init(id: "enhanced", name: "Enhanced"),
-                .init(id: "standard", name: "Standard"),
+                .init(id: "standard", name: "Standard", note: "Faster, less accurate"),
             ],
             // Realtime needs one fixed language per session; `auto` is batch only.
             detectsLanguageAutomatically: false,
@@ -94,6 +128,8 @@ nonisolated enum LiveTranscriptionCatalog {
         LiveTranscriptionProviderInfo(
             id: .gladia,
             name: "Gladia",
+            // EVIDENCE: https://docs.gladia.io/api-reference/v2/live/init (checked 2026-10-02): `solaria-1` is the only
+            // streaming model; Solaria-3 is pre-recorded only.
             models: [.init(id: "solaria-1", name: "Solaria-1")],
             // 100+ languages with automatic detection and code-switching.
             detectsLanguageAutomatically: true,

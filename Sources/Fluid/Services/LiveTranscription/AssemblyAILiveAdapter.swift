@@ -15,6 +15,28 @@ nonisolated struct AssemblyAILiveAdapter: LiveTranscriptionAdapter {
         "af", "ar", "yue", "ca", "da", "nl", "en", "et", "fi", "fr", "gl", "de", "he", "hi", "it", "ja",
         "ko", "zh", "mr", "no", "nn", "fa", "pt", "ro", "ru", "es", "sv", "tr", "ur", "vi", "xh", "zu",
     ]
+    static let previousProSteerableLanguageCodes = steerableLanguageCodes.subtracting([
+        "af", "yue", "et", "gl", "ko", "mr", "nn", "fa", "ro", "ru", "ur", "xh", "zu",
+    ])
+
+    // EVIDENCE: https://www.assemblyai.com/docs/streaming/select-the-speech-model and the `speech_model` enum in
+    // https://www.assemblyai.com/docs/api-reference/specs/streaming.yaml (checked 2026-10-02): the streaming models
+    // are `universal-3-6-pro` (the default), `universal-3-5-pro` (the previous flagship, still supported),
+    // `universal-streaming-multilingual` (en, es, de, fr, pt, it, switching per turn) and
+    // `universal-streaming-english`. Only the two Universal-3 models take `language_codes`; only the two
+    // Universal-Streaming models take `format_turns`; `language_detection` only adds the detected language to
+    // each turn and is not sent to the English model.
+    static let multilingualLanguageCodes: Set<String> = ["en", "es", "de", "fr", "pt", "it"]
+    static let englishModelID = "universal-streaming-english"
+
+    /// The languages a Universal-3 model can be steered toward; nil for a model that takes no list.
+    static func steerableLanguageCodes(for modelID: String) -> Set<String>? { // swiftlint:disable:this discouraged_optional_collection
+        switch modelID {
+        case "universal-3-5-pro": self.previousProSteerableLanguageCodes
+        case let id where id.hasPrefix("universal-3"): self.steerableLanguageCodes
+        default: nil
+        }
+    }
 
     func connectionRequest(apiKey: String, configuration: LiveTranscriptionConfiguration) throws -> URLRequest {
         let languages = configuration.languageCode.map { [$0] } ?? configuration.languageHints
@@ -25,11 +47,13 @@ nonisolated struct AssemblyAILiveAdapter: LiveTranscriptionAdapter {
         ]
         // JUDGMENT: steering toward part of the user's languages would bias against the rest, so a list with
         // any code the model does not take is left out whole and the model code-switches on its own.
-        if configuration.modelID.hasPrefix("universal-3"), !languages.isEmpty, languages.allSatisfy(Self.steerableLanguageCodes.contains),
+        if let steerable = Self.steerableLanguageCodes(for: configuration.modelID), !languages.isEmpty, languages.allSatisfy(steerable.contains),
            let json = try? JSONSerialization.data(withJSONObject: languages), let list = String(bytes: json, encoding: .utf8) {
             items.append(URLQueryItem(name: "language_codes", value: list))
         }
-        if configuration.languageCode == nil { items.append(URLQueryItem(name: "language_detection", value: "true")) }
+        if configuration.languageCode == nil, configuration.modelID != Self.englishModelID {
+            items.append(URLQueryItem(name: "language_detection", value: "true"))
+        }
         if configuration.modelID.hasPrefix("universal-streaming") { items.append(URLQueryItem(name: "format_turns", value: "true")) }
         var components = URLComponents(string: "wss://streaming.assemblyai.com/v3/ws")
         components?.queryItems = items
