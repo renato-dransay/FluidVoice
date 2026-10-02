@@ -45,19 +45,20 @@ struct ProviderAPIKeyField: View {
     }
 }
 
-/// Gives its content `ASRService.blocksSpeechEngineChanges`: true during a recording, a FluidMeet meeting,
-/// a file transcription or a model download, the times a provider's key must not be removed.
+/// Gives its content why a provider's key must not be removed now (`ASRService.blocksSpeechEngineChanges`:
+/// a recording, a FluidMeet meeting, a file transcription or a model download or load), as the help text
+/// to show, or nil when removal may run.
 struct RecordingStateReader<Content: View>: View {
     @ObservedObject var asr: ASRService
-    @ViewBuilder let content: (_ isRecording: Bool) -> Content
+    @ViewBuilder let content: (_ removalBlocker: String?) -> Content
 
     @MainActor
-    init(asr: ASRService? = nil, @ViewBuilder content: @escaping (_ isRecording: Bool) -> Content) {
+    init(asr: ASRService? = nil, @ViewBuilder content: @escaping (_ removalBlocker: String?) -> Content) {
         self.asr = asr ?? AppServices.shared.asr
         self.content = content
     }
 
     var body: some View {
-        self.content(self.asr.blocksSpeechEngineChanges)
+        self.content(self.asr.blocksSpeechEngineChanges ? self.asr.speechEngineChangeBlockerMessage ?? "Finish the current recording first." : nil)
     }
 }

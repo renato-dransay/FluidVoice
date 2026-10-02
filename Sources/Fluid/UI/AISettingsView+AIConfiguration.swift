@@ -111,12 +111,14 @@ extension AIEnhancementSettingsView {
                 self.navigate(to: origin.returnDestination(providerID: providerID))
             }
             .appTheme(self.theme)
+            .background(SheetWindowMarker(identifier: SheetPresentationGate.providerSheetIdentifier))
         }
         .sheet(isPresented: Binding(
             get: { self.managedExternalProviderID != nil },
             set: { if !$0 { self.closeExternalProviderManager() } }
         )) {
             self.externalProviderManager.appTheme(self.theme)
+                .background(SheetWindowMarker(identifier: SheetPresentationGate.providerSheetIdentifier))
         }
     }
 

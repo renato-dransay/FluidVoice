@@ -47,6 +47,10 @@ struct CloudEngineActivation {
         } catch is CancellationError {
             return .cancelled
         } catch {
+            // The key was replaced while the check ran: the failure says nothing about the saved key.
+            guard self.keyStore.speechAPIKey(for: providerID) == apiKey else {
+                return .failed(message: Self.failure(name, CloudActivationError.settingsChanged.localizedDescription), keyRejected: false)
+            }
             let rejected = (error as? CloudTranscriptionError) == .authentication
             if rejected {
                 self.keyStore.clearSpeechVerification(for: providerID, rejectedKey: apiKey)

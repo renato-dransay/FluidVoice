@@ -163,8 +163,10 @@ extension AIEnhancementSettingsView {
     /// another section of this view is shown; the section change brings it back here. Otherwise it is
     /// consumed at once: while a provider sheet is already open here it expires instead of opening later
     /// unprompted. The sheet is presented once no other sheet is shown (the request often comes from a
-    /// sheet that is still closing, and macOS drops a sheet presented meanwhile); a presentation that
-    /// was dropped anyway resets the state, so it never blocks a later request, and is tried once more.
+    /// sheet that is still closing, and macOS drops a sheet presented meanwhile); when another sheet stays
+    /// up past the wait, the request is dropped rather than presented over it. A presentation that macOS
+    /// dropped anyway (its own marked sheet never appeared) resets the state, so it never blocks a later
+    /// request, and is tried once more.
     func openRequestedProviderSheet() {
         guard self.selectedConfigurationSection == .providers,
               let destination = AppNavigationRouter.shared.consumeRequestedProviderSetup()
@@ -176,12 +178,19 @@ extension AIEnhancementSettingsView {
               )
         else { return }
         Task { @MainActor in
-            for _ in 0 ..< 2 {
-                _ = await SheetPresentationGate.waitUntilNoSheet()
-                guard self.selectedConfigurationSection == .providers, !self.isProviderSheetOpen else { return }
-                self.presentProviderSheet(route)
-                if await SheetPresentationGate.waitForSheet() { return }
-                self.resetDroppedProviderSheet()
+            let outcome = await SheetPresentationGate.present(
+                waitUntilClear: { await SheetPresentationGate.waitUntilNoSheet() },
+                canPresent: { self.selectedConfigurationSection == .providers && !self.isProviderSheetOpen },
+                present: { self.presentProviderSheet(route) },
+                waitForOwnSheet: {
+                    await SheetPresentationGate.waitForSheet {
+                        SheetPresentationGate.isSheetShown(identifiedBy: SheetPresentationGate.providerSheetIdentifier)
+                    }
+                },
+                reset: { self.resetDroppedProviderSheet() }
+            )
+            if outcome != .shown {
+                DebugLogger.shared.info("Routed provider sheet not shown: \(outcome)", source: "AIEnhancementSettingsView")
             }
         }
     }

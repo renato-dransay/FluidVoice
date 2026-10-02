@@ -70,7 +70,7 @@ extension AIEnhancementSettingsView {
             self.providerModelsGroup(for: providerID)
         }
         if capabilities.contains(.cloudTranscription) || capabilities.contains(.liveTranscription) {
-            self.providerUsedForGroup(capabilities: capabilities)
+            self.providerUsedForGroup(for: providerID, capabilities: capabilities)
         }
     }
 
@@ -98,15 +98,15 @@ extension AIEnhancementSettingsView {
             if self.viewModel.hasSeparateSpeechKey(providerID) {
                 self.twoKeysNotice(for: providerID, name: name)
             }
-            RecordingStateReader { isRecording in
+            RecordingStateReader { removalBlocker in
                 ProviderAPIKeyField(
                     text: self.apiKeyBinding(for: providerID),
                     hasSavedKey: self.viewModel.hasStoredAPIKey(for: providerID),
                     isOptional: !AIProviderCatalog.requiresAPIKey(providerID),
                     link: AIProviderCatalog.keyLink(for: providerID),
                     removeKey: { self.requestProviderRemoval(providerID, removesProvider: false) },
-                    isRemovalDisabled: isRecording,
-                    removalHelp: isRecording ? "Finish the current recording first." : "",
+                    isRemovalDisabled: removalBlocker != nil,
+                    removalHelp: removalBlocker ?? "",
                     onFocus: { self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
                 )
             }
@@ -124,7 +124,7 @@ extension AIEnhancementSettingsView {
             if !isSpeechOnly, !isCustom {
                 self.advancedServerURL(for: providerID)
             }
-            RecordingStateReader { isRecording in
+            RecordingStateReader { removalBlocker in
                 Button(role: .destructive) {
                     self.requestProviderRemoval(providerID, removesProvider: true)
                 } label: {
@@ -133,8 +133,8 @@ extension AIEnhancementSettingsView {
                 .fluidGlassAction()
                 .foregroundStyle(.red)
                 .tint(.red)
-                .disabled(isRecording)
-                .help(isRecording ? "Finish the current recording first." : "")
+                .disabled(removalBlocker != nil)
+                .help(removalBlocker ?? "")
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
@@ -325,17 +325,21 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private func providerUsedForGroup(capabilities: Set<ProviderCapability>) -> some View {
+    private func providerUsedForGroup(for providerID: String, capabilities: Set<ProviderCapability>) -> some View {
         FluidManagementGroup(title: "Used for") {
-            if capabilities.contains(.cloudTranscription) {
+            if capabilities.contains(.cloudTranscription),
+               let destination = AppNavigationDestination.usedFor(.cloudTranscription, providerID: providerID)
+            {
                 FluidManagementRow(title: "Cloud transcription", detail: "Choose its model in Voice Engine.") {
-                    Button("Open Voice Engine") { self.leaveProviderManager(for: .voiceEngine(tab: .cloud)) }
+                    Button("Open Voice Engine") { self.leaveProviderManager(for: destination) }
                         .fluidGlassAction()
                 }
             }
-            if capabilities.contains(.liveTranscription) {
+            if capabilities.contains(.liveTranscription),
+               let destination = AppNavigationDestination.usedFor(.liveTranscription, providerID: providerID)
+            {
                 FluidManagementRow(title: "Live", detail: "Choose its model and test it in Voice Engine.") {
-                    Button("Open Voice Engine") { self.leaveProviderManager(for: .voiceEngine(tab: .liveCloud)) }
+                    Button("Open Voice Engine") { self.leaveProviderManager(for: destination) }
                         .fluidGlassAction()
                 }
             }
@@ -372,8 +376,9 @@ extension AIEnhancementSettingsView {
 
     func performProviderRemoval(_ removal: PendingProviderRemoval) {
         self.pendingProviderRemoval = nil
-        guard !AppServices.shared.asr.blocksSpeechEngineChanges else {
-            self.managedProviderResult = .failure("Finish the current recording first.")
+        let asr = AppServices.shared.asr
+        guard !asr.blocksSpeechEngineChanges else {
+            self.managedProviderResult = .failure(asr.speechEngineChangeBlockerMessage ?? "Finish the current recording first.")
             return
         }
         let providerID = removal.providerID

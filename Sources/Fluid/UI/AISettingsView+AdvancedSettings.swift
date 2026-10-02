@@ -462,8 +462,19 @@ extension AIEnhancementSettingsView {
     }
 
     private var isCloudDictationConfigured: Bool {
+        self.hasOpenRouterSpeechKey && CloudAudioDictationModel.isListed(self.settings.cloudDictationModelID)
+    }
+
+    private var hasOpenRouterSpeechKey: Bool {
         !self.settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && CloudAudioDictationModel.isListed(self.settings.cloudDictationModelID)
+    }
+
+    /// Why the style test cannot run while OpenRouter applies styles itself, one remedy per message
+    /// (COPY-2): the key first, then the style model.
+    static func combinedCloudPromptTestBlocker(hasOpenRouterKey: Bool, hasStyleModel: Bool) -> String? {
+        if !hasOpenRouterKey { return ProviderKeyMessage.missing(providerName: "OpenRouter") }
+        if !hasStyleModel { return "Choose a style model in Voice Engine to test your style." }
+        return nil
     }
 
     private var isCombinedCloudPromptEditor: Bool {
@@ -1799,7 +1810,10 @@ extension AIEnhancementSettingsView {
 
                             if !canTest {
                                 Text(self.isCombinedCloudPromptEditor
-                                    ? "Add an OpenRouter API key in AI Providers and choose a style model in Voice Engine to test your style."
+                                    ? Self.combinedCloudPromptTestBlocker(
+                                        hasOpenRouterKey: self.hasOpenRouterSpeechKey,
+                                        hasStyleModel: CloudAudioDictationModel.isListed(self.settings.cloudDictationModelID)
+                                    ) ?? ""
                                     : "Choose a provider and model to test your prompt.")
                                     .font(.fluidSystem(.caption2))
                                     .foregroundStyle(.secondary)

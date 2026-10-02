@@ -10,7 +10,8 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-provider-setup.XXXXXX)
 # Exercise the exact production removal, key save and default methods against the same isolated
 # settings doubles.
-{ echo 'extension AIEnhancementSettingsViewModel {'
+{ echo 'import Foundation'
+  echo 'extension AIEnhancementSettingsViewModel {'
   sed -n '/^    func deleteCurrentProvider() -> Bool {/,/^    func saveEditedProvider() {/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
   sed -n '/^    func saveManagedProviderBeforeClosing(/,/^    private func selectProviderForUse(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
   sed -n '/^    func saveProviderAPIKey(for providerID: String? = nil, allowsRemoval: Bool = false) -> Bool {/,/^    func createDraftProvider(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'

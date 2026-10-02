@@ -26,6 +26,9 @@ struct LiveEngineActivation {
             try await check(provider, apiKey)
         } catch is CancellationError {
             return .cancelled
+        } catch where self.keyStore.speechAPIKey(for: providerID) != apiKey {
+            // The key was replaced while the check ran: the failure says nothing about the saved key.
+            return .failed(message: Self.failure(name, CloudActivationError.settingsChanged.localizedDescription), keyRejected: false)
         } catch let error as LiveTranscriptionError {
             let rejected = error == .authentication
             if rejected {

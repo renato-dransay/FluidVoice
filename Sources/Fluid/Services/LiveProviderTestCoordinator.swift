@@ -29,11 +29,12 @@ final class LiveProviderTestCoordinator: ObservableObject {
             .sink { [weak self] change in self?.handleProviderAPIKeyChange(change) }
     }
 
-    /// A pass describes the key that was tested. A test without a key could only fail, so it stops with the key.
+    /// A pass describes the key that was tested, and an armed test was started for that key: any change
+    /// to the provider's key forgets the pass and disarms its test (KEY-5).
     func handleProviderAPIKeyChange(_ change: ProviderAPIKeyChange) {
         guard let provider = ProviderRegistry.liveProviderID(for: change.providerID) else { return }
         self.forgetPassedTest(for: provider)
-        if change.removed, self.armedProvider == provider { self.disarm() }
+        if self.armedProvider == provider { self.disarm() }
     }
 
     var overrideConfiguration: LiveTranscriptionConfiguration? {

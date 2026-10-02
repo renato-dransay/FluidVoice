@@ -56,7 +56,7 @@ final class LiveProviderTestCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.hasPassed(.deepgram))
     }
 
-    func testAKeyChangeForgetsThePassAndARemovalDisarms() throws {
+    func testAKeyChangeForgetsThePassAndDisarmsTheProvidersTest() throws {
         let center = NotificationCenter()
         let coordinator = LiveProviderTestCoordinator(defaults: try self.defaults(), notificationCenter: center)
         for provider in [LiveTranscriptionProviderID.soniox, .deepgram] {
@@ -68,17 +68,21 @@ final class LiveProviderTestCoordinatorTests: XCTestCase {
             center.post(name: .providerAPIKeyChanged, object: nil, userInfo: change.userInfo)
         }
 
-        post("deepgram", removed: false)
-        XCTAssertFalse(coordinator.hasPassed(.deepgram), "A replaced key is untested again")
-        XCTAssertTrue(coordinator.hasPassed(.soniox))
-        XCTAssertEqual(coordinator.armedProvider, .deepgram, "A replaced key keeps the test armed")
+        post("soniox", removed: false)
+        XCTAssertFalse(coordinator.hasPassed(.soniox), "A replaced key is untested again")
+        XCTAssertTrue(coordinator.hasPassed(.deepgram))
+        XCTAssertEqual(coordinator.armedProvider, .deepgram, "Another provider's key change keeps the test armed")
 
         post("groq", removed: true)
         XCTAssertEqual(coordinator.armedProvider, .deepgram, "A provider without Live changes nothing")
 
+        post("deepgram", removed: false)
+        XCTAssertFalse(coordinator.hasPassed(.deepgram))
+        XCTAssertNil(coordinator.armedProvider, "A replaced key disarms the test that was armed for the old key")
+
+        coordinator.arm(.deepgram)
         post("deepgram", removed: true)
         XCTAssertNil(coordinator.armedProvider, "A test without a key could only fail")
-        XCTAssertTrue(coordinator.hasPassed(.soniox))
     }
 
     private func defaults() throws -> UserDefaults {

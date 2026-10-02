@@ -459,11 +459,20 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         let styleModels = try await client.validateAudioDictation(apiKey: apiKey)
         let speech = Set(speechModels.map(\.id))
         let style = Set(styleModels.map(\.id))
+        // Lists fetched with a key that was replaced meanwhile describe the old key: they are not kept.
+        guard Self.isStillSavedKey(apiKey, current: self.settings.speechAPIKey(for: CloudTranscriptionPreferences.defaultProviderID)) else {
+            return (speech, style)
+        }
         self.validatedOpenRouterSpeechModelIDs = speech
         self.hasValidatedOpenRouterSpeechModels = true
         self.validatedOpenRouterStyleModelIDs = style
         self.hasValidatedOpenRouterStyleModels = true
         return (speech, style)
+    }
+
+    /// True while the key a request sent is still the saved speech key, so its result may be kept.
+    static func isStillSavedKey(_ requestKey: String, current: String) -> Bool {
+        !requestKey.isEmpty && requestKey == current
     }
 
     /// `Refresh models`: fetches OpenRouter's catalogs again and checks which models this key can use.
@@ -486,7 +495,9 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
-            if (error as? CloudTranscriptionError) == .authentication {
+            if (error as? CloudTranscriptionError) == .authentication,
+               Self.isStillSavedKey(apiKey, current: self.settings.speechAPIKey(for: providerID))
+            {
                 self.cloudRejectedKeys.insert(providerID)
                 self.settings.clearSpeechVerification(for: providerID, rejectedKey: apiKey)
             }
@@ -631,5 +642,35 @@ extension ASRService {
             || self.hasActiveModelPreparation
             || self.isCancellingModelPreparation
             || (!self.isAsrReady && (self.isDownloadingModel || self.isLoadingModel))
+    }
+
+    /// Why provider keys cannot be removed now, in words that name the activity that blocks it, or nil.
+    var speechEngineChangeBlockerMessage: String? {
+        Self.speechEngineChangeBlockerMessage(
+            isRecording: self.isRunning || self.activeExclusiveActivity == .dictation,
+            activity: self.activeExclusiveActivity,
+            isDownloadingModel: self.downloadingModelId != nil || self.hasActiveModelDownload
+                || (!self.isAsrReady && self.isDownloadingModel),
+            isPreparingModel: self.hasActiveModelPreparation || self.isCancellingModelPreparation
+                || (!self.isAsrReady && self.isLoadingModel)
+        )
+    }
+
+    static func speechEngineChangeBlockerMessage(
+        isRecording: Bool,
+        activity: ASRExclusiveActivity?,
+        isDownloadingModel: Bool,
+        isPreparingModel: Bool
+    ) -> String? {
+        if isRecording { return "Finish the current recording first." }
+        switch activity {
+        case .meeting: return "Finish the current meeting first."
+        case .fileTranscription, .localAPI: return "Finish the current transcription first."
+        case .dictation: return "Finish the current recording first."
+        case .modelMaintenance, nil: break
+        }
+        if isDownloadingModel { return "Wait for the model download to finish." }
+        if isPreparingModel || activity == .modelMaintenance { return "Wait for the speech model to finish loading." }
+        return nil
     }
 }

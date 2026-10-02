@@ -522,7 +522,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             let stored = (self.settings.providerAPIKeys[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let keepsSavedKey = Self.keepsSavedKeyWhenFieldIsEmptied(
                 requiresAPIKey: AIProviderCatalog.requiresAPIKey(target),
-                isLocalServer: ModelRepository.shared.isLocalEndpoint(self.textProviderBaseURL(for: target))
+                isLocalServer: Self.isLocalServerForKeyRemoval(
+                    baseURL: self.textProviderBaseURL(for: target),
+                    isCustomProvider: !ModelRepository.shared.isBuiltIn(target)
+                )
             )
             if draft.isEmpty, !stored.isEmpty, !allowsRemoval, keepsSavedKey {
                 self.providerAPIKeys[key] = stored
@@ -562,6 +565,23 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     /// too). Only a local server's optional key goes with an emptied field.
     static func keepsSavedKeyWhenFieldIsEmptied(requiresAPIKey: Bool, isLocalServer: Bool) -> Bool {
         requiresAPIKey || !isLocalServer
+    }
+
+    /// Whether KEY-6 treats the provider's server as local, so its key is optional and goes with an
+    /// emptied field. A custom provider counts as local only on this Mac (loopback): a server elsewhere on
+    /// the network, such as 10.x or 192.168.x, may well need its key. Built-in providers keep the wider
+    /// rule of `ModelRepository.isLocalEndpoint`.
+    static func isLocalServerForKeyRemoval(baseURL: String, isCustomProvider: Bool) -> Bool {
+        isCustomProvider ? self.isLoopbackEndpoint(baseURL) : ModelRepository.shared.isLocalEndpoint(baseURL)
+    }
+
+    /// True for `localhost`, an IPv4 address in 127.0.0.0/8 or the IPv6 loopback `::1`.
+    static func isLoopbackEndpoint(_ urlString: String) -> Bool {
+        guard let host = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines))?.host?.lowercased() else { return false }
+        let bareHost = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if bareHost == "localhost" || bareHost == "::1" { return true }
+        let octets = bareHost.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        return octets.count == 4 && octets.allSatisfy { ($0 ?? -1) >= 0 && ($0 ?? 256) <= 255 } && octets[0] == 127
     }
 
     func createDraftProvider(named name: String) -> String? {

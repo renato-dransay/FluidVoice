@@ -3,6 +3,14 @@ import SwiftUI
 /// Which live providers the Live cloud tab lists as connected: those with a saved key, plus the stored
 /// active provider even when its key is gone. Every other live provider is "Not set up".
 enum LiveCloudProviderGroups {
+    /// The groups the tab shows: `activeProvider` is the stored live provider (`storedLiveProvider`), not
+    /// the usable one, so an active provider whose key is gone stays under Connected with "API key missing".
+    static func make(defaults: UserDefaults, hasKey: (LiveTranscriptionProviderID) -> Bool)
+        -> (connected: [LiveTranscriptionProviderID], notSetUp: [LiveTranscriptionProviderID])
+    {
+        self.make(hasKey: hasKey, activeProvider: SettingsStore.storedLiveProvider(in: defaults))
+    }
+
     static func make(
         hasKey: (LiveTranscriptionProviderID) -> Bool,
         activeProvider: LiveTranscriptionProviderID?
@@ -25,10 +33,7 @@ struct LiveCloudSettingsView: View {
     @State private var showsAllNotSetUp = false
 
     private var groups: (connected: [LiveTranscriptionProviderID], notSetUp: [LiveTranscriptionProviderID]) {
-        LiveCloudProviderGroups.make(
-            hasKey: { !self.settings.liveTranscriptionAPIKey(for: $0).isEmpty },
-            activeProvider: self.settings.activeLiveProvider
-        )
+        LiveCloudProviderGroups.make(defaults: .standard, hasKey: { !self.settings.liveTranscriptionAPIKey(for: $0).isEmpty })
     }
 
     var body: some View {
@@ -131,7 +136,8 @@ struct LiveCloudSettingsView: View {
 
     private func row(for provider: LiveTranscriptionProviderID) -> some View {
         let info = LiveTranscriptionCatalog.info(for: provider)
-        let isActive = self.settings.activeLiveProvider == provider
+        // The stored provider: it stays marked active while its key is missing, and offers to set it up.
+        let isActive = self.settings.storedLiveProvider == provider
         let hasKey = !self.settings.liveTranscriptionAPIKey(for: provider).isEmpty
         let needsLanguage = self.settings.liveProviderNeedsPrimaryLanguage(provider)
         let isProblem = !hasKey || needsLanguage || self.viewModel.liveRejectedKeys.contains(provider)

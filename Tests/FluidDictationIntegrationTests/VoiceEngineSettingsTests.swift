@@ -447,6 +447,86 @@ final class VoiceEngineSettingsTests: XCTestCase {
         XCTAssertNil(LiveTranscriptionPreferences(defaults: self.defaults).activeProvider)
     }
 
+    /// A rejection of a key that was replaced while the check ran says nothing about the saved key: no
+    /// "Key rejected", and the new key's record stays.
+    func testARejectionOfAKeyReplacedMidCheckIsNotReportedAsRejected() async throws {
+        let store = self.store(FakeKeychain(["deepgram": "dg-old", "soniox": "sx-old"]))
+
+        let live = await LiveEngineActivation(keyStore: store).activate(
+            .deepgram,
+            check: { _, _ in
+                try store.setProviderAPIKey("dg-new", for: "deepgram")
+                XCTAssertTrue(store.recordSpeechVerification(for: "deepgram", checkedKey: "dg-new"))
+                throw LiveTranscriptionError.authentication
+            },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(live, .failed(message: "Couldn't activate Deepgram: Voice settings changed during the check. Try again.", keyRejected: false))
+        XCTAssertTrue(store.isSpeechVerified("deepgram"), "The new key's record is not cleared by the old key's rejection")
+
+        let cloud = await CloudEngineActivation(keyStore: store).activate(
+            "soniox",
+            check: { _ in
+                try store.setProviderAPIKey("sx-new", for: "soniox")
+                throw CloudTranscriptionError.authentication
+            },
+            canSwitch: { true }
+        )
+        XCTAssertEqual(cloud, .failed(message: "Couldn't activate Soniox: Voice settings changed during the check. Try again.", keyRejected: false))
+        XCTAssertEqual(CloudTranscriptionPreferences(defaults: self.defaults).source, .local)
+    }
+
+    func testResultsAreKeptOnlyForTheKeyThatIsStillSaved() {
+        XCTAssertTrue(VoiceEngineSettingsViewModel.isStillSavedKey("or-key", current: "or-key"))
+        XCTAssertFalse(VoiceEngineSettingsViewModel.isStillSavedKey("or-old", current: "or-new"))
+        XCTAssertFalse(VoiceEngineSettingsViewModel.isStillSavedKey("or-old", current: ""))
+        XCTAssertFalse(VoiceEngineSettingsViewModel.isStillSavedKey("", current: ""))
+    }
+
+    func testRemovalHelpNamesWhatBlocksIt() {
+        let message = { (recording: Bool, activity: ASRExclusiveActivity?, downloading: Bool, preparing: Bool) in
+            ASRService.speechEngineChangeBlockerMessage(isRecording: recording, activity: activity, isDownloadingModel: downloading, isPreparingModel: preparing)
+        }
+        XCTAssertEqual(message(true, .dictation, false, false), "Finish the current recording first.")
+        XCTAssertEqual(message(false, .meeting, false, false), "Finish the current meeting first.")
+        XCTAssertEqual(message(false, .fileTranscription, false, false), "Finish the current transcription first.")
+        XCTAssertEqual(message(false, .localAPI, false, false), "Finish the current transcription first.")
+        XCTAssertEqual(message(false, nil, true, false), "Wait for the model download to finish.")
+        XCTAssertEqual(message(false, .modelMaintenance, false, false), "Wait for the speech model to finish loading.")
+        XCTAssertEqual(message(false, nil, false, true), "Wait for the speech model to finish loading.")
+        XCTAssertNil(message(false, nil, false, false))
+    }
+
+    func testTheUsedForCloudLineShowsThatProviderOnTheCloudTab() {
+        XCTAssertEqual(AppNavigationDestination.usedFor(.cloudTranscription, providerID: "deepgram"), .voiceEngine(tab: .cloud, cloudProviderID: "deepgram"))
+        XCTAssertEqual(AppNavigationDestination.usedFor(.liveTranscription, providerID: "deepgram"), .voiceEngine(tab: .liveCloud))
+        XCTAssertNil(AppNavigationDestination.usedFor(.text, providerID: "deepgram"))
+    }
+
+    func testTheStyleTestNamesOneRemedyAtATime() {
+        XCTAssertEqual(
+            AIEnhancementSettingsView.combinedCloudPromptTestBlocker(hasOpenRouterKey: false, hasStyleModel: false),
+            "Add an OpenRouter API key in AI Providers."
+        )
+        XCTAssertEqual(
+            AIEnhancementSettingsView.combinedCloudPromptTestBlocker(hasOpenRouterKey: true, hasStyleModel: false),
+            "Choose a style model in Voice Engine to test your style."
+        )
+        XCTAssertNil(AIEnhancementSettingsView.combinedCloudPromptTestBlocker(hasOpenRouterKey: true, hasStyleModel: true))
+    }
+
+    func testTheBenchmarkNamesTheModelThatServedTheRequest() {
+        let speech = CloudTranscriptionConfiguration(providerID: "openrouter", modelID: "openai/whisper-large-v3")
+        XCTAssertEqual(ASRService.cloudModelIDServingRequest(speech), "openai/whisper-large-v3")
+        let styled = CloudTranscriptionConfiguration(
+            providerID: "openrouter",
+            modelID: "openai/whisper-large-v3",
+            audioDictation: CloudAudioDictationInstructions(modelID: "google/gemini-3.8-flash", promptText: "Tidy")
+        )
+        XCTAssertEqual(ASRService.cloudModelIDServingRequest(styled), "google/gemini-3.8-flash")
+        XCTAssertNil(ASRService.cloudModelIDServingRequest(nil))
+    }
+
     func testNeitherEngineActivatesWhileTheOtherEnginesCheckRuns() {
         typealias Model = VoiceEngineSettingsViewModel
         let cloudRunning = Model.isEngineCheckRunning(cloudProviderBeingChecked: "openrouter", liveProviderBeingChecked: nil)

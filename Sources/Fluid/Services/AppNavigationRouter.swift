@@ -69,6 +69,16 @@ enum AppNavigationDestination: Equatable {
         case .voiceEngine: .voiceEngine
         }
     }
+
+    /// Where a Manage sheet's "Used for" line sends the user (AIP-5): the Voice Engine tab for that
+    /// capability, showing this provider on the Cloud tab. Nil for Text, which has no such line.
+    static func usedFor(_ capability: ProviderCapability, providerID: String) -> Self? {
+        switch capability {
+        case .cloudTranscription: .voiceEngine(tab: .cloud, cloudProviderID: providerID)
+        case .liveTranscription: .voiceEngine(tab: .liveCloud)
+        case .text: nil
+        }
+    }
 }
 
 /// The sheet AI Providers opens for a provider request (NAV-2, NAV-3).

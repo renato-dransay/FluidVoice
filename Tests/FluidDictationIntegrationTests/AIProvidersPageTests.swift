@@ -407,6 +407,30 @@ final class AIProvidersPageTests: XCTestCase {
         XCTAssertNil(ProviderStatus.verifying.systemImage)
     }
 
+    // MARK: - Emptying the key field (KEY-6)
+
+    /// A custom provider keeps its key when the field is emptied unless its server is on this Mac: a
+    /// server elsewhere on the network (10.x, 192.168.x, 172.16-31.x) may need its key.
+    func testACustomProviderOnTheNetworkKeepsItsKeyWhenTheFieldIsEmptied() {
+        typealias Model = AIEnhancementSettingsViewModel
+        func keepsKey(_ baseURL: String, custom: Bool) -> Bool {
+            Model.keepsSavedKeyWhenFieldIsEmptied(
+                requiresAPIKey: false,
+                isLocalServer: Model.isLocalServerForKeyRemoval(baseURL: baseURL, isCustomProvider: custom)
+            )
+        }
+
+        for url in ["http://192.168.1.5:8080/v1", "http://10.0.0.2/v1", "http://172.20.0.3:1234/v1", "https://api.example.com/v1"] {
+            XCTAssertTrue(keepsKey(url, custom: true), url)
+        }
+        for url in ["http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://127.1.2.3/v1", "http://[::1]:8080/v1"] {
+            XCTAssertFalse(keepsKey(url, custom: true), url)
+        }
+        XCTAssertFalse(keepsKey("http://192.168.1.5:11434/v1", custom: false), "Built-in local servers keep the wider rule")
+        XCTAssertFalse(Model.isLoopbackEndpoint("http://127.example.com/v1"))
+        XCTAssertFalse(Model.isLoopbackEndpoint("http://127.0.0.256/v1"))
+    }
+
     // MARK: - Live cloud tab (VE-6)
 
     func testTheLiveTabConnectsProvidersByKeyPlusTheStoredActiveProvider() {
@@ -417,5 +441,25 @@ final class AIProvidersPageTests: XCTestCase {
         XCTAssertEqual(Set(groups.connected + groups.notSetUp), Set(LiveTranscriptionProviderID.allCases))
         XCTAssertTrue(Set(groups.connected).isDisjoint(with: groups.notSetUp))
         XCTAssertEqual(LiveCloudProviderGroups.make(hasKey: { _ in false }, activeProvider: nil).connected, [])
+    }
+
+    /// VE-6: the tab groups by the stored live provider, not the usable one, so an active provider whose key
+    /// is gone stays under Connected (where its row offers `Set up in AI Providers`).
+    func testTheLiveTabKeepsTheStoredActiveProviderConnectedWithoutItsKey() {
+        var cloud = CloudTranscriptionPreferences(defaults: self.defaults)
+        cloud.source = .liveCloud
+        var live = LiveTranscriptionPreferences(defaults: self.defaults)
+        live.activeProvider = .soniox
+
+        XCTAssertEqual(SettingsStore.storedLiveProvider(in: self.defaults), .soniox)
+        XCTAssertNil(
+            SettingsStore.usableLiveProvider(storedSource: .liveCloud, activeProvider: .soniox, apiKey: { _ in "" }),
+            "Without its key the provider is not usable, yet the tab still shows it"
+        )
+        XCTAssertEqual(LiveCloudProviderGroups.make(defaults: self.defaults, hasKey: { _ in false }).connected, [.soniox])
+
+        cloud.source = .local
+        XCTAssertNil(SettingsStore.storedLiveProvider(in: self.defaults))
+        XCTAssertEqual(LiveCloudProviderGroups.make(defaults: self.defaults, hasKey: { _ in false }).connected, [])
     }
 }

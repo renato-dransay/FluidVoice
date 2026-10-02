@@ -219,6 +219,65 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertTrue(shown)
     }
 
+    func testARoutedSheetIsNotPresentedAfterTheWaitTimesOut() async {
+        var presented = 0
+        var resets = 0
+        let outcome = await SheetPresentationGate.present(
+            waitUntilClear: { false },
+            canPresent: { true },
+            present: { presented += 1 },
+            waitForOwnSheet: { true },
+            reset: { resets += 1 }
+        )
+        XCTAssertEqual(outcome, .dropped)
+        XCTAssertEqual(presented, 0, "Another sheet stayed up: nothing is presented over it")
+        XCTAssertEqual(resets, 0)
+
+        let lapsed = await SheetPresentationGate.present(
+            waitUntilClear: { true },
+            canPresent: { false },
+            present: { presented += 1 },
+            waitForOwnSheet: { true },
+            reset: { resets += 1 }
+        )
+        XCTAssertEqual(lapsed, .dropped)
+        XCTAssertEqual(presented, 0)
+    }
+
+    func testARoutedSheetIsConfirmedOnlyByItsOwnSheetAndRetriedOnce() async {
+        var presented = 0
+        var resets = 0
+        var ownSheetChecks = 0
+        let outcome = await SheetPresentationGate.present(
+            waitUntilClear: { true },
+            canPresent: { true },
+            present: { presented += 1 },
+            waitForOwnSheet: {
+                ownSheetChecks += 1
+                return ownSheetChecks == 2
+            },
+            reset: { resets += 1 }
+        )
+        XCTAssertEqual(outcome, .shown)
+        XCTAssertEqual(presented, 2)
+        XCTAssertEqual(resets, 1, "The dropped first presentation left no state behind")
+
+        let neverShown = await SheetPresentationGate.present(
+            waitUntilClear: { true },
+            canPresent: { true },
+            present: { presented += 1 },
+            waitForOwnSheet: { false },
+            reset: { resets += 1 }
+        )
+        XCTAssertEqual(neverShown, .notShown)
+        XCTAssertEqual(presented, 4)
+        XCTAssertEqual(resets, 3)
+        XCTAssertFalse(
+            SheetPresentationGate.isSheetShown(identifiedBy: SheetPresentationGate.providerSheetIdentifier),
+            "No provider sheet is shown in the test host"
+        )
+    }
+
     func testInactiveSettingsSearchResignsFirstResponder() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 240, height: 80),

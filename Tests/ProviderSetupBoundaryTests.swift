@@ -397,6 +397,14 @@ final class AIEnhancementSettingsViewModel {
             key6.saveProviderAPIKey(for: remote.id) && key6.persistedKeys[remote.id] == "remote-key",
             "A custom provider on a remote server keeps its key when the field is emptied"
         )
+        let lan = SettingsStore.SavedProvider(name: "LAN", baseURL: "http://192.168.1.20:8080/v1", models: [])
+        key6.savedProviders.append(lan)
+        key6.settings.storedKeys[lan.id] = "lan-key"
+        key6.providerAPIKeys[lan.id] = ""
+        check(
+            key6.saveProviderAPIKey(for: lan.id) && key6.persistedKeys[lan.id] == "lan-key",
+            "A custom provider elsewhere on the network keeps its key when the field is emptied"
+        )
         let local = SettingsStore.SavedProvider(name: "Local", baseURL: "http://localhost:1234/v1", models: [])
         key6.savedProviders.append(local)
         key6.settings.storedKeys[local.id] = "local-key"

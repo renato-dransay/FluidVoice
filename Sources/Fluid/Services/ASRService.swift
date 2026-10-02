@@ -1456,7 +1456,8 @@ final class ASRService: ObservableObject {
             return (provider: "live-\(live.configuration.provider.rawValue)", model: live.configuration.modelID)
         }
         if self.isUsingCloudTranscription {
-            let modelID = self.frozenCloudConfiguration?.modelID ?? (self.transcriptionProvider as? CloudTranscriptionProvider)?.configuration.modelID
+            let modelID = Self.cloudModelIDServingRequest(self.frozenCloudConfiguration)
+                ?? (self.transcriptionProvider as? CloudTranscriptionProvider)?.configuration.modelID
             return (provider: CloudTranscriptionClients.historyProviderName(for: self.activeCloudProviderID), model: modelID ?? self.transcriptionProvider.name)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
@@ -1464,6 +1465,12 @@ final class ASRService: ObservableObject {
             provider: selectedModel.provider.rawValue.lowercased(),
             model: selectedModel.rawValue
         )
+    }
+
+    /// The model a Cloud request is sent to: the style model when OpenRouter applies the Cleanup Style in
+    /// the same request (`audioDictation`), otherwise the speech model.
+    nonisolated static func cloudModelIDServingRequest(_ configuration: CloudTranscriptionConfiguration?) -> String? {
+        configuration?.audioDictation?.modelID ?? configuration?.modelID
     }
 
     private func elapsedMilliseconds(since start: TimeInterval?) -> Int {
@@ -3842,6 +3849,9 @@ final class ASRService: ObservableObject {
                 self.frozenCloudSession = combined
                 provider = combined.provider(persistChunks: false)
                 self.frozenTranscriptionProvider = provider
+                // recording_start named the speech model; the style model serves this request instead.
+                let dims = self.currentTranscriptionAnalyticsDimensions()
+                self.benchmarkLog("final_model model=\(dims.model) provider=\(dims.provider)")
             }
             let ensureStartedAt = Date().timeIntervalSince1970
             if provider.isReady, self.isAsrReady || self.frozenCloudConfiguration?.audioDictation != nil {

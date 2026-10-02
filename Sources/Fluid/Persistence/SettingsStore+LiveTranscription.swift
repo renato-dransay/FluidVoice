@@ -70,8 +70,12 @@ extension SettingsStore {
     /// The provider Live cloud was activated with, even when its key has since been removed. Readiness
     /// surfaces use it to say which key is missing; dictation itself uses `activeLiveProvider`.
     var storedLiveProvider: LiveTranscriptionProviderID? {
-        guard CloudTranscriptionPreferences(defaults: .standard).source == .liveCloud else { return nil }
-        return LiveTranscriptionPreferences(defaults: .standard).activeProvider
+        Self.storedLiveProvider(in: .standard)
+    }
+
+    static func storedLiveProvider(in defaults: UserDefaults) -> LiveTranscriptionProviderID? {
+        guard CloudTranscriptionPreferences(defaults: defaults).source == .liveCloud else { return nil }
+        return LiveTranscriptionPreferences(defaults: defaults).activeProvider
     }
 
     /// Leaves Live cloud without touching keys or the added providers. Callers set the new source.
