@@ -4,11 +4,11 @@
 
 The optional Transcribe + style dictation mode sends the complete recording and the resolved Cleanup Style to an audio-capable OpenRouter chat model in one inference request. It returns a generated transcript and styled text in a structured response. The transcript is produced by the same model, not by an independent recognizer.
 
-The selected voice model, language, credentials and mode are captured for the recording. The style, app rule, shortcut override and delivery context are resolved before upload. The existing Off selection asks for transcription without styling. Prompt tests use this same request and do not send a second request for cleanup.
+The selected voice model, language, credentials and mode are captured for the recording. The style, app rule, shortcut override and delivery context are resolved before upload. A recording whose style resolves to Off does not reach the audio chat model: it goes to the speech model on the transcription endpoint, which returns a recognizer's transcript and has no length cap. This hybrid routing replaced the earlier rule that Off asked the chat model for a plain transcript (decision of 2 October 2026: no transcription model on OpenRouter follows a free-form style instruction, so styles keep the chat model and plain dictation does not need it). Prompt tests use this same request and do not send a second request for cleanup.
 
 Combined results carry explicit processing metadata. The delivery pipeline uses the generated transcript for spoken-send detection and history, and the final text for insertion. It never calls the separate cleanup provider for a combined result. Failed or cancelled requests cannot trigger automatic inference fallback or late insertion. Explicit retry retains the original instructions.
 
-Combined dictation is limited to 120 seconds. The app rejects a longer recording before an inference request instead of separately styling chunks. Files and completed meetings continue to use the dedicated transcription configuration and timestamps.
+Combined dictation is limited to 8 minutes. The app rejects a longer recording before an inference request instead of separately styling chunks. Files and completed meetings continue to use the dedicated transcription configuration and timestamps.
 
 ## Decisions and sources
 

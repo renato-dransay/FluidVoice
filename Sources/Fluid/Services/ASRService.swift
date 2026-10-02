@@ -3867,8 +3867,8 @@ final class ASRService: ObservableObject {
                 DebugLogger.shared.error(
                     CloudTranscriptionFailureSummary.line(
                         for: error,
-                        // Combined dictation freezes the chat model; otherwise the transcription model failed.
-                        modelID: self.frozenCloudDictationModelID ?? self.frozenCloudConfiguration?.modelID
+                        // A styled dictation fails on the style model; every other request on the speech model.
+                        modelID: self.frozenCloudConfiguration?.audioDictation?.modelID ?? self.frozenCloudConfiguration?.modelID
                     ),
                     source: "ASRService"
                 )

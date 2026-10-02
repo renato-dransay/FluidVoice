@@ -59,6 +59,11 @@ enum CloudDictationDeliveryPolicyTests {
             wasArmed: false
         )
         precondition(existing.sendsExistingDraft && existing.text.isEmpty && !existing.requiresSeparateCleanup)
-        print("PASS: combined cloud delivery, separate cleanup, Off, literal and fabricated send, existing draft")
+        let route = CloudDictationDeliveryPolicy.usesCombinedRequest
+        precondition(route(true, true, true), "A styled cloud dictation goes to the style model")
+        precondition(!route(true, true, false), "Cleanup Off must use the speech model, not the style model")
+        precondition(!route(false, true, true), "Command and rewrite recordings never use the style model")
+        precondition(!route(true, false, true), "A local voice engine never uses the style model")
+        print("PASS: combined cloud delivery, separate cleanup, Off, literal and fabricated send, existing draft, request routing")
     }
 }

@@ -152,8 +152,9 @@ extension SettingsStore {
 
     var usesCloudTranscription: Bool { self.speechExecutionSource == .openRouter }
 
-    /// Every OpenRouter dictation is one request: audio and the resolved Cleanup Style go to the
-    /// audio dictation model together, and Off asks that model for the plain transcript.
+    /// With OpenRouter on, a Cleanup Style is applied by the style model in the same request that
+    /// hears the audio, never by a separate text provider. A dictation whose style resolves to Off
+    /// skips that model and goes to the speech model on the transcription endpoint.
     var usesCombinedCloudDictation: Bool { self.usesCloudTranscription }
 
     /// What the Voice Engine picker shows: Automatic or a model the user picked.

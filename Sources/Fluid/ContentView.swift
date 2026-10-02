@@ -1016,10 +1016,10 @@ struct ContentView: View {
         return (provider: providerOut, model: modelOut)
     }
 
-    private func currentTranscriptionModelInfo(forDictation: Bool) -> (provider: String, model: String) {
+    private func currentTranscriptionModelInfo(usesStyleModel: Bool) -> (provider: String, model: String) {
         if self.settings.usesCloudTranscription {
-            // Dictation runs on the dictation model; command and rewrite use the transcription endpoint.
-            let model = forDictation ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID
+            // Styled dictation runs on the style model; plain dictation, command and rewrite use the speech model.
+            let model = usesStyleModel ? self.asr.activeCloudDictationModelID : self.settings.cloudTranscriptionModelID
             return (provider: "openrouter", model: model)
         }
         let selectedModel = SettingsStore.shared.selectedSpeechModel
@@ -2961,18 +2961,22 @@ struct ContentView: View {
         let modeAtStop = self.activeRecordingMode
         let wasRewriteMode = modeAtStop == .edit || self.isRecordingForRewrite
         let wasCommandMode = modeAtStop == .command || self.isRecordingForCommand
-        var transcriptionModelInfo = self.currentTranscriptionModelInfo(forDictation: !wasRewriteMode && !wasCommandMode)
         let activeDictationSlot = self.currentDictationShortcutSlot(for: modeAtStop)
         let promptOverride = self.promptModeOverrideText
         let promptTest = DictationPromptTestCoordinator.shared
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
         var stopSnapshot = route == .normal && !wasRewriteMode && !wasCommandMode && !promptTest.isActive
             ? self.captureDictationStopSnapshot(slot: activeDictationSlot ?? .primary) : nil
-        let usesCombinedDictation = !wasRewriteMode && !wasCommandMode && self.asr.isUsingCombinedCloudDictation
         let combinedModelID = self.asr.activeCloudDictationModelID
         let promptAppID = self.recordingAppInfo?.bundleId
         let combinedStyleEnabled = promptTest.isActive || (stopSnapshot?.styleEnabled ??
             (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot ?? .primary, appBundleID: promptAppID) != .off))
+        let usesCombinedDictation = CloudDictationDeliveryPolicy.usesCombinedRequest(
+            isDictation: !wasRewriteMode && !wasCommandMode,
+            cloudStylesActive: self.asr.isUsingCombinedCloudDictation,
+            styleEnabled: combinedStyleEnabled
+        )
+        var transcriptionModelInfo = self.currentTranscriptionModelInfo(usesStyleModel: usesCombinedDictation)
         let combinedPromptText = promptTest.isActive ? promptTest.draftPromptText :
             (promptOverride ?? stopSnapshot?.systemPrompt ?? self.settings.effectiveDictationSystemPrompt(for: activeDictationSlot ?? .primary, appBundleID: promptAppID))
         let combinedSpokenSendPhrase = route == .normal && !promptTest.isActive && self.settings.spokenSendEnabled ? self.settings.spokenSendPhrase : nil

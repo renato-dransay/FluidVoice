@@ -20,7 +20,7 @@ struct OpenRouterTranscriptionSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("OpenRouter voice engine").font(.headline)
-            Text("Each dictation is one request: after recording stops, the audio and your selected Cleanup Style go to the dictation model together, and it returns the finished text. There is no separate cleanup request.")
+            Text("Your recording is sent to OpenRouter when you stop.")
                 .font(.callout).foregroundStyle(.secondary)
 
             if self.showsActivationControl {
@@ -43,7 +43,7 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     private var activationControls: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle("Use OpenRouter for transcription", isOn: Binding(
+            Toggle("Use OpenRouter", isOn: Binding(
                 get: { self.settings.usesCloudTranscription },
                 set: { self.viewModel.setCloudTranscriptionEnabled($0) }
             ))
@@ -52,7 +52,7 @@ struct OpenRouterTranscriptionSettingsView: View {
             .accessibilityIdentifier("openrouter-transcription-enabled")
             Text(self.settings.usesCloudTranscription
                  ? "OpenRouter is on for dictation and imported files. Turn it off to use your selected local model."
-                 : "OpenRouter is off. \(self.settings.openRouterTranscriptionAPIKey.isEmpty ? "Save an API key, then turn it on." : "Turn it on to use cloud transcription.")")
+                 : "OpenRouter is off. \(self.settings.openRouterTranscriptionAPIKey.isEmpty ? "Save an API key, then turn it on." : "Turn it on to send recordings to OpenRouter.")")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -87,15 +87,30 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     @ViewBuilder
     private var modelControls: some View {
-        self.dictationControls
+        self.speechModelControls
+        self.styleModelControls
+        self.dictationRouteStatus
         Divider()
-        self.importedFileControls
+        self.languageControls
     }
 
+    /// Dictation without a Cleanup Style, imported files, the local API and the voice command and
+    /// rewrite modes all run on the speech model, on the transcription endpoint.
     @ViewBuilder
-    private var dictationControls: some View {
-        Label("Dictation", systemImage: "mic").font(.callout)
-        Picker("Dictation model", selection: self.$settings.cloudDictationModelSelection) {
+    private var speechModelControls: some View {
+        Picker("Speech model", selection: self.$settings.cloudTranscriptionModelID) {
+            self.transcriptionModelOptions
+        }
+        .accessibilityIdentifier("openrouter-transcription-model")
+        Text("Turns speech into text. Used for dictation, imported files and voice commands.")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    /// Only a dictation with a Cleanup Style reaches the style model, an audio chat model that
+    /// hears the recording and writes it in that style.
+    @ViewBuilder
+    private var styleModelControls: some View {
+        Picker("Style model", selection: self.$settings.cloudDictationModelSelection) {
             Text("Automatic (\(self.modelName(self.automaticModelID)))").tag(CloudAudioDictationModel.automaticID)
             Divider()
             ForEach(self.audioModels, id: \.id) { model in
@@ -104,13 +119,29 @@ struct OpenRouterTranscriptionSettingsView: View {
             }
         }
         .accessibilityIdentifier("openrouter-audio-dictation-model")
-        Text(self.automaticExplanation)
+        .help(self.automaticExplanation)
+        Text("Used only when a Cleanup Style is on: it hears the recording and writes it in that style. Recordings up to 8 minutes.")
             .font(.caption).foregroundStyle(.secondary)
-        Text("Choose the style in Cleanup Styles, including app and shortcut rules. Off returns the plain transcript from the same single request. Recordings are limited to 8 minutes; a failure never triggers another request automatically.")
-            .font(.caption).foregroundStyle(.secondary)
-        Text("The list shows the newest audio-capable models OpenRouter offers, one per model family.")
-            .font(.caption).foregroundStyle(.secondary)
-        self.languageControls
+    }
+
+    /// Says which of the two models the next dictation reaches, so nobody has to work it out.
+    private var dictationRouteStatus: some View {
+        Label(self.dictationRouteText, systemImage: "arrow.turn.down.right")
+            .font(.callout)
+            .accessibilityIdentifier("openrouter-dictation-route")
+    }
+
+    private var dictationRouteText: String {
+        guard self.settings.resolvedDictationPromptSelection(for: .primary, appBundleID: nil) != .off else {
+            return "Dictation now uses \(self.speechModelName). Cleanup Style is Off."
+        }
+        let style = self.settings.dictationPromptDisplayName(for: .primary, appBundleID: nil)
+        return "Dictation now uses \(self.modelName(self.settings.cloudDictationModelID)) with the \(style) Cleanup Style. App and shortcut rules can change the style."
+    }
+
+    private var speechModelName: String {
+        let id = self.settings.cloudTranscriptionModelID
+        return self.models.first { $0.id == id }?.name ?? id
     }
 
     private var automaticModelID: String {
@@ -135,20 +166,6 @@ struct OpenRouterTranscriptionSettingsView: View {
         CloudAudioDictationModel.listed(id)?.name ?? id
     }
 
-    /// Imported files, the local API and voice command and rewrite modes use the transcription model.
-    @ViewBuilder
-    private var importedFileControls: some View {
-        Label("Imported files and commands", systemImage: "doc.badge.arrow.up").font(.callout)
-        Picker("Transcription model", selection: self.$settings.cloudTranscriptionModelID) {
-            self.transcriptionModelOptions
-        }
-        .accessibilityIdentifier("openrouter-transcription-model")
-        Text("Dictation never uses this model. Imported audio and video, the local API, and the command and rewrite modes use it on the transcription endpoint, without Cleanup Styles.")
-            .font(.caption).foregroundStyle(.secondary)
-        Text("The model list follows OpenRouter's transcription catalog. Whisper models return word timestamps; others return plain text until verified in meeting settings, which has its own model selection.")
-            .font(.caption).foregroundStyle(.secondary)
-    }
-
     private var transcriptionModelOptions: some View {
         ForEach(self.models, id: \.id) { model in
             Text(model.name).tag(model.id)
@@ -158,7 +175,7 @@ struct OpenRouterTranscriptionSettingsView: View {
 
     private var languageControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Dictation language", systemImage: "globe")
+            Label("Languages", systemImage: "globe")
                 .font(.callout)
             Text("Dictation detects any language automatically. Choose Primary or Secondary while recording to override detection; the choice is remembered.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -180,8 +197,6 @@ struct OpenRouterTranscriptionSettingsView: View {
             )
             .disabled(self.settings.cloudTranscriptionPrimaryLanguageCode == nil)
             .accessibilityIdentifier("cloud-secondary-language")
-            Text("Primary and Secondary are optional hints during automatic detection. A selected language is sent to OpenRouter, or given to the dictation model as an instruction.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -277,7 +292,7 @@ struct OpenRouterTranscriptionSettingsView: View {
                 let transcriptionModels = try await client.validate(apiKey: apiKey)
                 self.availableModelIDs = Set(transcriptionModels.map(\.id))
                 self.hasValidatedCatalog = true
-                self.status = "Key verified. \(dictationModels.count) dictation models and \(transcriptionModels.count) transcription models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
+                self.status = "Key verified. \(transcriptionModels.count) speech models and \(dictationModels.count) style models listed. Your account must allow a provider serving the selected model; access is checked when it is used."
             } catch { self.status = error.localizedDescription }
         }
     }

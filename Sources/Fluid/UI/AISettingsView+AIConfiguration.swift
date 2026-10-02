@@ -1511,7 +1511,7 @@ extension AIEnhancementSettingsView {
                             .font(.fluidSystem(.caption2).weight(.semibold))
                             .foregroundStyle(self.theme.palette.secondaryText)
                             .frame(width: 92, height: AISettingsLayout.providerRowControlHeight)
-                            .help("OpenRouter dictation uses the OpenRouter dictation model for styles.")
+                            .help("OpenRouter dictation uses the style model from Voice Engine for Cleanup Styles.")
                     } else {
                         Button {
                             guard !isDefaultProvider else { return }
