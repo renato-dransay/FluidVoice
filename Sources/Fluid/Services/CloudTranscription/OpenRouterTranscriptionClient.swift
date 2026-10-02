@@ -114,8 +114,12 @@ final nonisolated class OpenRouterTranscriptionClient: Sendable {
     func validateAudioDictation(apiKey: String) async throws -> [CloudAudioDictationModel] {
         _ = try await self.send(self.request(path: "key", apiKey: apiKey))
         let (data, _) = try await self.send(self.request(path: "models", apiKey: apiKey))
-        let supported = Set(try Self.audioDictationEntries(in: data).map(\.id))
-        let models = CloudAudioDictationModel.catalog.filter { supported.contains($0.id) }
+        let supportedIDs = try Self.audioDictationEntries(in: data).map(\.id)
+        let supported = Set(supportedIDs)
+        // The picker's models first, then older listed releases that Automatic may inherit.
+        let offered = CloudAudioDictationModel.catalog.filter { supported.contains($0.id) }
+        let offeredIDs = Set(offered.map(\.id))
+        let models = offered + supportedIDs.filter { !offeredIDs.contains($0) }.compactMap(CloudAudioDictationModel.listed)
         guard !models.isEmpty else { throw CloudTranscriptionError.catalogUnavailable }
         return models
     }
