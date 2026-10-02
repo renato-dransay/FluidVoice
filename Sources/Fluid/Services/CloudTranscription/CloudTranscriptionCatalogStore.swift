@@ -60,6 +60,12 @@ nonisolated final class CloudTranscriptionCatalogStore: @unchecked Sendable {
         })
     }
 
+    func audioDictationModel(id: String) -> CloudAudioDictationModel? {
+        if let model = CloudAudioDictationModel.builtIn.first(where: { $0.id == id }) { return model }
+        let entry = self.lock.withLock { self.audioListed.first { $0.id == id } }
+        return entry.map { CloudAudioDictationModel(id: $0.id, name: $0.name) }
+    }
+
     func isRefreshDue(now: Date = Date()) -> Bool {
         guard let refreshedAt = self.lock.withLock({ self.refreshedAt }) else { return true }
         // A clock moved backwards must not postpone the refresh indefinitely.

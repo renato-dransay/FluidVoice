@@ -26,7 +26,7 @@ enum DictationAIPostProcessingGate {
         guard settings.usesCombinedCloudDictation else { return self.isConfigured(for: slot, appBundleID: appBundleID) }
         return settings.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID) != .off &&
             !settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            CloudAudioDictationModel.catalog.contains { $0.id == settings.cloudDictationModelID }
+            CloudAudioDictationModel.isListed(settings.cloudDictationModelID)
     }
 
     static func isConfigured(for slot: SettingsStore.DictationShortcutSlot, appBundleID: String? = nil) -> Bool {

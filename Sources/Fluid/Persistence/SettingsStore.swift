@@ -788,7 +788,7 @@ final class SettingsStore: ObservableObject {
         guard selection != .off else { return self.usesCloudTranscription ? "No cleanup" : "Basic" }
         if self.usesCombinedCloudDictation {
             let mode = self.dictationPromptDisplayName(for: slot, appBundleID: appBundleID)
-            let model = CloudAudioDictationModel.catalog.first { $0.id == self.cloudDictationModelID }?.name ?? self.cloudDictationModelID
+            let model = CloudAudioDictationModel.listed(self.cloudDictationModelID)?.name ?? self.cloudDictationModelID
             return "\(mode) · \(model)"
         }
         let route = DictationProviderRoute.resolve(settings: self, dictationSlot: slot, appBundleID: appBundleID)
@@ -1573,6 +1573,14 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.selectedModelByProvider)
         }
+    }
+
+    /// The model chosen for OpenRouter in AI Providers while OpenRouter is the selected provider.
+    /// Automatic Voice Engine dictation inherits it when it accepts audio.
+    var openRouterAIProviderModel: String? {
+        let openRouterID = "openrouter"
+        guard self.selectedProviderID == openRouterID else { return nil }
+        return self.selectedModelByProvider[openRouterID]
     }
 
     var providerAPIKeys: [String: String] {

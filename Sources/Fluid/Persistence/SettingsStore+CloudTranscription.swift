@@ -92,15 +92,24 @@ struct CloudTranscriptionPreferences {
         }
     }
 
-    var dictationModelID: String {
+    /// Automatic, or a model the user picked. An absent or withdrawn model reads as Automatic.
+    var dictationModelSelection: String {
         get {
             let stored = self.defaults.string(forKey: "CloudDictationModel") ?? ""
-            return CloudAudioDictationModel.catalog.contains { $0.id == stored } ? stored : CloudAudioDictationModel.defaultID
+            return CloudAudioDictationModel.isListed(stored) ? stored : CloudAudioDictationModel.automaticID
         }
         set {
-            guard CloudAudioDictationModel.catalog.contains(where: { $0.id == newValue }) else { return }
+            guard newValue == CloudAudioDictationModel.automaticID || CloudAudioDictationModel.isListed(newValue) else { return }
             self.defaults.set(newValue, forKey: "CloudDictationModel")
         }
+    }
+
+    /// The model dictation sends audio to. Automatic follows the OpenRouter model selected in AI
+    /// Providers when that model accepts audio.
+    func dictationModelID(inheriting providerModel: String?) -> String {
+        let selection = self.dictationModelSelection
+        return selection == CloudAudioDictationModel.automaticID
+            ? CloudAudioDictationModel.automaticModelID(inheriting: providerModel) : selection
     }
 
     var configuration: CloudTranscriptionConfiguration {
@@ -147,13 +156,19 @@ extension SettingsStore {
     /// audio dictation model together, and Off asks that model for the plain transcript.
     var usesCombinedCloudDictation: Bool { self.usesCloudTranscription }
 
-    var cloudDictationModelID: String {
-        get { CloudTranscriptionPreferences(defaults: .standard).dictationModelID }
+    /// What the Voice Engine picker shows: Automatic or a model the user picked.
+    var cloudDictationModelSelection: String {
+        get { CloudTranscriptionPreferences(defaults: .standard).dictationModelSelection }
         set {
             self.objectWillChange.send()
             var preferences = CloudTranscriptionPreferences(defaults: .standard)
-            preferences.dictationModelID = newValue
+            preferences.dictationModelSelection = newValue
         }
+    }
+
+    /// The model dictation actually uses, with Automatic resolved.
+    var cloudDictationModelID: String {
+        CloudTranscriptionPreferences(defaults: .standard).dictationModelID(inheriting: self.openRouterAIProviderModel)
     }
 
     var cloudTranscriptionModelID: String {

@@ -488,8 +488,13 @@ final class LLMClientRequestBodyTests: XCTestCase {
         let isDictationPromptOff = settings.isDictationPromptOff
         let dictationPromptRoutingScope = settings.dictationPromptRoutingScope
         let defaultDictationPromptOverride = settings.defaultDictationPromptOverride
+        // The test host shares the installed personal app's preferences, where OpenRouter may be
+        // the active engine; these expectations describe local dictation.
+        let speechSource = CloudTranscriptionPreferences(defaults: .standard).source
+        settings.speechExecutionSource = .local
 
         defer {
+            settings.speechExecutionSource = speechSource
             settings.dictationPromptProfiles = profiles
             settings.appPromptBindings = appBindings
             settings.selectedDictationPromptID = selectedDictationPromptID

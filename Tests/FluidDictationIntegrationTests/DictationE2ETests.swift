@@ -13,16 +13,27 @@ import XCTest
 final class DictationE2ETests: XCTestCase {
     // Pronunciation features are opt-in in the app; these tests exercise the enabled paths.
     private var priorSharedFeaturesFlag: Any?
+    /// The test host shares the installed personal app's preferences, where Cleanup Styles may be
+    /// limited to selected apps. These cases expect the default, which applies styles in all apps.
+    private static let routingScopeKeys = ["DictationPromptRoutingScope", "EditPromptRoutingScope"]
+    private var priorRoutingScopes: [String: Any] = [:]
 
     override func setUp() {
         super.setUp()
         self.pinLocalSpeechExecutionSource()
         self.priorSharedFeaturesFlag = UserDefaults.standard.object(forKey: "DictionarySharedFeatureMatcherEnabled")
         UserDefaults.standard.set(true, forKey: "DictionarySharedFeatureMatcherEnabled")
+        for key in Self.routingScopeKeys {
+            self.priorRoutingScopes[key] = UserDefaults.standard.object(forKey: key)
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     override func tearDown() {
         UserDefaults.standard.set(self.priorSharedFeaturesFlag, forKey: "DictionarySharedFeatureMatcherEnabled")
+        for key in Self.routingScopeKeys {
+            UserDefaults.standard.set(self.priorRoutingScopes[key], forKey: key)
+        }
         super.tearDown()
     }
 

@@ -463,7 +463,7 @@ extension AIEnhancementSettingsView {
 
     private var isCloudDictationConfigured: Bool {
         !self.settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && CloudAudioDictationModel.catalog.contains { $0.id == self.settings.cloudDictationModelID }
+            && CloudAudioDictationModel.isListed(self.settings.cloudDictationModelID)
     }
 
     private var isCombinedCloudPromptEditor: Bool {

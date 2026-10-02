@@ -1685,7 +1685,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func isAIPostProcessingConfiguredForDictation() -> Bool {
         if self.settings.usesCombinedCloudDictation {
             return !self.settings.openRouterTranscriptionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && CloudAudioDictationModel.catalog.contains { $0.id == self.settings.cloudDictationModelID }
+                && CloudAudioDictationModel.isListed(self.settings.cloudDictationModelID)
         }
         return DictationAIPostProcessingGate.isProviderConfigured()
     }
