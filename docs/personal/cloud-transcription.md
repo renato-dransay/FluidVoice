@@ -8,16 +8,30 @@ The personal app starts with local speech recognition and AI enhancement off. **
 
 Every key is entered in **AI Providers**: choose **Add provider**, pick the provider and paste its API key. Its row then shows what it can do (**Text**, **Cloud transcription**, **Live**) and a status: **API key missing**, **Not verified**, **Verified** or **Verification failed**. The one other place a key can be typed is the OpenRouter step of onboarding, which saves to the same entry. Saving a key sends nothing to the provider; it is contacted only when you verify, activate, test, refresh its models or use it. A key is only ever sent to its own provider.
 
-| Provider | Speech model | Word timings | Also a text provider | How the audio is sent |
+| Provider | Speech models (default first) | Word timings | Also a text provider | How the audio is sent |
 |---|---|---|---|---|
 | OpenRouter | From its catalog (see below), default `openai/whisper-large-v3-turbo` | Per model | Yes | One request per chunk of at most 120 seconds |
-| Deepgram | `nova-3` | Yes | No | One request per chunk of at most 780 seconds |
-| ElevenLabs | `scribe_v2` | Yes | No | One request per chunk of at most 780 seconds |
-| Mistral | `voxtral-mini-latest` | No | Yes | One request per chunk of at most 780 seconds |
-| Speechmatics | `enhanced` or `standard` | Yes | No | A job per chunk, polled until done |
+| Deepgram | `nova-3`, `nova-2`, `nova-3-medical` | Yes | No | One request per chunk of at most 780 seconds |
+| ElevenLabs | `scribe_v2`, `scribe_v2_medical` | Yes | No | One request per chunk of at most 780 seconds |
+| Mistral | `voxtral-mini-latest`, `voxtral-mini-2602` | No | Yes | One request per chunk of at most 780 seconds |
+| Speechmatics | `enhanced`, `standard`, `melia-1` | Yes | No | A job per chunk, polled until done |
 | Soniox | `stt-async-v5` | Yes | No | An uploaded file and a transcription per chunk, polled until done |
-| AssemblyAI | `universal-3-5-pro` (with `universal-2` as its fallback) | Yes | Yes | An upload and a transcript per chunk, polled until done |
-| Gladia | `solaria-1` | Yes | No | An upload and a job per chunk, polled until done |
+| AssemblyAI | `universal-3-5-pro` (with `universal-2` as its fallback), `universal-2` | Yes | Yes | An upload and a transcript per chunk, polled until done |
+| Gladia | `solaria-1`, `solaria-3` | Yes | No | An upload and a job per chunk, polled until done |
+
+Some models change what is sent:
+
+- **Deepgram Nova-2** covers languages Nova-3 lacks. **Nova-3 Medical** is documented for English only, so it is always sent English, even with another language picked.
+- **Mistral `voxtral-mini-2602`** is the same Voxtral Mini Transcribe 2 as `voxtral-mini-latest`, pinned to its February 2026 release.
+- **Speechmatics Melia 1** transcribes several languages in one recording. It always receives `multi`, with the language picked in the overlay, otherwise Primary and Secondary, as hints.
+- **AssemblyAI Universal-2** covers 99 languages at a lower price and is sent alone; Universal-3.5 Pro hands the languages it lacks to Universal-2.
+- **Gladia Solaria-3** transcribes English, French, German, Spanish and Italian, one language per file and without detection. It receives the language picked in the overlay, otherwise the first of Primary and Secondary it supports. When none of them is supported, the recording fails before anything is uploaded, with "This Gladia model doesn't support your dictation language."
+
+Left out after reading each vendor's documentation on 2026-10-02: models that are retired or deprecated (Soniox v3 and v4, ElevenLabs `scribe_v1`, Mistral `voxtral-mini-2507`, AssemblyAI `universal-3-pro` and `slam-1`, Deepgram's legacy models), models for a niche domain (Deepgram Nova-3 Pharma and the Nova-2 domain variants, Speechmatics Oak 1), and models a different API serves (Speechmatics Linden 1, Gladia `solaria-fusion`, which is documented nowhere else). Soniox offers a single current model for each mode.
+
+As a text provider, AssemblyAI offers the LLM Gateway models its documentation lists, `gpt-5-mini` first and still the default, leaving out the models that need a provider switched on under Data Controls in the AssemblyAI dashboard and Gemini 3.1 Flash Lite, which retires in May 2027. **Refresh** in its Manage sheet replaces that list with the gateway's own (`GET /v1/models`), like any other provider's.
+
+Each provider's **Speech model** picker is the same searchable list AI Providers uses for text models. A second line marks the default model, a model without word timings and any model note. A model chosen earlier that a later version no longer lists stays selected and is still sent; the picker shows it as **No longer listed**, and its word timings count as unchecked, so imported files go without speaker labels. Choose another model to leave it.
 
 A provider is one record with one key. A provider that offers several capabilities, such as OpenAI (Text and Live) or Mistral (Text, Cloud transcription and Live), is connected once and its key serves all of them; it then appears wherever one of its capabilities is offered, marked **Not verified** until a check has passed. Text verification (**Verify** on a text provider, a chat request) and speech verification (activating it in Voice Engine, a request without audio) are recorded separately, because a key can be valid for one and refused by the other.
 
@@ -49,7 +63,7 @@ Speechmatics, Soniox, AssemblyAI and Gladia create a job and answer after a shor
 
 ## Dictation with a provider other than OpenRouter
 
-The recording goes to the provider's speech model. The transcript is then treated like local and Live cloud output: filler-word removal, the Custom Dictionary, spoken punctuation and finally your Cleanup Style, on the default text provider chosen in AI Providers. Cleanup Styles therefore need a verified text provider; the Cloud tab says so when none is verified. There is no 8-minute limit; that belongs to OpenRouter's style model. Dictation sends the language chosen in the overlay when there is one, and otherwise asks the provider to detect it; Soniox also receives the Primary and Secondary languages as hints. Deepgram, Speechmatics, AssemblyAI and Gladia offer only lists that restrict detection, which is stronger than a hint, so the preferences are not sent to them, and ElevenLabs and Mistral take no hints at all.
+The recording goes to the provider's speech model. The transcript is then treated like local and Live cloud output: filler-word removal, the Custom Dictionary, spoken punctuation and finally your Cleanup Style, on the default text provider chosen in AI Providers. Cleanup Styles therefore need a verified text provider; the Cloud tab says so when none is verified. There is no 8-minute limit; that belongs to OpenRouter's style model. Dictation sends the language chosen in the overlay when there is one, and otherwise asks the provider to detect it; Soniox and Speechmatics Melia 1 also receive the Primary and Secondary languages as hints, and Gladia Solaria-3, which cannot detect, receives one of them. Otherwise Deepgram, Speechmatics, AssemblyAI and Gladia offer only lists that restrict detection, which is stronger than a hint, so the preferences are not sent to them, and ElevenLabs and Mistral take no hints at all.
 
 Recorded usage and cost exist for OpenRouter only. Every provider's Cloud tab links to its own usage and billing page. History records these dictations under `cloud-<provider>` (for example `cloud-deepgram`) with the model ID; OpenRouter dictation stays recorded as `openrouter`.
 
@@ -71,7 +85,7 @@ OpenRouter's key validation checks authentication and the supported speech and s
 
 ### Model list
 
-The speech model list follows OpenRouter's public transcription catalog. Once a key is saved, opening the Cloud tab with OpenRouter shown or the cloud meeting settings fetches the catalog at most once every six hours, and **Refresh models** always fetches it and checks which models this key can use. The request carries no credentials and no audio. The last fetched list is stored in the personal app's preferences, so it is available offline; a failed fetch keeps that list and is recorded in the debug log. A model OpenRouter withdraws disappears at the next fetch. A speech model selection pointing at it returns to the default model. A meeting selection stays visible as **no longer listed**, and meeting transcription reports that another model must be chosen. The three Whisper models (Large v3 Turbo, Large v3 and Whisper 1) and the two GPT-4o transcription models are built in and are always offered, even before the first fetch.
+The speech model list follows OpenRouter's public transcription catalog. Once a key is saved, opening the Cloud tab with OpenRouter shown or the cloud meeting settings fetches the catalog at most once every six hours, and **Refresh models** always fetches it and checks which models this key can use. The request carries no credentials and no audio. The last fetched list is stored in the personal app's preferences, so it is available offline; a failed fetch keeps that list and is recorded in the debug log. A model OpenRouter withdraws disappears at the next fetch. A speech model selection pointing at it stays selected, shown as **No longer listed**, and is still sent; OpenRouter then reports whether it can still route it. A meeting selection stays visible as **no longer listed**, and meeting transcription reports that another model must be chosen. The three Whisper models (Large v3 Turbo, Large v3 and Whisper 1) and the two GPT-4o transcription models are built in and are always offered, even before the first fetch.
 
 Being listed does not prove what a model can return. Word timestamps in particular vary by model and by the provider serving it, and the catalog does not describe them. The built-in Whisper models are documented to return word timestamps; OpenRouter serves Whisper 1 only through OpenAI, whose API documents word timestamps for it. Every other listed model is treated as plain text only until it passes the word-timing check described under [Completed meetings](#completed-meetings).
 
