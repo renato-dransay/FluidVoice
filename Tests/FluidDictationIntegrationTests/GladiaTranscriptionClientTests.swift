@@ -69,7 +69,7 @@ final class GladiaTranscriptionClientTests: XCTestCase {
     }
 
     func testSolaria3GetsExactlyOneOfItsLanguages() throws {
-        func languageConfig(_ configuration: CloudTranscriptionConfiguration) throws -> [String: Any]? {
+        func languageConfig(_ configuration: CloudTranscriptionConfiguration) throws -> [String: Any]? { // swiftlint:disable:this discouraged_optional_collection
             let body = try JSONSerialization.jsonObject(with: GladiaTranscriptionClient.jobBody(audioURL: "u", configuration: configuration)) as? [String: Any]
             XCTAssertEqual(body?["model"] as? String, "solaria-3")
             return body?["language_config"] as? [String: Any]

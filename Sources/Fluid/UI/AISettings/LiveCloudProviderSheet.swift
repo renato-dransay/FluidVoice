@@ -19,6 +19,7 @@ struct LiveCloudProviderSheet: View {
     private var isTestArmed: Bool { self.test.armedProvider == self.provider }
     private var providerID: String { ProviderRegistry.providerID(for: self.provider) }
     private var needsLanguage: Bool { self.settings.liveProviderNeedsPrimaryLanguage(self.provider) }
+    private var selectedModelID: String { LiveTranscriptionPreferences(defaults: .standard).modelID(for: self.provider) }
 
     var body: some View {
         FluidManagementSheet(
@@ -61,21 +62,21 @@ struct LiveCloudProviderSheet: View {
 
     private var modelGroup: some View {
         FluidManagementGroup(title: "Model") {
-            Picker("Model", selection: Binding(
-                get: { LiveTranscriptionPreferences(defaults: .standard).modelID(for: self.provider) },
-                set: { modelID in
-                    var preferences = LiveTranscriptionPreferences(defaults: .standard)
-                    preferences.setModelID(modelID, for: self.provider)
-                    self.settings.objectWillChange.send()
-                    self.viewModel.asr.resetTranscriptionProvider()
-                }
-            )) {
-                ForEach(self.info.models) { model in
-                    Text(model.name).tag(model.id)
-                }
-            }
+            SpeechModelPickerRow(
+                title: "Model",
+                items: SpeechModelPickerItems.live(provider: self.provider, selected: self.selectedModelID),
+                selection: Binding(
+                    get: { self.selectedModelID },
+                    set: { modelID in
+                        var preferences = LiveTranscriptionPreferences(defaults: .standard)
+                        preferences.setModelID(modelID, for: self.provider)
+                        self.settings.objectWillChange.send()
+                        self.viewModel.asr.resetTranscriptionProvider()
+                    }
+                ),
+                accessibilityIdentifier: "live-cloud-model-\(self.provider.rawValue)"
+            )
             .disabled(self.viewModel.areSpeechModelActionsBlocked)
-            .accessibilityIdentifier("live-cloud-model-\(self.provider.rawValue)")
             Text("The model applies from your next recording.")
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if !self.info.detectsLanguageAutomatically {
@@ -140,7 +141,7 @@ struct LiveCloudProviderSheet: View {
     private var unlistedLanguageWarnings: [String] {
         [self.settings.cloudTranscriptionPrimaryLanguageCode, self.settings.cloudTranscriptionSecondaryLanguageCode]
             .compactMap { $0 }
-            .filter { !self.info.supports(languageCode: $0) }
+            .filter { !self.info.supports(languageCode: $0, modelID: self.selectedModelID) }
             .map { DictationLanguageControls.unlistedLanguageWarning(provider: self.info.name, languageCode: $0) }
     }
 

@@ -8,9 +8,38 @@
 
 import SwiftUI
 
+/// One row of `SearchableModelPicker`: the stored ID, the name shown, an optional second line such as
+/// "Default" or "No word timings", and whether the row can be chosen.
+struct SearchableModelPickerItem: Identifiable, Equatable {
+    let id: String
+    let name: String
+    var detail: String?
+    var isEnabled = true
+
+    /// The rows for `items` plus, first, the current selection when no row offers it, so a stored model
+    /// that a catalog no longer lists stays visible as the selection instead of disappearing.
+    static func including(selection: String, in items: [SearchableModelPickerItem], unlistedDetail: String = "No longer listed") -> [SearchableModelPickerItem] {
+        guard !selection.isEmpty, !items.contains(where: { $0.id == selection }) else { return items }
+        return [SearchableModelPickerItem(id: selection, name: selection, detail: unlistedDetail)] + items
+    }
+
+    /// The rows whose ID, name or second line contains `query`; every row for an empty query.
+    static func filtered(_ items: [SearchableModelPickerItem], query: String) -> [SearchableModelPickerItem] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return items }
+        return items.filter {
+            $0.id.localizedCaseInsensitiveContains(query)
+                || $0.name.localizedCaseInsensitiveContains(query)
+                || ($0.detail?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+}
+
+/// The one model picker used for text models (AI Providers, Rewrite) and speech models (Voice Engine's
+/// Cloud tab and Live cloud sheet): a button that opens a searchable list with a checkmark on the choice.
 struct SearchableModelPicker: View {
     @Environment(\.theme) private var theme
-    let models: [String]
+    let items: [SearchableModelPickerItem]
     @Binding var selectedModel: String
     var onRefresh: (() async -> Void)?
     var isRefreshing: Bool = false
@@ -19,6 +48,8 @@ struct SearchableModelPicker: View {
     let displayName: (String) -> String
     let controlWidth: CGFloat
     let controlHeight: CGFloat?
+    let popoverWidth: CGFloat
+    let accessibilityIdentifier: String?
 
     init(
         models: [String],
@@ -31,7 +62,33 @@ struct SearchableModelPicker: View {
         controlWidth: CGFloat = 180,
         controlHeight: CGFloat? = nil
     ) {
-        self.models = models
+        self.init(
+            items: models.map { SearchableModelPickerItem(id: $0, name: displayName($0)) },
+            selectedModel: selectedModel,
+            onRefresh: onRefresh,
+            isRefreshing: isRefreshing,
+            refreshEnabled: refreshEnabled,
+            selectionEnabled: selectionEnabled,
+            displayName: displayName,
+            controlWidth: controlWidth,
+            controlHeight: controlHeight
+        )
+    }
+
+    init(
+        items: [SearchableModelPickerItem],
+        selectedModel: Binding<String>,
+        onRefresh: (() async -> Void)? = nil,
+        isRefreshing: Bool = false,
+        refreshEnabled: Bool = true,
+        selectionEnabled: Bool = true,
+        displayName: @escaping (String) -> String = ModelDisplayName.forID,
+        controlWidth: CGFloat = 180,
+        controlHeight: CGFloat? = nil,
+        popoverWidth: CGFloat = 280,
+        accessibilityIdentifier: String? = nil
+    ) {
+        self.items = items
         self._selectedModel = selectedModel
         self.onRefresh = onRefresh
         self.isRefreshing = isRefreshing
@@ -40,6 +97,8 @@ struct SearchableModelPicker: View {
         self.displayName = displayName
         self.controlWidth = controlWidth
         self.controlHeight = controlHeight
+        self.popoverWidth = popoverWidth
+        self.accessibilityIdentifier = accessibilityIdentifier
     }
 
     @State private var searchText = ""
@@ -56,14 +115,13 @@ struct SearchableModelPicker: View {
         return max(self.controlWidth - self.refreshButtonSize - 8, 80)
     }
 
-    private var filteredModels: [String] {
-        if self.searchText.isEmpty {
-            return self.models
-        }
-        return self.models.filter {
-            $0.localizedCaseInsensitiveContains(self.searchText) ||
-                self.displayName($0).localizedCaseInsensitiveContains(self.searchText)
-        }
+    private var filteredModels: [SearchableModelPickerItem] {
+        SearchableModelPickerItem.filtered(self.items, query: self.searchText)
+    }
+
+    /// The selected row's name, or the display name of an ID no row offers.
+    private var selectedName: String {
+        self.items.first { $0.id == self.selectedModel }?.name ?? self.displayName(self.selectedModel)
     }
 
     var body: some View {
@@ -71,7 +129,7 @@ struct SearchableModelPicker: View {
             // Model button that opens popover
             Button(action: { self.isShowingPopover.toggle() }) {
                 HStack(spacing: 6) {
-                    Text(self.selectedModel.isEmpty ? "Select Model" : self.displayName(self.selectedModel))
+                    Text(self.selectedModel.isEmpty ? "Select Model" : self.selectedName)
                         .font(.fluidSystem(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -87,6 +145,7 @@ struct SearchableModelPicker: View {
             .buttonStyle(.plain)
             .disabled(!self.selectionEnabled)
             .opacity(self.selectionEnabled ? 1 : 0.55)
+            .modifier(PickerAccessibilityIdentifier(identifier: self.accessibilityIdentifier))
             .popover(isPresented: self.$isShowingPopover, arrowEdge: .bottom) {
                 VStack(spacing: 0) {
                     // Search field
@@ -101,7 +160,7 @@ struct SearchableModelPicker: View {
                     Divider()
 
                     VStack(spacing: 0) {
-                        if self.models.isEmpty {
+                        if self.items.isEmpty {
                             VStack(spacing: 8) {
                                 Image(systemName: "tray")
                                     .font(.fluidSystem(.title2))
@@ -125,17 +184,25 @@ struct SearchableModelPicker: View {
                                             .padding()
                                             .frame(maxWidth: .infinity, alignment: .center)
                                     } else {
-                                        ForEach(self.filteredModels.prefix(100), id: \.self) { model in
+                                        ForEach(self.filteredModels.prefix(100)) { item in
                                             Button(action: {
-                                                self.selectedModel = model
+                                                self.selectedModel = item.id
                                                 self.searchText = ""
                                                 self.isShowingPopover = false
                                             }) {
                                                 HStack {
-                                                    Text(self.displayName(model))
-                                                        .lineLimit(1)
+                                                    VStack(alignment: .leading, spacing: 1) {
+                                                        Text(item.name)
+                                                            .lineLimit(1)
+                                                        if let detail = item.detail {
+                                                            Text(detail)
+                                                                .font(.fluidSystem(.caption2))
+                                                                .foregroundStyle(.secondary)
+                                                                .lineLimit(1)
+                                                        }
+                                                    }
                                                     Spacer()
-                                                    if model == self.selectedModel {
+                                                    if item.id == self.selectedModel {
                                                         Image(systemName: "checkmark")
                                                             .foregroundStyle(self.theme.palette.accent)
                                                     }
@@ -143,9 +210,12 @@ struct SearchableModelPicker: View {
                                                 .padding(.horizontal, 10)
                                                 .padding(.vertical, 6)
                                                 .contentShape(Rectangle())
+                                                .opacity(item.isEnabled ? 1 : 0.45)
                                             }
                                             .buttonStyle(.plain)
-                                            .searchablePickerSelectedRowBackground(isSelected: model == self.selectedModel)
+                                            .disabled(!item.isEnabled)
+                                            .accessibilityLabel(item.detail.map { "\(item.name), \($0)" } ?? item.name)
+                                            .searchablePickerSelectedRowBackground(isSelected: item.id == self.selectedModel)
                                         }
                                     }
                                 }
@@ -163,7 +233,7 @@ struct SearchableModelPicker: View {
                     }
                     .id(self.searchText.isEmpty)
                 }
-                .frame(width: 280)
+                .frame(width: self.popoverWidth)
             }
 
             // Refresh button
@@ -206,6 +276,19 @@ struct SearchableModelPicker: View {
                     .help("Refresh model list")
                 }
             }
+        }
+    }
+}
+
+/// Sets an accessibility identifier only when the caller named one, so callers without one keep none.
+private struct PickerAccessibilityIdentifier: ViewModifier {
+    let identifier: String?
+
+    func body(content: Content) -> some View {
+        if let identifier {
+            content.accessibilityIdentifier(identifier)
+        } else {
+            content
         }
     }
 }

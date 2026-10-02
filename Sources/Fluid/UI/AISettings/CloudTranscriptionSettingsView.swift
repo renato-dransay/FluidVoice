@@ -224,22 +224,21 @@ struct CloudTranscriptionSettingsView: View {
     }
 }
 
-/// The one "Speech model" menu of a Cloud provider other than OpenRouter, from its fixed catalog (CLD-4).
+/// The one "Speech model" picker of a Cloud provider other than OpenRouter, from its catalog (CLD-4).
 struct CloudSpeechModelControls: View {
     @ObservedObject var settings: SettingsStore
     let providerID: String
 
     var body: some View {
-        let models = CloudTranscriptionCatalog.models(for: self.providerID)
         let selectedID = self.settings.cloudTranscriptionModelID(for: self.providerID)
-        let supportsWordTimings = models.first { $0.id == selectedID }?.supportsWordTimings ?? false
+        let supportsWordTimings = CloudTranscriptionCatalog.models(for: self.providerID).first { $0.id == selectedID }?.supportsWordTimings ?? false
         VStack(alignment: .leading, spacing: 8) {
-            Picker("Speech model", selection: self.selection) {
-                ForEach(models, id: \.id) { model in
-                    Text(model.name).tag(model.id)
-                }
-            }
-            .accessibilityIdentifier("cloud-speech-model-\(self.providerID)")
+            SpeechModelPickerRow(
+                title: "Speech model",
+                items: SpeechModelPickerItems.cloud(providerID: self.providerID, selected: selectedID),
+                selection: self.selection,
+                accessibilityIdentifier: "cloud-speech-model-\(self.providerID)"
+            )
             ForEach(VoiceEngineSettingsViewModel.cloudSpeechModelCaptions(providerID: self.providerID, supportsWordTimings: supportsWordTimings), id: \.self) { caption in
                 Text(caption).font(.caption).foregroundStyle(.secondary)
             }
@@ -251,6 +250,28 @@ struct CloudSpeechModelControls: View {
             get: { self.settings.cloudTranscriptionModelID(for: self.providerID) },
             set: { self.settings.setCloudTranscriptionModelID($0, for: self.providerID) }
         )
+    }
+}
+
+/// A label and the shared searchable model picker, as every speech model choice in Voice Engine shows it.
+struct SpeechModelPickerRow: View {
+    let title: String
+    let items: [SearchableModelPickerItem]
+    @Binding var selection: String
+    let accessibilityIdentifier: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(self.title)
+            SearchableModelPicker(
+                items: self.items,
+                selectedModel: self.$selection,
+                controlWidth: 280,
+                popoverWidth: 340,
+                accessibilityIdentifier: self.accessibilityIdentifier
+            )
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -272,13 +293,16 @@ struct OpenRouterModelControls: View {
     /// rewrite modes all run on the speech model, on the transcription endpoint.
     @ViewBuilder
     private var speechModelControls: some View {
-        Picker("Speech model", selection: self.$settings.cloudTranscriptionModelID) {
-            ForEach(self.viewModel.openRouterSpeechModels, id: \.id) { model in
-                Text(model.name).tag(model.id)
-                    .disabled(self.viewModel.hasValidatedOpenRouterSpeechModels && !self.viewModel.validatedOpenRouterSpeechModelIDs.contains(model.id))
-            }
-        }
-        .accessibilityIdentifier("openrouter-transcription-model")
+        SpeechModelPickerRow(
+            title: "Speech model",
+            items: SpeechModelPickerItems.openRouterSpeech(
+                models: self.viewModel.openRouterSpeechModels,
+                selected: self.settings.cloudTranscriptionModelID,
+                validatedIDs: self.viewModel.hasValidatedOpenRouterSpeechModels ? self.viewModel.validatedOpenRouterSpeechModelIDs : nil
+            ),
+            selection: self.$settings.cloudTranscriptionModelID,
+            accessibilityIdentifier: "openrouter-transcription-model"
+        )
         Text("Turns speech into text. Used for dictation, imported files and voice commands.")
             .font(.caption).foregroundStyle(.secondary)
     }
@@ -287,15 +311,16 @@ struct OpenRouterModelControls: View {
     /// hears the recording and writes it in that style.
     @ViewBuilder
     private var styleModelControls: some View {
-        Picker("Style model", selection: self.$settings.cloudDictationModelSelection) {
-            Text("Automatic (\(self.modelName(self.automaticModelID)))").tag(CloudAudioDictationModel.automaticID)
-            Divider()
-            ForEach(self.viewModel.openRouterStyleModels, id: \.id) { model in
-                Text(model.name).tag(model.id)
-                    .disabled(self.viewModel.hasValidatedOpenRouterStyleModels && !self.viewModel.validatedOpenRouterStyleModelIDs.contains(model.id))
-            }
-        }
-        .accessibilityIdentifier("openrouter-audio-dictation-model")
+        SpeechModelPickerRow(
+            title: "Style model",
+            items: SpeechModelPickerItems.openRouterStyle(
+                models: self.viewModel.openRouterStyleModels,
+                automaticName: self.modelName(self.automaticModelID),
+                validatedIDs: self.viewModel.hasValidatedOpenRouterStyleModels ? self.viewModel.validatedOpenRouterStyleModelIDs : nil
+            ),
+            selection: self.$settings.cloudDictationModelSelection,
+            accessibilityIdentifier: "openrouter-audio-dictation-model"
+        )
         .help(self.automaticExplanation)
         Text("Used only when a Cleanup Style is on: it hears the recording and writes it in that style. Recordings up to 8 minutes.")
             .font(.caption).foregroundStyle(.secondary)

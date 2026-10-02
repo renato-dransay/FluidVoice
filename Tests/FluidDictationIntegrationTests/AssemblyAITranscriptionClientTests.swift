@@ -66,7 +66,7 @@ final class AssemblyAITranscriptionClientTests: XCTestCase {
     }
 
     func testUniversal2IsSentAloneAndOtherModelsFallBackToIt() throws {
-        func speechModels(_ modelID: String) throws -> [String]? {
+        func speechModels(_ modelID: String) throws -> [String]? { // swiftlint:disable:this discouraged_optional_collection
             let body = try JSONSerialization.jsonObject(with: AssemblyAITranscriptionClient.transcriptBody(
                 uploadURL: "u", configuration: .init(providerID: "assemblyai", modelID: modelID)
             )) as? [String: Any]

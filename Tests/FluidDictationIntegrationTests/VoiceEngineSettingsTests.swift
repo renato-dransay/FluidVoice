@@ -600,3 +600,67 @@ final class VoiceEngineSettingsTests: XCTestCase {
         )
     }
 }
+
+/// The rows of the one searchable model picker that Voice Engine's Cloud tab and Live cloud sheet share
+/// with AI Providers: which models it offers, the second line each one shows, and which can be chosen.
+final class SpeechModelPickerTests: XCTestCase {
+    func testSearchMatchesIDNameAndSecondLine() {
+        let items = [
+            SearchableModelPickerItem(id: "nova-3", name: "Nova-3", detail: "Default"),
+            SearchableModelPickerItem(id: "nova-3-medical", name: "Nova-3 Medical", detail: "English only · Medical terms"),
+        ]
+        XCTAssertEqual(SearchableModelPickerItem.filtered(items, query: "").map(\.id), ["nova-3", "nova-3-medical"])
+        XCTAssertEqual(SearchableModelPickerItem.filtered(items, query: "MEDICAL").map(\.id), ["nova-3-medical"])
+        XCTAssertEqual(SearchableModelPickerItem.filtered(items, query: "english").map(\.id), ["nova-3-medical"])
+        XCTAssertEqual(SearchableModelPickerItem.filtered(items, query: " default ").map(\.id), ["nova-3"])
+        XCTAssertTrue(SearchableModelPickerItem.filtered(items, query: "whisper").isEmpty)
+    }
+
+    func testCloudRowsMarkTheDefaultAndModelsWithoutWordTimings() {
+        let deepgram = SpeechModelPickerItems.cloud(providerID: "deepgram", selected: "nova-3")
+        XCTAssertEqual(deepgram.map(\.id), ["nova-3", "nova-2", "nova-3-medical"])
+        XCTAssertEqual(deepgram.first?.detail, "Default")
+        XCTAssertEqual(deepgram.last?.detail, "English only · Medical terms")
+        XCTAssertTrue(deepgram.allSatisfy(\.isEnabled))
+        let mistral = SpeechModelPickerItems.cloud(providerID: "mistral", selected: "voxtral-mini-latest")
+        XCTAssertEqual(mistral.first?.detail, "Default · No word timings")
+    }
+
+    func testAStoredModelNoLongerListedStaysVisibleAsTheSelection() {
+        let cloud = SpeechModelPickerItems.cloud(providerID: "deepgram", selected: "nova-0")
+        XCTAssertEqual(cloud.first, SearchableModelPickerItem(id: "nova-0", name: "nova-0", detail: "No longer listed"))
+        XCTAssertEqual(cloud.count, CloudTranscriptionCatalog.models(for: "deepgram").count + 1)
+        let live = SpeechModelPickerItems.live(provider: .assemblyAI, selected: "retired-model")
+        XCTAssertEqual(live.first?.id, "retired-model")
+        XCTAssertEqual(SpeechModelPickerItems.live(provider: .assemblyAI, selected: "universal-3-6-pro").count, 4, "A listed selection adds no row")
+    }
+
+    func testLiveRowsCarryEachModelsNote() {
+        let rows = SpeechModelPickerItems.live(provider: .assemblyAI, selected: "universal-3-6-pro")
+        XCTAssertEqual(rows.map(\.id), LiveTranscriptionCatalog.info(for: .assemblyAI).models.map(\.id))
+        XCTAssertEqual(rows.first?.detail, "Default")
+        XCTAssertEqual(rows.last?.detail, "English only")
+    }
+
+    func testOpenRouterRowsKeepCheckedModelsOnlySelectableAndOfferAutomaticFirst() {
+        let models = [
+            CloudTranscriptionModel(id: CloudTranscriptionModel.defaultDictationID, name: "Whisper Large v3 Turbo", wordTimingSupport: .supported, languageHintProviderTags: []),
+            CloudTranscriptionModel(id: "openai/gpt-4o-transcribe", name: "GPT-4o Transcribe", wordTimingSupport: .unsupported, languageHintProviderTags: []),
+            CloudTranscriptionModel(id: "vendor/new", name: "New", wordTimingSupport: .unverified, languageHintProviderTags: []),
+        ]
+        let unchecked = SpeechModelPickerItems.openRouterSpeech(models: models, selected: CloudTranscriptionModel.defaultDictationID, validatedIDs: nil)
+        XCTAssertEqual(unchecked.map(\.detail), ["Default", "No word timings", "Word timings not checked"])
+        XCTAssertTrue(unchecked.allSatisfy(\.isEnabled), "Before a listing check every model stays selectable")
+        let checked = SpeechModelPickerItems.openRouterSpeech(models: models, selected: CloudTranscriptionModel.defaultDictationID, validatedIDs: [CloudTranscriptionModel.defaultDictationID])
+        XCTAssertEqual(checked.map(\.isEnabled), [true, false, false])
+        XCTAssertEqual(checked.last?.detail, "Not offered for this key")
+
+        let style = SpeechModelPickerItems.openRouterStyle(
+            models: [CloudAudioDictationModel(id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash")],
+            automaticName: "Gemini 3.8 Flash",
+            validatedIDs: nil
+        )
+        XCTAssertEqual(style.map(\.id), [CloudAudioDictationModel.automaticID, "google/gemini-3.8-flash"])
+        XCTAssertEqual(style.first?.name, "Automatic (Gemini 3.8 Flash)")
+    }
+}
