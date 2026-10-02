@@ -13,6 +13,14 @@ import Foundation
 /// EVIDENCE: https://elevenlabs.io/docs/eleven-api/resources/errors (checked 2026-10-02): 401
 /// `authentication_error`, 402 `insufficient_credits`, 403 `insufficient_permissions` for a key without
 /// access to the endpoint, 429 rate limits. The help centre also documents a legacy 401 `quota_exceeded`.
+/// EVIDENCE: https://elevenlabs.io/docs/api-reference/authentication and
+/// https://elevenlabs.io/docs/api-reference/service-accounts/api-keys/list (checked 2026-10-02): a key can be
+/// limited to some endpoints; `GET /v1/models` needs the `models_read` permission and speech to text the
+/// separate `speech_to_text` one, so a speech-to-text-only key is refused the model list with 403
+/// `insufficient_permissions` (`authorization_error`, "You do not have the required permissions for this
+/// action"). No endpoint under `speech_to_text` checks a key without audio, so the key check keeps the
+/// model list and reads that answer as a valid but restricted key; a missing speech-to-text permission
+/// then shows on the first transcription, whose 403 message says so.
 nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
     static let id = "elevenlabs"
     static let name = "ElevenLabs"
@@ -22,7 +30,7 @@ nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
     static let shared = ElevenLabsTranscriptionClient()
 
     private static let speechToTextEndpoint = "https://api.elevenlabs.io/v1/speech-to-text"
-    /// The key check the ElevenLabs live adapter uses.
+    /// The key check the ElevenLabs live adapter uses. A key without `models_read` still passes (see above).
     private static let keyCheckEndpoint = "https://api.elevenlabs.io/v1/models"
 
     private let http: CloudVendorHTTP
@@ -38,7 +46,12 @@ nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
     func checkKey(apiKey: String) async throws {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         guard let url = URL(string: Self.keyCheckEndpoint) else { throw CloudTranscriptionError.network }
-        _ = try await self.http.send(CloudVendorHTTP.request(url, headers: ["xi-api-key": key]), endpoint: "models", classify: Self.classify)
+        do {
+            _ = try await self.http.send(CloudVendorHTTP.request(url, headers: ["xi-api-key": key]), endpoint: "models", classify: Self.classifyKeyCheck)
+        } catch CloudTranscriptionError.server(403) {
+            // The key authenticated but may not list models: valid, restricted to other endpoints.
+            return
+        }
     }
 
     func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult {
@@ -93,6 +106,18 @@ nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
               [error.detail.code, error.detail.status].contains("quota_exceeded")
         else { return nil }
         return .creditsExhausted
+    }
+
+    /// The key check also reads a 403 for a missing permission (`insufficient_permissions`, or the
+    /// legacy `missing_permissions`) as a key that authenticated, keeping its status apart from a refused key.
+    static let classifyKeyCheck: @Sendable (Int, Data) -> CloudTranscriptionError? = { status, data in
+        if status == 403,
+           let error = try? JSONDecoder().decode(ErrorBody.self, from: data),
+           [error.detail.code, error.detail.status].contains(where: { $0 == "insufficient_permissions" || $0 == "missing_permissions" })
+        {
+            return .server(403)
+        }
+        return classify(status, data)
     }
 
     private struct ErrorBody: Decodable {

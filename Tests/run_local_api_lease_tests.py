@@ -83,7 +83,8 @@ struct LiveTranscriptionConfiguration: Equatable {
     var cloudDictationConfiguration: CloudTranscriptionConfiguration { cloudTranscriptionConfiguration }
     var cloudDictationModelID = "dictation-model"
     var cloudDictationLanguageCode: String?
-    var usesCombinedCloudDictation: Bool { usesCloudTranscription }
+    /// As in the app: only OpenRouter as the Cloud provider sends dictation to its style model.
+    var usesCombinedCloudDictation: Bool { usesCloudTranscription && cloudTranscriptionProviderID == CloudTranscriptionCatalog.openRouterID }
     var openRouterTranscriptionAPIKey = "fixture-credential"
     var cloudTranscriptionProviderID = "openrouter"
     func speechAPIKey(for providerID: String) -> String {
@@ -332,6 +333,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 guard let next = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else { fatalError("Expected cloud provider") }
                 check(next.configuration == settings.cloudTranscriptionConfiguration, "Only subsequent operations adopt model and language changes")
                 check(next.persistChunks == (activity != .dictation), "Dictation must not persist cloud chunks; files and API may resume")
+                check(service.frozenCloudDictationModelID == (activity == .dictation ? "dictation-model" : nil), "Only OpenRouter dictation freezes the style model")
                 service.releaseExclusiveActivity(lease)
                 passes += 1
             }
@@ -353,6 +355,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             let lease = try service.acquireExclusiveActivity(.dictation)
             guard let provider = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else { fatalError("Expected cloud provider") }
             check(provider.apiKey == "deepgram-fixture-credential", "The key is the frozen provider's own speech key")
+            check(service.frozenCloudDictationModelID == nil, "Deepgram dictation never goes to OpenRouter's style model")
             check(service.skipsLocalTextProcessing == false, "Deepgram output is processed like local output")
             settings.cloudTranscriptionProviderID = "openrouter"
             check(service.activeCloudProviderID == "deepgram", "The recording keeps the provider it was frozen with")

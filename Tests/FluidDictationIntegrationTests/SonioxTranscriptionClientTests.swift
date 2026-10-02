@@ -99,6 +99,44 @@ final class SonioxTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(SonioxTranscriptionClient.words(from: []), [])
     }
 
+    func testTokensOfScriptsWithoutSpacesAreWordsOfTheirOwn() {
+        typealias Token = SonioxTranscriptionClient.Token
+        let chinese = SonioxTranscriptionClient.words(from: [
+            Token(text: "我", startMs: 0, endMs: 200),
+            Token(text: "用", startMs: 200, endMs: 400),
+            Token(text: "Fluid", startMs: 400, endMs: 700),
+            Token(text: "Voice", startMs: 700, endMs: 900),
+            Token(text: "写", startMs: 900, endMs: 1_100),
+            Token(text: "字", startMs: 1_100, endMs: 1_300),
+            Token(text: "。", startMs: 1_300, endMs: 1_350),
+        ])
+        // One word per token, a Latin word inside still merged, punctuation on the previous word.
+        XCTAssertEqual(chinese, [
+            CloudTranscriptionWord(word: "我", start: 0, end: 0.2),
+            CloudTranscriptionWord(word: "用", start: 0.2, end: 0.4),
+            CloudTranscriptionWord(word: "FluidVoice", start: 0.4, end: 0.9),
+            CloudTranscriptionWord(word: "写", start: 0.9, end: 1.1),
+            CloudTranscriptionWord(word: "字。", start: 1.1, end: 1.35),
+        ])
+        let japanese = SonioxTranscriptionClient.words(from: [
+            Token(text: "こんにちは", startMs: 0, endMs: 500),
+            Token(text: "、", startMs: 500, endMs: 520),
+            Token(text: "世界", startMs: 600, endMs: 900),
+        ])
+        XCTAssertEqual(japanese.map(\.word), ["こんにちは、", "世界"])
+        let thai = SonioxTranscriptionClient.words(from: [
+            Token(text: "สวัสดี", startMs: 0, endMs: 400),
+            Token(text: "ครับ", startMs: 400, endMs: 700),
+        ])
+        XCTAssertEqual(thai.map(\.word), ["สวัสดี", "ครับ"])
+        let korean = SonioxTranscriptionClient.words(from: [
+            Token(text: "안녕", startMs: 0, endMs: 300),
+            Token(text: "하세요", startMs: 300, endMs: 600),
+            Token(text: " 세계", startMs: 700, endMs: 1_000),
+        ])
+        XCTAssertEqual(korean.map(\.word), ["안녕하세요", "세계"], "Korean separates words with spaces, so its pieces merge")
+    }
+
     func testErrorsAreMappedAndCarryNoServerText() async throws {
         let cases: [(Int, String, CloudTranscriptionError)] = [
             (401, #"{"status_code":401,"error_type":"unauthenticated","message":"PRIVATE sx-key"}"#, .authentication),
@@ -166,8 +204,38 @@ final class SonioxTranscriptionClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "\(error)")
         }
+        // The cancelled caller does not wait for the deletes, which still go out.
+        try await stub.waitForRequests(Self.deleteFile, count: 1)
         XCTAssertEqual(stub.requests(Self.deleteTranscription).count, 1)
-        XCTAssertEqual(stub.requests(Self.deleteFile).count, 1)
+        XCTAssertEqual(stub.requests(Self.deleteFile).first?.timeoutInterval, CloudVendorHTTP.deleteTimeout)
+    }
+
+    /// Soniox answers 409 to a delete while the transcription is processing. The delete is tried again in
+    /// the background, and the file is deleted only after the transcription is gone.
+    func testADeleteRefusedWhileProcessingIsRetriedAndTheFileFollows() async throws {
+        var routes = self.routes(status: [(0, "")])
+        routes[Self.deleteTranscription] = [
+            (409, #"{"status_code":409,"error_type":"invalid_state","message":"PRIVATE"}"#),
+            (409, #"{"status_code":409,"error_type":"invalid_state","message":"PRIVATE"}"#),
+            Self.deleted,
+        ]
+        let stub = CloudVendorStub(routes)
+        stub.install()
+        let retryClock = CloudTestClock()
+        let client = SonioxTranscriptionClient(session: CloudURLProtocol.session(), poller: CloudTestClock().poller, cleanupRetry: retryClock.cleanupRetry)
+        let configuration = self.configuration
+        let task = Task {
+            try await client.transcribe(samples: [0.1], configuration: configuration, apiKey: "k", wordTimings: false)
+        }
+        try await stub.waitForRequest(Self.status)
+        task.cancel()
+        _ = try? await task.value
+        try await stub.waitForRequests(Self.deleteFile, count: 1)
+        XCTAssertEqual(
+            stub.calls.filter { $0.hasPrefix("DELETE") },
+            [Self.deleteTranscription, Self.deleteTranscription, Self.deleteTranscription, Self.deleteFile]
+        )
+        XCTAssertEqual(retryClock.sleeps, [5, 5])
     }
 
     func testKeyCheckListsModels() async throws {

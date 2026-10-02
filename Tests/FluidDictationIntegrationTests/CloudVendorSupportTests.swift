@@ -170,7 +170,6 @@ final class CloudVendorSupportTests: XCTestCase {
             configuration: .init(providerID: "deepgram", modelID: "nova-3"), speechAPIKey: { keys[$0] ?? "" }, clients: clients
         )
         XCTAssertEqual(session.apiKey, "dg-key")
-        XCTAssertTrue(session.appliesLocalTextProcessing)
         await session.prewarm()
         let result = try await session.provider(persistChunks: false).transcribe([Float](repeating: 0.1, count: 16_000))
         XCTAssertEqual(result.text, "hi")
@@ -188,7 +187,6 @@ final class CloudVendorSupportTests: XCTestCase {
         let session = CloudTranscriptionSession(
             configuration: .init(), speechAPIKey: { $0 == "openrouter" ? "or-key" : "other" }, clients: Self.stubbedClients()
         )
-        XCTAssertFalse(session.appliesLocalTextProcessing)
         await session.prewarm()
         let request = try XCTUnwrap(recorder.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/key")
@@ -291,7 +289,70 @@ final class CloudVendorSupportTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError)
         }
+        try await log.waitForEntries(1)
         XCTAssertEqual(log.entries, ["job"], "The delete goes out outside the cancelled task")
+    }
+
+    func testACancelledTranscriptionDoesNotWaitForItsDeletes() async throws {
+        let registered = self.expectation(description: "Job created")
+        let deleteStarted = self.expectation(description: "Delete started")
+        let task = Task {
+            try await CloudRemoteCleanup.run(providerID: "test") { cleanup -> String in
+                cleanup.register("job") {
+                    deleteStarted.fulfill()
+                    try await Task.sleep(nanoseconds: 3_000_000_000)
+                }
+                registered.fulfill()
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+                return "unreachable"
+            }
+        }
+        await self.fulfillment(of: [registered], timeout: 2)
+        let cancelled = ProcessInfo.processInfo.systemUptime
+        task.cancel()
+        _ = try? await task.value
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - cancelled, 1, "The cancelled caller returns before the slow delete ends")
+        await self.fulfillment(of: [deleteStarted], timeout: 2)
+    }
+
+    func testARefusedDeleteIsRetriedInTheBackgroundAndTheOlderDeletesWaitForIt() async throws {
+        let clock = FakeClock()
+        let retry = CloudCleanupRetry(now: { clock.now }, sleep: { clock.advance($0) })
+        let log = DeletionLog()
+        let refusals = DeletionLog()
+        let value = try await CloudRemoteCleanup.run(providerID: "test", retry: retry) { cleanup in
+            cleanup.register("file") { log.append("file") }
+            cleanup.register("transcription", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 409)) {
+                if refusals.entries.count < 3 {
+                    refusals.append("409")
+                    throw CloudTranscriptionError.server(409)
+                }
+                log.append("transcription")
+            }
+            return "result"
+        }
+        XCTAssertEqual(value, "result")
+        try await log.waitForEntries(2)
+        XCTAssertEqual(log.entries, ["transcription", "file"], "The file follows the transcription it belongs to")
+        XCTAssertEqual(clock.sleeps, [5, 5, 5])
+    }
+
+    func testRetriesSlowDownAfterAMinuteAndGiveUpAfterTenMinutes() async throws {
+        let clock = FakeClock()
+        let retry = CloudCleanupRetry(now: { clock.now }, sleep: { clock.advance($0) })
+        let attempts = DeletionLog()
+        let cleanup = CloudRemoteCleanup(providerID: "test", retry: retry)
+        cleanup.register("job", refusedWhileProcessing: CloudRemoteCleanup.refused(withStatus: 403)) {
+            attempts.append("attempt")
+            throw CloudTranscriptionError.server(403)
+        }
+        await cleanup.deleteAll()
+        // 12 waits of 5 s fill the first minute; 36 waits of 15 s fill the other nine.
+        try await attempts.waitForEntries(1 + 12 + 36)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(attempts.entries.count, 49, "No attempt after ten minutes")
+        XCTAssertEqual(clock.sleeps, Array(repeating: 5, count: 12) + Array(repeating: 15, count: 36))
+        XCTAssertEqual(clock.now, CloudCleanupRetry.giveUpAfter, accuracy: 0.001)
     }
 
     // MARK: - Helpers
@@ -339,4 +400,16 @@ private final class DeletionLog: @unchecked Sendable {
     private var storage: [String] = []
     var entries: [String] { self.lock.withLock { self.storage } }
     func append(_ entry: String) { self.lock.withLock { self.storage.append(entry) } }
+
+    /// Waits for deletions that run in the background.
+    func waitForEntries(_ count: Int, timeout: TimeInterval = 5) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while self.entries.count < count {
+            guard Date() < deadline else {
+                XCTFail("\(self.entries.count) of \(count) deletions")
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
 }

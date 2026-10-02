@@ -53,10 +53,15 @@ final class CloudVendorStub: @unchecked Sendable {
 
     /// Waits until a request for `route` has been sent, for tests that cancel a hanging request.
     func waitForRequest(_ route: String, timeout: TimeInterval = 5) async throws {
+        try await self.waitForRequests(route, count: 1, timeout: timeout)
+    }
+
+    /// Waits until `count` requests for `route` have been sent, for deletes that run in the background.
+    func waitForRequests(_ route: String, count: Int, timeout: TimeInterval = 5) async throws {
         let deadline = Date().addingTimeInterval(timeout)
-        while self.requests(route).isEmpty {
+        while self.requests(route).count < count {
             guard Date() < deadline else {
-                XCTFail("No request for \(route)")
+                XCTFail("\(self.requests(route).count) of \(count) requests for \(route)")
                 return
             }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -74,6 +79,11 @@ final class CloudTestClock: @unchecked Sendable {
 
     var poller: CloudJobPoller {
         CloudJobPoller(now: { self.now }, sleep: { self.advance($0) })
+    }
+
+    /// The background retry of a refused delete on this clock.
+    var cleanupRetry: CloudCleanupRetry {
+        CloudCleanupRetry(now: { self.now }, sleep: { self.advance($0) })
     }
 
     func advance(_ seconds: TimeInterval) {

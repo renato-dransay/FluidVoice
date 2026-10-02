@@ -129,7 +129,7 @@ final class CloudProviderRoutingTests: XCTestCase {
         let result = try await provider.transcribe([Float](repeating: 0.1, count: 16_000))
         let text = ASRService.processedTranscript(
             result.text,
-            skipsLocalProcessing: !session.appliesLocalTextProcessing,
+            skipsLocalProcessing: ASRService.skipsLocalTextProcessing(cloudProviderID: session.providerID),
             removeFillers: { $0 },
             applyDictionary: Self.dictionary,
             formatPunctuation: { $0 }

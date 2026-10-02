@@ -36,11 +36,6 @@ nonisolated struct CloudTranscriptionSession: Sendable {
     var providerID: String { self.configuration.providerID }
     var isOpenRouter: Bool { self.providerID == CloudTranscriptionCatalog.openRouterID }
 
-    /// OpenRouter's transcript is used as it arrives (its style model already applied any Cleanup Style).
-    /// Every other provider's transcript gets the local text processing Local and Live cloud output get
-    /// (CLD-5).
-    var appliesLocalTextProcessing: Bool { !self.isOpenRouter }
-
     @MainActor
     func provider(cacheDirectory: URL? = nil, persistChunks: Bool) -> CloudTranscriptionProvider {
         CloudTranscriptionProvider(

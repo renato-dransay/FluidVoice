@@ -257,6 +257,26 @@ nonisolated struct CloudTranscriptionWord: Codable, Equatable, Sendable {
     let end: TimeInterval
 }
 
+extension CloudTranscriptionWord {
+    /// True for a character of a script written without spaces between words: Chinese, Japanese, Thai,
+    /// Lao, Myanmar and Khmer (Korean separates words with spaces). Words in these scripts are joined
+    /// without a space, and a vendor's pieces of them cannot be merged at whitespace.
+    nonisolated static func isWrittenWithoutSpaces(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0E00 ... 0x0EFF, // Thai, Lao
+             0x1000 ... 0x109F, // Myanmar
+             0x1780 ... 0x17FF, // Khmer
+             0x2E80 ... 0x9FFF, // CJK radicals, punctuation, kana and ideographs
+             0xF900 ... 0xFAFF, // CJK compatibility ideographs
+             0xFF66 ... 0xFF9F, // Half-width katakana
+             0x20000 ... 0x3FFFF: // CJK ideograph extensions
+            true
+        default:
+            false
+        }
+    }
+}
+
 nonisolated struct CloudTranscriptionUsage: Codable, Equatable, Sendable {
     let seconds: Double?
     let cost: Double?

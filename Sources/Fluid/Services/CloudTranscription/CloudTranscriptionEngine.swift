@@ -104,25 +104,50 @@ actor CloudTranscriptionEngine {
         }
     }
 
-    private static func audioIdentity(samples: [Float], configuration: CloudTranscriptionConfiguration, wordTimings: Bool, maximumSamples: Int) throws -> String {
+    /// The name of a recording's cached chunks. OpenRouter keeps the exact identity of earlier versions
+    /// (configuration without a provider, no request size), so a meeting interrupted across an update
+    /// resumes from its cached chunks instead of sending, and paying for, them again. Other providers add
+    /// both, since their chunks differ in length.
+    static func audioIdentity(samples: [Float], configuration: CloudTranscriptionConfiguration, wordTimings: Bool, maximumSamples: Int) throws -> String {
         var hash = SHA256()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        hash.update(data: try encoder.encode(configuration))
         // Version covers PCM format, chunking rules, and cache schema; bump if any changes.
-        hash.update(data: Data("pcm-f32-16k-mono-chunks-v1-timed-\(wordTimings)-max-\(maximumSamples)".utf8))
+        var version = "pcm-f32-16k-mono-chunks-v1-timed-\(wordTimings)"
+        if configuration.providerID == CloudTranscriptionCatalog.openRouterID {
+            hash.update(data: try encoder.encode(LegacyIdentity(configuration)))
+        } else {
+            hash.update(data: try encoder.encode(configuration))
+            version += "-max-\(maximumSamples)"
+        }
+        hash.update(data: Data(version.utf8))
         samples.withUnsafeBytes { hash.update(bufferPointer: $0) }
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The configuration as earlier versions encoded it, before it named its provider.
+    private struct LegacyIdentity: Encodable {
+        let modelID: String
+        let languageCode: String?
+        let audioDictation: CloudAudioDictationInstructions?
+        let primaryLanguageCode: String?
+        let secondaryLanguageCode: String?
+
+        init(_ configuration: CloudTranscriptionConfiguration) {
+            self.modelID = configuration.modelID
+            self.languageCode = configuration.languageCode
+            self.audioDictation = configuration.audioDictation
+            self.primaryLanguageCode = configuration.primaryLanguageCode
+            self.secondaryLanguageCode = configuration.secondaryLanguageCode
+        }
     }
 
     private static func joinWords(_ words: [CloudTranscriptionWord]) -> String {
         var text = ""
         for word in words {
             let token = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            let first = token.unicodeScalars.first?.value ?? 0
-            let previous = text.unicodeScalars.last?.value ?? 0
-            let cjk = (0x2E80 ... 0x9FFF).contains(first) || (0x3040 ... 0x30FF).contains(first)
-            let previousCJK = (0x2E80 ... 0x9FFF).contains(previous) || (0x3040 ... 0x30FF).contains(previous)
+            let cjk = token.unicodeScalars.first.map(CloudTranscriptionWord.isWrittenWithoutSpaces) ?? false
+            let previousCJK = text.unicodeScalars.last.map(CloudTranscriptionWord.isWrittenWithoutSpaces) ?? false
             let previousCJKPunctuation = text.last.map { "，。！？、；：「」『』（）".contains($0) } ?? false
             let punctuation = token.first.map { ",.!?;:，。！？、；：".contains($0) } ?? false
             if !text.isEmpty, !punctuation, !(cjk && (previousCJK || previousCJKPunctuation)) { text.append(" ") }

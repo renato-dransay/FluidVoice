@@ -117,6 +117,40 @@ final class CloudTranscriptionChunkTests: XCTestCase {
         }
     }
 
+    /// The identity of an OpenRouter recording's cached chunks is the one earlier versions computed, so a
+    /// FluidMeet meeting interrupted across the update resumes instead of sending every chunk again. The
+    /// expected values come from the identity code of the build before providers were added.
+    func testOpenRouterChunkCacheIdentityIsUnchangedFromEarlierVersions() throws {
+        let samples: [Float] = (0 ..< 1_600).map { Float($0 % 37) / 37 - 0.5 }
+        let openRouterSamples = 120 * CloudAudioChunker.sampleRate
+        let languages = CloudTranscriptionConfiguration(
+            modelID: "openai/whisper-large-v3", languageCode: "de", primaryLanguageCode: "de", secondaryLanguageCode: "en"
+        )
+        XCTAssertEqual(
+            try CloudTranscriptionEngine.audioIdentity(samples: samples, configuration: languages, wordTimings: true, maximumSamples: openRouterSamples),
+            "87db7ba47e375598cf0d67c060fd4e27353fd8a45d695f2717b8d7334be8416a"
+        )
+        XCTAssertEqual(
+            try CloudTranscriptionEngine.audioIdentity(
+                samples: samples, configuration: .init(modelID: "openai/whisper-1"), wordTimings: false, maximumSamples: openRouterSamples
+            ),
+            "7f73b1aede79fa4d56fd33a4799f3c45a4c81ce45651caabf236c66f6d51130e"
+        )
+        // Another provider's identity names the provider and its request size.
+        let deepgram = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-3", languageCode: "de")
+        let deepgramIdentity = try CloudTranscriptionEngine.audioIdentity(samples: samples, configuration: deepgram, wordTimings: true, maximumSamples: 780 * 16_000)
+        XCTAssertNotEqual(
+            deepgramIdentity,
+            try CloudTranscriptionEngine.audioIdentity(samples: samples, configuration: deepgram, wordTimings: true, maximumSamples: 120 * 16_000)
+        )
+        XCTAssertNotEqual(
+            deepgramIdentity,
+            try CloudTranscriptionEngine.audioIdentity(
+                samples: samples, configuration: .init(providerID: "elevenlabs", modelID: "nova-3", languageCode: "de"), wordTimings: true, maximumSamples: 780 * 16_000
+            )
+        )
+    }
+
     func testTimedChunkBoundaryDeduplicatesByOwnership() async throws {
         let recorder = CloudRequestRecorder()
         CloudURLProtocol.install { request in

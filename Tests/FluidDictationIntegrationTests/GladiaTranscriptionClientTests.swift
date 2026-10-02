@@ -124,7 +124,42 @@ final class GladiaTranscriptionClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "\(error)")
         }
+        // The cancelled caller does not wait for the delete, which still goes out.
+        try await stub.waitForRequests(Self.delete, count: 1)
+        XCTAssertEqual(stub.requests(Self.delete).first?.timeoutInterval, CloudVendorHTTP.deleteTimeout)
+    }
+
+    /// Gladia answers 403 to a delete while the job is still processing, as after a polling timeout. The
+    /// delete is tried again in the background until the finished job is deleted.
+    func testADeleteRefusedWhileTheJobIsProcessingIsRetriedUntilTheJobIsDeleted() async throws {
+        let refused = (status: 403, body: #"{"statusCode":403,"message":"PRIVATE not in a deletable state"}"#)
+        var routes = self.routes(status: [Self.processing])
+        routes[Self.delete] = [refused, refused, Self.deleted]
+        let stub = CloudVendorStub(routes)
+        stub.install()
+        let retryClock = CloudTestClock()
+        let client = GladiaTranscriptionClient(session: CloudURLProtocol.session(), poller: CloudTestClock().poller, cleanupRetry: retryClock.cleanupRetry)
+        let error = await CloudJobVendorAssert.failure {
+            try await client.transcribe(samples: [0.1], configuration: self.configuration, apiKey: "k", wordTimings: false)
+        }
+        XCTAssertEqual(error as? CloudTranscriptionError, .timeout, "A refused delete never changes the transcription's outcome")
+        try await stub.waitForRequests(Self.delete, count: 3)
+        XCTAssertEqual(retryClock.sleeps, [5, 5])
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(stub.requests(Self.delete).count, 3, "A deleted job is not deleted again")
+    }
+
+    func testARejectedKeyOnDeleteIsNotRetried() async throws {
+        var routes = self.routes()
+        routes[Self.delete] = [(401, #"{"statusCode":401,"message":"PRIVATE"}"#)]
+        let stub = CloudVendorStub(routes)
+        stub.install()
+        let retryClock = CloudTestClock()
+        let client = GladiaTranscriptionClient(session: CloudURLProtocol.session(), poller: CloudTestClock().poller, cleanupRetry: retryClock.cleanupRetry)
+        _ = try await client.transcribe(samples: [Float](repeating: 0.1, count: 16_000 * 2), configuration: self.configuration, apiKey: "k", wordTimings: false)
+        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(stub.requests(Self.delete).count, 1)
+        XCTAssertEqual(retryClock.sleeps, [])
     }
 
     func testKeyCheckListsOneLiveSession() async throws {

@@ -123,7 +123,28 @@ final class AssemblyAITranscriptionClientTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "\(error)")
         }
-        XCTAssertEqual(stub.requests(Self.delete).count, 1)
+        // The cancelled caller does not wait for the delete, which still goes out.
+        try await stub.waitForRequests(Self.delete, count: 1)
+        XCTAssertEqual(stub.requests(Self.delete).first?.timeoutInterval, CloudVendorHTTP.deleteTimeout)
+    }
+
+    /// AssemblyAI deletes a transcript only once it has completed; an earlier delete is retried in the background.
+    func testADeleteRefusedWhileTheTranscriptIsProcessingIsRetried() async throws {
+        var routes = self.routes(status: [(0, "")])
+        routes[Self.delete] = [(400, #"{"error":"PRIVATE"}"#), Self.deleted]
+        let stub = CloudVendorStub(routes)
+        stub.install()
+        let retryClock = CloudTestClock()
+        let client = AssemblyAITranscriptionClient(session: CloudURLProtocol.session(), poller: CloudTestClock().poller, cleanupRetry: retryClock.cleanupRetry)
+        let configuration = self.configuration
+        let task = Task {
+            try await client.transcribe(samples: [0.1], configuration: configuration, apiKey: "k", wordTimings: false)
+        }
+        try await stub.waitForRequest(Self.status)
+        task.cancel()
+        _ = try? await task.value
+        try await stub.waitForRequests(Self.delete, count: 2)
+        XCTAssertEqual(retryClock.sleeps, [5])
     }
 
     func testKeyCheckAsksForAStreamingToken() async throws {

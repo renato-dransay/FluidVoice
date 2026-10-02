@@ -97,6 +97,34 @@ final class ElevenLabsTranscriptionClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "xi-api-key"), "el-key")
     }
 
+    /// A key limited to speech to text lacks `models_read`; ElevenLabs answers the model list with 403
+    /// `insufficient_permissions`, which proves the key authenticated.
+    func testKeyCheckAcceptsAKeyRestrictedToOtherEndpoints() async throws {
+        let restricted = [
+            #"{"detail":{"type":"authorization_error","code":"insufficient_permissions","message":"PRIVATE"}}"#,
+            #"{"detail":{"status":"missing_permissions","message":"The API key you used is missing the permission models_read"}}"#,
+        ]
+        for body in restricted {
+            CloudURLProtocol.install { _ in (403, [:], Data(body.utf8)) }
+            try await self.client().checkKey(apiKey: "el-key")
+        }
+        let refused: [(Int, String, CloudTranscriptionError)] = [
+            (401, #"{"detail":{"type":"authentication_error","code":"invalid_api_key","message":"PRIVATE"}}"#, .authentication),
+            (403, #"{"detail":{"type":"authorization_error","code":"ip_not_allowed","message":"PRIVATE"}}"#, .authentication),
+            (403, "PRIVATE", .authentication),
+            (401, #"{"detail":{"status":"quota_exceeded","message":"PRIVATE"}}"#, .creditsExhausted),
+        ]
+        for (status, body, expected) in refused {
+            CloudURLProtocol.install { _ in (status, [:], Data(body.utf8)) }
+            do {
+                try await self.client().checkKey(apiKey: "el-key")
+                XCTFail("HTTP \(status) \(body) must fail the key check")
+            } catch {
+                XCTAssertEqual(error as? CloudTranscriptionError, expected, body)
+            }
+        }
+    }
+
     func testMissingWordTimesFailATimedRequest() async throws {
         CloudURLProtocol.install { _ in (200, [:], Data(#"{"text":"No words."}"#.utf8)) }
         do {
