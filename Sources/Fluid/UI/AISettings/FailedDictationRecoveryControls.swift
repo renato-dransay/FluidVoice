@@ -8,7 +8,7 @@ struct FailedDictationRecoveryControls: View {
     @ObservedObject var viewModel: VoiceEngineSettingsViewModel
     /// True while a failed recording of this tab's engine is waiting.
     let hasFailedRecording: Bool
-    /// Names the live provider in retry errors; nil for OpenRouter.
+    /// Names the live provider in retry errors; nil for the Cloud tab, which names its own provider.
     var liveProviderName: String?
     @State private var retryTask: Task<Void, Never>?
     @State private var status = ""
@@ -39,6 +39,8 @@ struct FailedDictationRecoveryControls: View {
     private func retryDictation(useLocal: Bool) {
         guard self.retryTask == nil else { return }
         self.status = ""
+        // Read before the retry: a successful retry discards the failed recording.
+        let providerName = self.viewModel.asr.failedCloudProviderName
         self.retryTask = Task { @MainActor in
             defer { self.retryTask = nil }
             do {
@@ -51,6 +53,8 @@ struct FailedDictationRecoveryControls: View {
                 self.status = "Retry cancelled."
             } catch let error as LiveTranscriptionError {
                 self.status = error.message(providerName: self.liveProviderName ?? "The live provider")
+            } catch let error as CloudTranscriptionError {
+                self.status = error.message(providerName: providerName ?? CloudTranscriptionCatalog.openRouterName)
             } catch {
                 self.status = error.localizedDescription
             }

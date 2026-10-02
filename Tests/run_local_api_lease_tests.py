@@ -24,6 +24,8 @@ leases = source[source.index('    func acquireExclusiveActivity('):source.index(
 leases = leases.replace('private func freezeLocalProviderForDictionaryTrainingCapture', 'func freezeLocalProviderForDictionaryTrainingCapture')
 types = source[source.index('enum ASRExclusiveActivity:'):source.index('nonisolated enum ASRHardwareListenerEventDisposition:')]
 executor = source[source.index('actor TranscriptionExecutor {'):source.index('private nonisolated func logTranscriptionExecutorPhase')]
+# Which Cloud output skips local text processing, and the processing itself (CLD-5).
+routing = source[source.index('    /// The Cloud provider of the recording in progress'):source.index('    /// Retry of a failed Cloud recording')]
 swift = r'''
 import Foundation
 TYPES
@@ -32,11 +34,43 @@ func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {}
 struct ASRTranscriptionResult { let text: String; let confidence: Float }
 enum SpeechExecutionSource { case local, cloud, liveCloud }
 struct CloudTranscriptionConfiguration: Equatable {
+    var providerID = "openrouter"
     var modelID: String
     var languageCode: String?
     var primaryLanguageCode: String? = nil
     var secondaryLanguageCode: String? = nil
     var audioDictation: String? = nil
+    init(providerID: String = "openrouter", modelID: String, languageCode: String? = nil) {
+        self.providerID = providerID
+        self.modelID = modelID
+        self.languageCode = languageCode
+    }
+    func with(languageCode: String??) -> CloudTranscriptionConfiguration {
+        var copy = self
+        if let languageCode { copy.languageCode = languageCode }
+        return copy
+    }
+}
+enum CloudTranscriptionCatalog { static let openRouterID = "openrouter" }
+/// The frozen provider, key and configuration; the real session also owns the client and the prewarm rule.
+struct CloudTranscriptionSession {
+    let configuration: CloudTranscriptionConfiguration
+    let apiKey: String
+    init(configuration: CloudTranscriptionConfiguration, speechAPIKey: (String) -> String) {
+        self.configuration = configuration
+        self.apiKey = speechAPIKey(configuration.providerID)
+    }
+    private init(configuration: CloudTranscriptionConfiguration, apiKey: String) {
+        self.configuration = configuration
+        self.apiKey = apiKey
+    }
+    func with(configuration: CloudTranscriptionConfiguration) -> CloudTranscriptionSession {
+        CloudTranscriptionSession(configuration: configuration, apiKey: self.apiKey)
+    }
+    @MainActor func provider(persistChunks: Bool) -> CloudTranscriptionProvider {
+        CloudTranscriptionProvider(configuration: self.configuration, apiKey: self.apiKey, persistChunks: persistChunks)
+    }
+    func prewarm() async {}
 }
 struct LiveTranscriptionConfiguration: Equatable {
     let provider: String
@@ -51,6 +85,10 @@ struct LiveTranscriptionConfiguration: Equatable {
     var cloudDictationLanguageCode: String?
     var usesCombinedCloudDictation: Bool { usesCloudTranscription }
     var openRouterTranscriptionAPIKey = "fixture-credential"
+    var cloudTranscriptionProviderID = "openrouter"
+    func speechAPIKey(for providerID: String) -> String {
+        providerID == "openrouter" ? openRouterTranscriptionAPIKey : "\(providerID)-fixture-credential"
+    }
     var usesCloudTranscription: Bool { speechExecutionSource == .cloud }
     /// Set only while Live cloud is the effective engine, as in the app.
     var liveDictationConfiguration: LiveTranscriptionConfiguration?
@@ -75,10 +113,6 @@ struct LiveProviderTestRun {
 @MainActor final class LiveProviderTestCoordinator {
     static let shared = LiveProviderTestCoordinator()
     var overrideConfiguration: LiveTranscriptionConfiguration?
-}
-nonisolated final class OpenRouterTranscriptionClient: Sendable {
-    static let shared = OpenRouterTranscriptionClient()
-    func prewarmIfIdle(apiKey: String) async {}
 }
 final class DictionaryAudioLearningService {
     static let shared = DictionaryAudioLearningService()
@@ -163,8 +197,8 @@ final class CloudTranscriptionProvider: Provider {
     var localProvider = Provider()
     var frozenTranscriptionProvider: Provider?
     var frozenSpeechExecutionSource: SpeechExecutionSource?
-    var frozenCloudConfiguration: CloudTranscriptionConfiguration?
-    var frozenCloudAPIKey: String?
+    var frozenCloudSession: CloudTranscriptionSession?
+    var frozenCloudConfiguration: CloudTranscriptionConfiguration? { frozenCloudSession?.configuration }
     var frozenCloudDictationModelID: String?
     var isAsrReady = false
     var asrReadyBeforeLiveLease: Bool?
@@ -192,6 +226,7 @@ final class CloudTranscriptionProvider: Provider {
     func recordWordBoostHitIfAny(transcribedText: String) { outputCount += 1 }
     LEASES
     METHODS
+    ROUTING
 }
 func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condition() { fatalError(message) } }
 @main struct Runner {
@@ -301,6 +336,31 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 passes += 1
             }
             settings.speechExecutionSource = .local
+            passes += 1
+        }
+        do {
+            // Another Cloud provider: its own key is frozen, and its output gets the local transformations (CLD-5).
+            let settings = SettingsStore.shared
+            settings.speechExecutionSource = .cloud
+            settings.cloudTranscriptionProviderID = "deepgram"
+            settings.cloudTranscriptionConfiguration = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-3")
+            defer {
+                settings.speechExecutionSource = .local
+                settings.cloudTranscriptionProviderID = "openrouter"
+                settings.cloudTranscriptionConfiguration = CloudTranscriptionConfiguration(modelID: "original", languageCode: "en")
+            }
+            let service = ASRService()
+            let lease = try service.acquireExclusiveActivity(.dictation)
+            guard let provider = service.frozenTranscriptionProvider as? CloudTranscriptionProvider else { fatalError("Expected cloud provider") }
+            check(provider.apiKey == "deepgram-fixture-credential", "The key is the frozen provider's own speech key")
+            check(service.skipsLocalTextProcessing == false, "Deepgram output is processed like local output")
+            settings.cloudTranscriptionProviderID = "openrouter"
+            check(service.activeCloudProviderID == "deepgram", "The recording keeps the provider it was frozen with")
+            service.releaseExclusiveActivity(lease)
+            settings.cloudTranscriptionProviderID = "deepgram"
+            ASRService.formattingCalls = 0
+            let result = try await service.transcribeSamplesForAPI([0.1])
+            check(result.text == "  um cloud raw words  " && ASRService.formattingCalls == 3, "Deepgram API output gets the local transformations")
             passes += 1
         }
         do {
@@ -422,7 +482,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
         print("PASS \(passes) API scenarios using production API methods, activity ownership and transcription executor")
     }
 }
-'''.replace('TYPES', types).replace('EXECUTOR', executor).replace('LEASES', leases).replace('METHODS', methods)
+'''.replace('TYPES', types).replace('EXECUTOR', executor).replace('LEASES', leases).replace('METHODS', methods).replace('ROUTING', routing)
 with tempfile.TemporaryDirectory(prefix="fluidvoice-api-regression-") as directory:
     root = Path(directory)
     (root / 'api-proof.swift').write_text(swift)

@@ -649,7 +649,7 @@ final class ASRService: ObservableObject {
     }
 
     private var failedRemoteDictation: FailedRemoteDictation?
-    /// An OpenRouter recording is waiting for Retry, Transcribe locally or Discard.
+    /// A Cloud recording is waiting for Retry, Transcribe locally or Discard.
     @Published private(set) var hasFailedCloudDictation = false
     /// The live provider whose failed recording is waiting, for the Live cloud tab's triad.
     @Published private(set) var failedLiveProvider: LiveTranscriptionProviderID?
@@ -4074,6 +4074,12 @@ final class ASRService: ObservableObject {
             self.benchmarkLog("stop_end result=error totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) error=\(error.localizedDescription)")
             return ""
         }
+    }
+
+    /// The provider a failed Cloud recording was sent to, for messages about its retry.
+    var failedCloudProviderName: String? {
+        guard case .cloud(_, let configuration) = self.failedRemoteDictation else { return nil }
+        return CloudTranscriptionClients.providerName(for: configuration.providerID)
     }
 
     func discardFailedCloudDictation() {
