@@ -18,6 +18,7 @@ final class ModelRepository {
     static var builtInProviderIDs: [String] {
         var providers = [
             "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
+            "mistral", "assemblyai",
         ]
         if PrivateFeatures.privateAIProvider {
             providers.insert(PrivateAIProviderFeature.shared.providerID, at: 0)
@@ -50,6 +51,13 @@ final class ModelRepository {
         case "ollama", "lmstudio":
             // Local providers - models vary per user, they must add their own
             return []
+        case "mistral":
+            return ["mistral-small-latest"]
+        case "assemblyai":
+            // The LLM Gateway has no model list endpoint; this fixed list stands in for one and the user
+            // can add other IDs. EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/available-models
+            // (checked 2026-10-02).
+            return Self.assemblyAIGatewayModels
         default:
             // Custom providers start with no default models; user must add them
             return []
@@ -63,6 +71,16 @@ final class ModelRepository {
             return PrivateAIProviderFeature.shared.modelIDs(for: task)
         }
         return self.defaultModels(for: providerID)
+    }
+
+    /// AssemblyAI LLM Gateway models offered before the user adds any, default first.
+    static let assemblyAIGatewayModels = [
+        "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "gemini-2.5-flash", "qwen3.5-4b-32k-fast",
+    ]
+
+    /// False for a provider whose API cannot list its models, so a refresh keeps the fixed list.
+    static func listsModels(for providerID: String) -> Bool {
+        providerID != "assemblyai"
     }
 
     static func eligibleModel(preferred: String?, from models: [String]) -> String? {
@@ -93,6 +111,15 @@ final class ModelRepository {
             return "http://localhost:11434/v1"
         case "lmstudio":
             return "http://localhost:1234/v1"
+        // EVIDENCE: https://docs.mistral.ai/api (checked 2026-10-02): OpenAI-style `POST /v1/chat/completions`
+        // with `Authorization: Bearer <key>` and `GET /v1/models`.
+        case "mistral":
+            return "https://api.mistral.ai/v1"
+        // EVIDENCE: https://www.assemblyai.com/docs/llm-gateway/quickstart (checked 2026-10-02): the gateway is used
+        // through the OpenAI SDK with this base URL and the AssemblyAI key as `api_key`, so it accepts
+        // `Authorization: Bearer <key>` as well as the bare key its HTTP examples send.
+        case "assemblyai":
+            return "https://llm-gateway.assemblyai.com/v1"
         default:
             return ""
         }
@@ -114,6 +141,8 @@ final class ModelRepository {
         case "openrouter": return "OpenRouter"
         case "ollama": return "Ollama"
         case "lmstudio": return "LM Studio"
+        case "mistral": return "Mistral"
+        case "assemblyai": return "AssemblyAI"
         default: return providerID.capitalized
         }
     }
@@ -150,6 +179,11 @@ final class ModelRepository {
             return ("https://docs.ollama.com/api/openai-compatibility", "Setup Guide")
         case "lmstudio":
             return ("https://lmstudio.ai/docs/local-server", "Setup Guide")
+        case "mistral":
+            // The key pages come from the live catalog, which already links them.
+            return LiveTranscriptionCatalog.info(for: .mistral).keyURL.map { (url: $0.absoluteString, label: "Get API Key") }
+        case "assemblyai":
+            return LiveTranscriptionCatalog.info(for: .assemblyAI).keyURL.map { (url: $0.absoluteString, label: "Get API Key") }
         default:
             return nil
         }
@@ -182,6 +216,8 @@ final class ModelRepository {
             ("openrouter", "OpenRouter"),
             ("ollama", "Ollama"),
             ("lmstudio", "LM Studio"),
+            ("mistral", "Mistral"),
+            ("assemblyai", "AssemblyAI"),
         ]
 
         if PrivateFeatures.privateAIProvider {
@@ -231,6 +267,10 @@ final class ModelRepository {
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
+        }
+
+        if !Self.listsModels(for: providerID) {
+            return self.defaultModels(for: providerID)
         }
 
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")

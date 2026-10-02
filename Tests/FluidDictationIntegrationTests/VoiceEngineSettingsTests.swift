@@ -122,7 +122,7 @@ final class VoiceEngineSettingsTests: XCTestCase {
     func testTheProviderMenuListsConnectedCloudProvidersFirst() {
         let connected = VoiceEngineSettingsViewModel.cloudProviderGroups(hasKey: { $0 == "openrouter" })
         XCTAssertEqual(connected.connected.map(\.id), ["openrouter"])
-        XCTAssertEqual(connected.notSetUp.map(\.id), ["mistral", "deepgram", "elevenlabs"])
+        XCTAssertEqual(connected.notSetUp.map(\.id), ["mistral", "assemblyai", "soniox", "deepgram", "elevenlabs", "speechmatics", "gladia"])
 
         let none = VoiceEngineSettingsViewModel.cloudProviderGroups(hasKey: { _ in false })
         XCTAssertEqual(none.connected.map(\.id), [])

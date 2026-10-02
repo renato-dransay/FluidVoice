@@ -33,15 +33,14 @@ nonisolated enum ProviderRegistry {
         Self.textProvider("openrouter", name: "OpenRouter", cloudTranscription: true, usageURL: URL(string: "https://openrouter.ai/activity")),
         Self.textProvider("ollama", name: "Ollama", requiresAPIKey: false),
         Self.textProvider("lmstudio", name: "LM Studio", requiresAPIKey: false),
-        // A vendor gains Cloud transcription once its client ships (CLD-3); Mistral and AssemblyAI gain
-        // Text with their text clients (CLD-7, CLD-8).
-        Self.liveProvider(.mistral, cloudTranscription: true),
-        Self.liveProvider(.assemblyAI),
-        Self.liveProvider(.soniox),
+        // Mistral and AssemblyAI also serve text through their OpenAI-compatible chat endpoints (CLD-7, CLD-8).
+        Self.textProvider("mistral", name: "Mistral", cloudTranscription: true, live: .mistral),
+        Self.textProvider("assemblyai", name: "AssemblyAI", cloudTranscription: true, live: .assemblyAI),
+        Self.liveProvider(.soniox, cloudTranscription: true),
         Self.liveProvider(.deepgram, cloudTranscription: true),
         Self.liveProvider(.elevenLabs, cloudTranscription: true),
-        Self.liveProvider(.speechmatics),
-        Self.liveProvider(.gladia),
+        Self.liveProvider(.speechmatics, cloudTranscription: true),
+        Self.liveProvider(.gladia, cloudTranscription: true),
     ]
 
     static func descriptor(for id: String) -> ProviderDescriptor? {

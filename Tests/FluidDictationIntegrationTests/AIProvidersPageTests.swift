@@ -62,6 +62,57 @@ final class AIProvidersPageTests: XCTestCase {
         XCTAssertFalse(AIProviderCatalog.isSpeechOnly("some-custom-id"), "A custom provider has Text")
     }
 
+    /// CLD-7, CLD-8: Mistral and AssemblyAI are built-in text providers that also transcribe, under their
+    /// bare IDs. A key saved for them is a text row, never a second speech-only row.
+    func testMistralAndAssemblyAIAreTextProvidersThatAlsoTranscribe() throws {
+        for id in ["mistral", "assemblyai"] {
+            XCTAssertTrue(ModelRepository.shared.isBuiltIn(id), id)
+            XCTAssertTrue(ModelRepository.shared.builtInProvidersList().contains { $0.id == id }, id)
+            XCTAssertFalse(AIProviderCatalog.isSpeechOnly(id), id)
+            XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: id), "Text · Cloud transcription · Live", id)
+            XCTAssertEqual(ModelRepository.shared.providerKey(for: id), id)
+            let live = try XCTUnwrap(ProviderRegistry.liveProviderID(for: id))
+            XCTAssertEqual(AIProviderCatalog.keyLink(for: id)?.title, "Get an API key")
+            XCTAssertEqual(AIProviderCatalog.keyLink(for: id)?.url, LiveTranscriptionCatalog.info(for: live).keyURL, "The key page comes from the live catalog")
+        }
+        XCTAssertEqual(ModelRepository.shared.defaultBaseURL(for: "mistral"), "https://api.mistral.ai/v1")
+        XCTAssertEqual(ModelRepository.shared.defaultModels(for: "mistral").first, "mistral-small-latest")
+        XCTAssertTrue(ModelRepository.listsModels(for: "mistral"))
+        XCTAssertEqual(ModelRepository.shared.defaultBaseURL(for: "assemblyai"), "https://llm-gateway.assemblyai.com/v1")
+        XCTAssertEqual(ModelRepository.shared.defaultModels(for: "assemblyai").first, "gpt-5-mini")
+        XCTAssertFalse(ModelRepository.listsModels(for: "assemblyai"), "The LLM Gateway has no model list endpoint")
+        XCTAssertEqual(ModelRepository.shared.displayName(for: "assemblyai"), "AssemblyAI")
+
+        let rows = AIEnhancementSettingsViewModel.providerRows(textRows: [], apiKeys: ["mistral": "m", "assemblyai": "a", "deepgram": "d"])
+        XCTAssertEqual(rows.map(\.id), ["deepgram"], "Text providers come through the text rows only")
+    }
+
+    /// AssemblyAI's fixed list stands in for a model listing and makes no request.
+    func testAssemblyAIModelsComeFromTheFixedList() async throws {
+        let models = try await ModelRepository.shared.fetchModels(for: "assemblyai", baseURL: "http://127.0.0.1:9/unreachable", apiKey: "k")
+        XCTAssertEqual(models, ModelRepository.assemblyAIGatewayModels)
+    }
+
+    /// REG-7: a custom provider the user pointed at Mistral keeps its own entry; saving the built-in
+    /// Mistral key neither merges with it nor touches its key.
+    func testACustomProviderPointingAtMistralIsLeftAlone() throws {
+        let custom = SettingsStore.SavedProvider(name: "Mistral", baseURL: "https://api.mistral.ai/v1", models: ["mistral-large-latest"])
+        let customKey = ModelRepository.shared.providerKey(for: custom.id)
+        XCTAssertEqual(customKey, "custom:\(custom.id)")
+        XCTAssertNotEqual(customKey, "mistral")
+        let keychain = FakeKeychain([customKey: "custom-mistral-key"])
+
+        try self.store(keychain).setProviderAPIKey("built-in-mistral-key", for: "mistral")
+
+        XCTAssertEqual(keychain.storage[customKey], "custom-mistral-key")
+        XCTAssertEqual(keychain.storage["mistral"], "built-in-mistral-key")
+        let rows = AIEnhancementSettingsViewModel.providerRows(
+            textRows: [Row(id: custom.id, name: custom.name, isBuiltIn: false), Row(id: "mistral", name: "Mistral", isBuiltIn: true)],
+            apiKeys: keychain.storage
+        )
+        XCTAssertEqual(Set(rows.map(\.id)), [custom.id, "mistral"], "Both stay as separate rows")
+    }
+
     func testRowsTagCapabilitiesInOrderAndTheFilterAppearsAboveSixRows() {
         XCTAssertEqual(ProviderCapability.ordered([.liveTranscription, .text]).map(\.title), ["Text", "Live"])
         XCTAssertEqual(ProviderCapability.ordered(AIProviderCatalog.capabilities(for: "openrouter")).map(\.title), ["Text", "Cloud transcription"])
@@ -94,7 +145,7 @@ final class AIProvidersPageTests: XCTestCase {
         XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "anthropic"), "Text")
         XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "openai"), "Text · Live")
         XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "openrouter"), "Text · Cloud transcription")
-        XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "soniox"), "Live")
+        XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "soniox"), "Cloud transcription · Live")
         XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "ollama"), "Local connection")
         XCTAssertEqual(AIProviderCatalog.capabilitySummary(for: "lmstudio"), "Local connection")
     }

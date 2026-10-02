@@ -39,13 +39,23 @@ final class CloudVendorSupportTests: XCTestCase {
         XCTAssertEqual(CloudTranscriptionCatalog.models(for: "deepgram").map(\.id), ["nova-3"])
         XCTAssertEqual(CloudTranscriptionCatalog.models(for: "elevenlabs").map(\.id), ["scribe_v2"])
         XCTAssertEqual(CloudTranscriptionCatalog.models(for: "mistral").map(\.id), ["voxtral-mini-latest"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "speechmatics").map(\.id), ["enhanced", "standard"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "soniox").map(\.id), ["stt-async-v5"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "assemblyai").map(\.id), ["universal-3-5-pro"])
+        XCTAssertEqual(CloudTranscriptionCatalog.models(for: "gladia").map(\.id), ["solaria-1"])
+        XCTAssertEqual(
+            CloudTranscriptionClients.providerIDs,
+            ["openrouter", "deepgram", "elevenlabs", "mistral", "speechmatics", "soniox", "assemblyai", "gladia"]
+        )
         XCTAssertTrue(CloudTranscriptionCatalog.models(for: "unknown").isEmpty)
         for id in CloudTranscriptionClients.providerIDs {
             XCTAssertEqual(CloudTranscriptionClients.client(for: id)?.providerID, id)
             XCTAssertFalse(CloudTranscriptionCatalog.models(for: id).isEmpty, id)
         }
         XCTAssertEqual(CloudTranscriptionClients.client(for: "openrouter")?.maximumRequestSeconds, 120)
-        XCTAssertEqual(CloudTranscriptionClients.client(for: "deepgram")?.maximumRequestSeconds, 780)
+        for id in CloudTranscriptionClients.providerIDs where id != "openrouter" {
+            XCTAssertEqual(CloudTranscriptionClients.client(for: id)?.maximumRequestSeconds, 780, id)
+        }
         XCTAssertNil(CloudTranscriptionClients.client(for: "unknown"))
         XCTAssertEqual(CloudTranscriptionClients.historyProviderName(for: "openrouter"), "openrouter")
         XCTAssertEqual(CloudTranscriptionClients.historyProviderName(for: "deepgram"), "cloud-deepgram")
@@ -293,6 +303,10 @@ final class CloudVendorSupportTests: XCTestCase {
             case "deepgram": DeepgramTranscriptionClient(session: CloudURLProtocol.session())
             case "elevenlabs": ElevenLabsTranscriptionClient(session: CloudURLProtocol.session())
             case "mistral": MistralTranscriptionClient(session: CloudURLProtocol.session())
+            case "speechmatics": SpeechmaticsTranscriptionClient(session: CloudURLProtocol.session())
+            case "soniox": SonioxTranscriptionClient(session: CloudURLProtocol.session())
+            case "assemblyai": AssemblyAITranscriptionClient(session: CloudURLProtocol.session())
+            case "gladia": GladiaTranscriptionClient(session: CloudURLProtocol.session())
             default: UnavailableCloudTranscriptionClient(providerID: providerID)
             }
         }

@@ -1379,11 +1379,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let apiKey = self.providerAPIKey(for: providerID)
 
         do {
-            let models = try await ModelRepository.shared.fetchModels(
+            let fetched = try await ModelRepository.shared.fetchModels(
                 for: providerID,
                 baseURL: baseURL,
                 apiKey: apiKey
             )
+            // A provider that cannot list its models returns its fixed list; the IDs the user added stay.
+            let existing = self.availableModelsByProvider[key] ?? []
+            let models = ModelRepository.listsModels(for: providerID) ? fetched : fetched + existing.filter { !fetched.contains($0) }
 
             await MainActor.run {
                 guard !models.isEmpty else {

@@ -22,6 +22,10 @@ nonisolated enum CloudTranscriptionClients {
         DeepgramTranscriptionClient.id,
         ElevenLabsTranscriptionClient.id,
         MistralTranscriptionClient.id,
+        SpeechmaticsTranscriptionClient.id,
+        SonioxTranscriptionClient.id,
+        AssemblyAITranscriptionClient.id,
+        GladiaTranscriptionClient.id,
     ]
 
     /// The shared client of a provider, or nil when no client serves that ID.
@@ -31,6 +35,10 @@ nonisolated enum CloudTranscriptionClients {
         case DeepgramTranscriptionClient.id: DeepgramTranscriptionClient.shared
         case ElevenLabsTranscriptionClient.id: ElevenLabsTranscriptionClient.shared
         case MistralTranscriptionClient.id: MistralTranscriptionClient.shared
+        case SpeechmaticsTranscriptionClient.id: SpeechmaticsTranscriptionClient.shared
+        case SonioxTranscriptionClient.id: SonioxTranscriptionClient.shared
+        case AssemblyAITranscriptionClient.id: AssemblyAITranscriptionClient.shared
+        case GladiaTranscriptionClient.id: GladiaTranscriptionClient.shared
         default: nil
         }
     }
@@ -77,6 +85,10 @@ nonisolated enum CloudTranscriptionCatalog {
         case DeepgramTranscriptionClient.id: DeepgramTranscriptionClient.models
         case ElevenLabsTranscriptionClient.id: ElevenLabsTranscriptionClient.models
         case MistralTranscriptionClient.id: MistralTranscriptionClient.models
+        case SpeechmaticsTranscriptionClient.id: SpeechmaticsTranscriptionClient.models
+        case SonioxTranscriptionClient.id: SonioxTranscriptionClient.models
+        case AssemblyAITranscriptionClient.id: AssemblyAITranscriptionClient.models
+        case GladiaTranscriptionClient.id: GladiaTranscriptionClient.models
         default: []
         }
     }

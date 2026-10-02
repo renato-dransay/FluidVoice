@@ -23,8 +23,8 @@ final class ProviderRegistryTests: XCTestCase {
         XCTAssertNil(ProviderRegistry.liveProviderID(for: "openAI"))
     }
 
-    /// A vendor gains Cloud transcription once its client ships: OpenRouter, then Deepgram, ElevenLabs and
-    /// Mistral in phase 4. The other live vendors carry Live only until theirs ship.
+    /// The end state of REG-2: every live vendor also transcribes Cloud recordings, and Mistral and
+    /// AssemblyAI also serve text.
     func testCapabilitiesMatchTheCodeThatHasShipped() {
         func capabilities(_ id: String) -> Set<ProviderCapability> { ProviderRegistry.descriptor(for: id)?.capabilities ?? [] }
         XCTAssertEqual(capabilities("openai"), [.text, .liveTranscription])
@@ -32,13 +32,16 @@ final class ProviderRegistryTests: XCTestCase {
             XCTAssertEqual(capabilities(id), [.text], id)
         }
         XCTAssertEqual(capabilities("openrouter"), [.text, .cloudTranscription])
-        for id in ["deepgram", "elevenlabs", "mistral"] {
+        for id in ["mistral", "assemblyai"] {
+            XCTAssertEqual(capabilities(id), [.text, .cloudTranscription, .liveTranscription], id)
+        }
+        for id in self.speechOnlyIDs {
             XCTAssertEqual(capabilities(id), [.cloudTranscription, .liveTranscription], id)
         }
-        for id in ["assemblyai", "soniox", "speechmatics", "gladia"] {
-            XCTAssertEqual(capabilities(id), [.liveTranscription], id)
-        }
-        XCTAssertEqual(ProviderRegistry.providers(with: .cloudTranscription).map(\.id), ["openrouter", "mistral", "deepgram", "elevenlabs"])
+        XCTAssertEqual(
+            ProviderRegistry.providers(with: .cloudTranscription).map(\.id),
+            ["openrouter", "mistral", "assemblyai", "soniox", "deepgram", "elevenlabs", "speechmatics", "gladia"]
+        )
         XCTAssertEqual(Set(ProviderRegistry.all.map(\.id)).count, ProviderRegistry.all.count)
         XCTAssertFalse(ProviderRegistry.descriptor(for: "ollama")?.requiresAPIKey ?? true)
         XCTAssertFalse(ProviderRegistry.descriptor(for: "lmstudio")?.requiresAPIKey ?? true)

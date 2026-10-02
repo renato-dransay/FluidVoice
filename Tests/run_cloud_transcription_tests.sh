@@ -24,6 +24,11 @@ cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudVendorSupportTests.swift" "$
 cp "$ROOT/Tests/FluidDictationIntegrationTests/DeepgramTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/ElevenLabsTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cp "$ROOT/Tests/FluidDictationIntegrationTests/MistralTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/CloudJobVendorTestSupport.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/SpeechmaticsTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/SonioxTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/AssemblyAITranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
+cp "$ROOT/Tests/FluidDictationIntegrationTests/GladiaTranscriptionClientTests.swift" "$HARNESS/Tests/CloudTranscriptionHarnessTests/"
 cat > "$HARNESS/Sources/CloudTranscriptionHarness/AppBoundaryStubs.swift" <<'SWIFT'
 import Foundation
 import Combine
