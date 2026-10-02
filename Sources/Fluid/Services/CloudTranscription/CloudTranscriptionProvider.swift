@@ -51,8 +51,12 @@ final class CloudTranscriptionProvider: TranscriptionProvider {
             guard available.contains(where: { $0.id == instructions.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
             return
         }
-        let available = try await openRouter.validate(apiKey: self.apiKey)
-        guard available.contains(where: { $0.id == self.configuration.modelID }) else { throw CloudTranscriptionError.unsupportedModel }
+        // A stored model the cached catalog no longer lists still runs while OpenRouter lists it.
+        let unlisted = self.configuration.isUnlistedStoredModel ? self.configuration.modelID : nil
+        let available = try await openRouter.validate(apiKey: self.apiKey, acceptingUnlisted: unlisted)
+        guard available.contains(where: { $0.id == self.configuration.modelID }) else {
+            throw self.configuration.unavailableModelError(.unsupportedModel)
+        }
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {

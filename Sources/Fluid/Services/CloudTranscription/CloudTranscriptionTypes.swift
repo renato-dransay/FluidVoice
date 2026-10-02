@@ -214,6 +214,19 @@ nonisolated struct CloudTranscriptionConfiguration: Codable, Equatable, Sendable
         if wordTimings, !model.supportsWordTimings { throw CloudTranscriptionError.unsupportedWordTimings }
     }
 
+    /// True for a stored choice of a model the provider's catalog no longer lists.
+    var isUnlistedStoredModel: Bool {
+        self.allowsUnlistedModel && self.audioDictation == nil
+            && !CloudTranscriptionCatalog.models(for: self.providerID).contains { $0.id == self.modelID }
+    }
+
+    /// The error for a failure that says the model cannot be used: a stored model that is no longer listed
+    /// is named as withdrawn, so the message points at the model choice rather than account settings.
+    func unavailableModelError(_ error: CloudTranscriptionError) -> CloudTranscriptionError {
+        guard self.isUnlistedStoredModel, error == .modelUnavailable || error == .unsupportedModel else { return error }
+        return .modelNoLongerOffered(self.modelID)
+    }
+
     /// The speech model in this provider's catalog; for a stored choice the catalog no longer lists, that
     /// model with unchecked word timings; otherwise nil.
     var model: CloudTranscriptionModel? {
@@ -361,6 +374,8 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
     case jobFailed
     /// The chosen model transcribes a fixed set of languages, and none of the dictation languages is in it.
     case unsupportedLanguageForModel
+    /// A stored speech model the catalog no longer lists, which the provider no longer serves either.
+    case modelNoLongerOffered(String)
 
     var errorDescription: String? { self.message(providerName: CloudTranscriptionCatalog.openRouterName) }
 
@@ -395,6 +410,7 @@ nonisolated enum CloudTranscriptionError: Error, LocalizedError, Equatable, Send
         case .dictationTooLong: "OpenRouter dictation with a Cleanup Style supports recordings up to 8 minutes. Record a shorter dictation, turn the style off, or import longer audio as a file."
         case .jobFailed: "\(name) could not transcribe this recording. Retry or choose local transcription."
         case .unsupportedLanguageForModel: "This \(name) model doesn't support your dictation language. Choose another model or language in Voice Engine."
+        case .modelNoLongerOffered(let modelID): "\(modelID) is no longer offered by \(name). Choose another speech model in Voice Engine."
         case .truncatedDictationResponse: "OpenRouter stopped before completing the transcription and style response. Record a shorter dictation or choose another audio model."
         }
     }

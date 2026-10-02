@@ -144,6 +144,83 @@ final class CloudProviderRoutingTests: XCTestCase {
         XCTAssertEqual(CloudTranscriptionClients.historyProviderName(for: "elevenlabs"), "cloud-elevenlabs")
     }
 
+    // MARK: - A stored OpenRouter speech model the catalog no longer lists
+
+    private static let unlistedModelID = "vendor/withdrawn-speech-model"
+    private static let unlistedConfiguration = CloudTranscriptionConfiguration(providerID: "openrouter", modelID: unlistedModelID, allowsUnlistedModel: true)
+
+    /// OpenRouter's key check, its raw transcription model list (with or without the stored model) and its
+    /// transcription endpoint.
+    private func installOpenRouter(listsStoredModel: Bool, transcriptionStatus: Int = 200) -> CloudRequestRecorder {
+        let recorder = CloudRequestRecorder()
+        let ids = [CloudTranscriptionModel.defaultDictationID] + (listsStoredModel ? [Self.unlistedModelID] : [])
+        let models = Data(("{\"data\":[" + ids.map { "{\"id\":\"\($0)\"}" }.joined(separator: ",") + "]}").utf8)
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            switch request.url?.path {
+            case "/api/v1/key": return (200, [:], Data(#"{"data":{}}"#.utf8))
+            case "/api/v1/models": return (200, [:], models)
+            default: return (transcriptionStatus, [:], Data(#"{"text":"Still served."}"#.utf8))
+            }
+        }
+        return recorder
+    }
+
+    private static func openRouterClient(_: String) -> any CloudTranscriptionClient {
+        OpenRouterTranscriptionClient(session: CloudURLProtocol.session(), recordsUsage: false)
+    }
+
+    func testRetryRunsAStoredOpenRouterModelWhileOpenRouterStillListsIt() async throws {
+        let recorder = self.installOpenRouter(listsStoredModel: true)
+        let session = ASRService.cloudRetrySession(configuration: Self.unlistedConfiguration, speechAPIKey: { _ in "or-key" }, clients: Self.openRouterClient)
+        let provider = session.provider(persistChunks: false)
+        try await provider.prepare(progressHandler: nil)
+        let result = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+        XCTAssertEqual(result.text, "Still served.")
+        let upload = try XCTUnwrap(recorder.requests.last?.httpBody)
+        XCTAssertNotNil(upload.range(of: Data("name=\"model\"\r\n\r\n\(Self.unlistedModelID)".utf8)), "The stored model is sent, never the default")
+    }
+
+    func testFileImportRunsAStoredOpenRouterModelWhileOpenRouterStillListsIt() async throws {
+        _ = self.installOpenRouter(listsStoredModel: true)
+        // File Transcription builds its provider from the settings' configuration and prepares it first.
+        let provider = CloudTranscriptionSession(configuration: Self.unlistedConfiguration, speechAPIKey: { _ in "or-key" }, clients: Self.openRouterClient)
+            .provider(persistChunks: false)
+        try await provider.prepare(progressHandler: nil)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("unlisted-\(UUID().uuidString).wav")
+        try CloudEncodedAudio.wav(samples: [Float](repeating: 0.1, count: 16_000)).data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let result = try await provider.transcribeFile(at: file)
+        XCTAssertEqual(result.text, "Still served.")
+        XCTAssertFalse(provider.supportsWordTimings, "Unchecked timings never feed speaker labels")
+    }
+
+    func testAStoredOpenRouterModelThatIsGoneIsNamedWithoutPointingAtAccountSettings() async throws {
+        let expected = "vendor/withdrawn-speech-model is no longer offered by OpenRouter. Choose another speech model in Voice Engine."
+        _ = self.installOpenRouter(listsStoredModel: false)
+        let provider = ASRService.cloudRetrySession(configuration: Self.unlistedConfiguration, speechAPIKey: { _ in "or-key" }, clients: Self.openRouterClient)
+            .provider(persistChunks: false)
+        do {
+            try await provider.prepare(progressHandler: nil)
+            XCTFail("OpenRouter no longer lists the model")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .modelNoLongerOffered(Self.unlistedModelID))
+            XCTAssertEqual(CloudTranscriptionError.message(for: error, providerName: "OpenRouter"), expected)
+            XCTAssertFalse(expected.contains("privacy"))
+        }
+
+        _ = self.installOpenRouter(listsStoredModel: true, transcriptionStatus: 404)
+        do {
+            _ = try await provider.transcribeFinal([Float](repeating: 0.1, count: 16_000))
+            XCTFail("OpenRouter answered 404")
+        } catch {
+            XCTAssertEqual(error as? CloudTranscriptionError, .modelNoLongerOffered(Self.unlistedModelID))
+        }
+
+        let listed = CloudTranscriptionConfiguration(providerID: "openrouter", modelID: CloudTranscriptionModel.defaultDictationID)
+        XCTAssertEqual(listed.unavailableModelError(.modelUnavailable), .modelUnavailable, "A listed model keeps the routing message")
+    }
+
     // MARK: - File Transcription (CLD-6)
 
     func testSpeakerLabelsAreDroppedOnlyForAModelWithoutWordTimings() {

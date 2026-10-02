@@ -36,9 +36,13 @@ actor CloudTranscriptionEngine {
             if let cached = self.cachedResult(at: cacheURL, chunk: chunk, wordTimings: wordTimings) {
                 result = cached
             } else {
-                result = try await self.client.transcribe(
-                    samples: Array(samples[chunk.start ..< chunk.end]), configuration: configuration, apiKey: apiKey, wordTimings: wordTimings
-                )
+                do {
+                    result = try await self.client.transcribe(
+                        samples: Array(samples[chunk.start ..< chunk.end]), configuration: configuration, apiKey: apiKey, wordTimings: wordTimings
+                    )
+                } catch let error as CloudTranscriptionError {
+                    throw configuration.unavailableModelError(error)
+                }
                 try Task.checkCancellation()
                 try self.save(result, at: cacheURL)
             }

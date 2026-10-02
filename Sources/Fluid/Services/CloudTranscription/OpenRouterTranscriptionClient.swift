@@ -108,7 +108,9 @@ final nonisolated class OpenRouterTranscriptionClient: CloudTranscriptionClient 
         _ = try await self.send(self.request(path: "key", apiKey: apiKey))
     }
 
-    func validate(apiKey: String) async throws -> [CloudTranscriptionModel] {
+    /// The catalog models OpenRouter lists for this key. `unlistedModelID`, a stored choice the cached catalog
+    /// no longer offers, is accepted as well while OpenRouter still lists it as a transcription model.
+    func validate(apiKey: String, acceptingUnlisted unlistedModelID: String? = nil) async throws -> [CloudTranscriptionModel] {
         // The catalog is public. Authenticate separately so a readable catalog never validates a bad key.
         _ = try await self.send(self.request(path: "key", apiKey: apiKey))
         let (data, _) = try await self.send(self.request(path: "models?output_modalities=transcription", apiKey: apiKey))
@@ -116,7 +118,10 @@ final nonisolated class OpenRouterTranscriptionClient: CloudTranscriptionClient 
         struct Entry: Decodable { let id: String }
         guard let catalog = try? JSONDecoder().decode(Catalog.self, from: data) else { throw CloudTranscriptionError.malformedResponse }
         let ids = Set(catalog.data.map(\.id))
-        let models = CloudTranscriptionModel.catalog.filter { ids.contains($0.id) }
+        var models = CloudTranscriptionModel.catalog.filter { ids.contains($0.id) }
+        if let unlistedModelID, ids.contains(unlistedModelID), !models.contains(where: { $0.id == unlistedModelID }) {
+            models.append(CloudTranscriptionModel(id: unlistedModelID, name: unlistedModelID, wordTimingSupport: .unverified, languageHintProviderTags: []))
+        }
         guard !models.isEmpty else { throw CloudTranscriptionError.catalogUnavailable }
         return models
     }
