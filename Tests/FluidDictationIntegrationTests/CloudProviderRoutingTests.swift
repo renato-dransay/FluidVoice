@@ -135,7 +135,9 @@ final class CloudProviderRoutingTests: XCTestCase {
             formatPunctuation: { $0 }
         )
         XCTAssertEqual(text, "FluidVoice")
-        XCTAssertEqual(recorder.requests.map(\.url?.host), ["api.deepgram.com", "api.deepgram.com"], "Key check, then the upload")
+        XCTAssertEqual(recorder.requests.map(\.url?.host), ["api.deepgram.com", "api.deepgram.com", "api.deepgram.com"], "Warm-up, key check, then the upload")
+        XCTAssertEqual(recorder.requests.first?.httpMethod, "HEAD")
+        XCTAssertNil(recorder.requests.first?.value(forHTTPHeaderField: "Authorization"), "The warm-up carries no key")
         XCTAssertFalse(recorder.requests.contains { $0.url?.host == "openrouter.ai" })
     }
 

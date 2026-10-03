@@ -70,7 +70,13 @@ struct CloudTranscriptionSession {
     @MainActor func provider(persistChunks: Bool) -> CloudTranscriptionProvider {
         CloudTranscriptionProvider(configuration: self.configuration, apiKey: self.apiKey, persistChunks: persistChunks)
     }
-    func prewarm() async {}
+    enum WarmOutcome: String { case sent, skipped, failed }
+    func prewarm(warmOtherProviders: Bool) async -> (providerID: String, outcome: WarmOutcome)? { nil }
+}
+enum DictationSpeedComparison { static let speechWarmUp = true }
+final class DebugLogger: @unchecked Sendable {
+    static let shared = DebugLogger()
+    func benchmark(_ family: String, message: String, source: String) {}
 }
 struct LiveTranscriptionConfiguration: Equatable {
     let provider: String
