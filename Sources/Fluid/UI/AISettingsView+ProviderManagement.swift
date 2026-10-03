@@ -317,6 +317,7 @@ extension AIEnhancementSettingsView {
                 Button("Configure…", systemImage: "gearshape") { self.viewModel.openReasoningConfig() }
                     .fluidButton(.compact, size: .small)
                     .disabled(reasoning.detail.isEmpty)
+                    .help(reasoning.detail.isEmpty ? "Choose a model first." : "")
             }
             if let note = reasoning.note {
                 Text(note)

@@ -387,7 +387,7 @@ final class DictationCleanupSpeedTests: XCTestCase {
     func testTheCleanupNoteAppearsOnlyWhereItIsTrue() {
         let viewModel = self.viewModel(provider: "google", model: "gemini-2.5-flash")
         let note = viewModel.reasoningStateSummary(for: "google").note
-        XCTAssertEqual(note, "Cleanup Styles on this model send reasoning_effort = none instead, so dictation finishes sooner. "
+        XCTAssertEqual(note, "Cleanup Styles on this model ask for less reasoning (reasoning_effort = none), so dictation finishes sooner. "
             + "Command Mode, Edit and meeting summaries use the setting above.")
 
         UserDefaults.standard.set(false, forKey: DictationSpeedComparison.lowReasoningKey)

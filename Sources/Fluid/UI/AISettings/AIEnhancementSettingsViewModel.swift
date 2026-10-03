@@ -1701,7 +1701,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let cleanup = TextRequestOptions.resolve(purpose: .dictationCleanup, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
         let general = TextRequestOptions.resolve(purpose: .general, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
         guard let lower = cleanup.options.reasoning, lower != general.options.reasoning else { return (detail, nil) }
-        return (detail, "Cleanup Styles on this model send \(Self.describe(lower)) instead, so dictation finishes sooner. "
+        return (detail, "Cleanup Styles on this model ask for less reasoning (\(Self.describe(lower))), so dictation finishes sooner. "
             + "Command Mode, Edit and meeting summaries use the setting above.")
     }
 

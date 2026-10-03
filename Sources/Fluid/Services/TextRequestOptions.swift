@@ -123,7 +123,8 @@ nonisolated struct TextRequestOptions: Equatable, Sendable {
     /// The lowest reasoning effort each vendor documents for a model, applied to Cleanup Styles only, and
     /// only on the vendor's own server: OpenRouter, AssemblyAI's gateway and custom servers may not forward it.
     /// EVIDENCE: https://ai.google.dev/gemini-api/docs/openai (checked 2026-10-03): `none` turns thinking off
-    /// for Gemini 2.5 except 2.5 Pro; Gemini 2.5 Pro and Gemini 3 cannot turn it off, and `minimal` is their lowest.
+    /// for Gemini 2.5 except 2.5 Pro; Gemini 2.5 Pro and Gemini 3 cannot turn it off. Gemini 3 Flash models get
+    /// `minimal`, their lowest level; the Pro models get `low`, which the page maps to 3.1 Pro's lowest level.
     /// EVIDENCE: https://console.groq.com/docs/reasoning (checked 2026-10-03): Qwen accepts `none`.
     /// EVIDENCE: https://developers.openai.com/api/docs/guides/reasoning (checked 2026-10-03): an unsupported
     /// value returns HTTP 400, so OpenAI rows stay on values every listed model accepts.

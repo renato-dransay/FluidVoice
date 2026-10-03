@@ -2424,11 +2424,11 @@ extension AIEnhancementSettingsView {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 Text("Send a reasoning parameter")
-                    .font(.fluidSystem(.caption))
-                    .foregroundStyle(self.viewModel.editingReasoningEnabled ? self.theme.palette.accent : .secondary)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.primaryText)
             }
             if !self.viewModel.editingReasoningEnabled {
-                Text("Nothing is sent, so the model uses its own default.")
+                Text("Switched off, no reasoning parameter is sent and the model uses its own default.")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2473,7 +2473,7 @@ extension AIEnhancementSettingsView {
                         )) {
                             Text("reasoning_effort").tag("reasoning_effort")
                             Text("enable_thinking").tag("enable_thinking")
-                            Text("Custom...").tag("custom")
+                            Text("Custom…").tag("custom")
                         }
                         .pickerStyle(.menu)
                         .fluidDropdownStyle()
@@ -2506,15 +2506,15 @@ extension AIEnhancementSettingsView {
 
                         if self.viewModel.editingReasoningParamName == "reasoning_effort" {
                             Picker("", selection: self.$viewModel.editingReasoningParamValue) {
-                                // A saved value this list does not offer (for example xhigh) stays visible.
-                                if !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
-                                    Text(self.viewModel.editingReasoningParamValue).tag(self.viewModel.editingReasoningParamValue)
-                                }
                                 Text("none").tag("none")
                                 Text("minimal").tag("minimal")
                                 Text("low").tag("low")
                                 Text("medium").tag("medium")
                                 Text("high").tag("high")
+                                // A saved value this list does not offer (for example xhigh) stays visible.
+                                if !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
+                                    Text(self.viewModel.editingReasoningParamValue).tag(self.viewModel.editingReasoningParamValue)
+                                }
                             }
                             .pickerStyle(.menu)
                             .fluidDropdownStyle()
@@ -2543,7 +2543,7 @@ extension AIEnhancementSettingsView {
             if !self.viewModel.hasSavedReasoningConfig {
                 let losesLowerEffort = self.viewModel.reasoningStateSummary(for: self.viewModel.selectedProviderID).note != nil
                 Text("Automatic is in use. Saving replaces it with this setting for every feature."
-                    + (losesLowerEffort ? " Cleanup Styles then stop using the lower reasoning effort." : ""))
+                    + (losesLowerEffort ? " Cleanup Styles then stop asking for less reasoning." : ""))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2557,7 +2557,7 @@ extension AIEnhancementSettingsView {
                 .fluidButton(.accent, size: .small)
                 .frame(minWidth: 60, minHeight: 26)
                 .disabled(!self.viewModel.canSaveReasoningConfig)
-                .help(self.viewModel.reasoningSaveBlocker ?? "")
+                .help(self.viewModel.reasoningSaveBlocker ?? (self.viewModel.canSaveReasoningConfig ? "" : "No changes to save."))
 
                 Button("Cancel") { self.viewModel.showingReasoningConfig = false }
                     .fluidButton(.compact, size: .compact)
@@ -2567,9 +2567,7 @@ extension AIEnhancementSettingsView {
                 if self.viewModel.hasSavedReasoningConfig {
                     Spacer()
                     Button("Reset to Automatic") { self.viewModel.resetReasoningToAutomatic() }
-                        .fluidButton(.compact, size: .compact)
-                        .font(.fluidSystem(size: 12))
-                        .frame(minHeight: 26)
+                        .fluidButton(.compact, size: .small)
                 }
             }
         }

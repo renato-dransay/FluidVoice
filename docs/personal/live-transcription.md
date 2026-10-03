@@ -2,7 +2,7 @@
 
 **Live cloud** is a third voice engine, next to **Local** and **Cloud**. It streams your dictation audio to a speech provider of your choice while you speak, using your own API key for that provider. Words appear in the overlay as you talk, the same way they do with a local model, and the final text arrives a few hundred milliseconds after you press the stop key.
 
-**Cloud** works differently: the app uploads the whole recording after you stop and waits for the provider's answer (see [Cloud transcription](cloud-transcription.md)); with OpenRouter one response carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the default text provider and model chosen in **AI Providers**. Styles have no provider or model of their own.
+**Cloud** works differently: the app uploads the whole recording after you stop and waits for the provider's answer (see [Cloud transcription](cloud-transcription.md)); with OpenRouter one response carries both the transcript and the styled text. Live cloud returns only the transcript. The transcript then goes through the same steps as local output: filler removal, the Custom Dictionary, spoken punctuation, and finally your Cleanup Styles through the default text provider and model chosen in **AI Providers**; see [Dictation speed](dictation-speed.md). Styles have no provider or model of their own.
 
 ## Providers
 
@@ -38,7 +38,7 @@ A provider is removed in AI Providers, with **Remove key** or **Remove provider*
 
 ## What uses Live cloud
 
-A Cleanup Style still runs afterwards as a request to the default text provider; see [Dictation speed](dictation-speed.md). With Live cloud active, these recordings stream to the active provider:
+With Live cloud active, these recordings stream to the active provider:
 
 - Dictation.
 - Command mode.
@@ -95,7 +95,7 @@ Partial text is never inserted, and the app never switches to another engine on 
 
 - Audio leaves the Mac only while Live cloud is active (or a provider test is armed), and only to the active provider, or while a meeting records with Live cloud chosen in FluidMeet, and then only to that meeting's provider. It streams during the recording, not after it. The key check at activation sends no audio.
 - No network contact with a provider happens until you save its key.
-- With a Cleanup Style on, the app also opens a connection to the default text provider when a dictation starts; see [Text fidelity, costs, and privacy](cloud-transcription.md#text-fidelity-costs-and-privacy).
+- A dictation with a Cleanup Style also opens a connection to the default text provider; see [Text fidelity, costs, and privacy](cloud-transcription.md#text-fidelity-costs-and-privacy).
 - Only audio and the session settings (model, and language where the provider takes it) are sent. App or window context, preceding text and Custom Dictionary terms are not sent to live providers.
 - Deepgram requests do not carry `mip_opt_out=true`, so they take part in Deepgram's Model Improvement Program and Deepgram may use the audio to improve its models. Opting out would forfeit the 50% discount Deepgram's listed prices assume.
 - Keys are entered in AI Providers and stored in the personal app's macOS Keychain item under the provider's ID, for example `soniox`, `openai` or `assemblyai`. A provider has one key for everything it does: OpenAI's key serves both its text models and Live cloud, and Mistral's and AssemblyAI's serve text, Cloud and Live cloud. A key saved by an earlier version under `live-transcription.<provider>` was copied to that entry on the first launch of this version; the old entry is kept, and still updated when the key is saved again, so an older build keeps working after a downgrade. A key changed in an older build after that copy is ignored by this version. When AI Providers already held a different key for the same provider, both are kept and the provider shows **Two keys** (see [Cloud transcription](cloud-transcription.md#keys-saved-before-this-version)). A Live cloud provider that was active without a `live-transcription.<provider>` key is cleared on the first launch, so its AI Providers key never starts streaming unasked; until the copy can be written to the Keychain, Live cloud reads only the old `live-transcription.<provider>` entries.

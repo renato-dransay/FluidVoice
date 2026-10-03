@@ -67,7 +67,7 @@ struct AIEnhancementSettingsView: View {
                         .foregroundStyle(self.theme.palette.primaryText)
                     Text(
                         "OpenRouter dictation sends the audio and the selected Cleanup Style in one request, so the default text provider is not used for dictation. "
-                            + "The providers below are for Edit, Write, and other text AI actions while this mode is on."
+                            + "The providers below are for Command Mode, Edit, meeting summaries and other text actions while this mode is on."
                     )
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
