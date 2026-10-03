@@ -1427,27 +1427,7 @@ final class SettingsStore: ObservableObject {
             self.isEnabled = isEnabled
         }
 
-        /// Common presets for different model types
-        static let openAIGPT5 = ModelReasoningConfig(
-            parameterName: "reasoning_effort",
-            parameterValue: "low",
-            isEnabled: true
-        )
-        static let openAIO1 = ModelReasoningConfig(
-            parameterName: "reasoning_effort",
-            parameterValue: "medium",
-            isEnabled: true
-        )
-        static let groqGPTOSS = ModelReasoningConfig(
-            parameterName: "reasoning_effort",
-            parameterValue: "low",
-            isEnabled: true
-        )
-        static let deepSeekReasoner = ModelReasoningConfig(
-            parameterName: "enable_thinking",
-            parameterValue: "true",
-            isEnabled: true
-        )
+        /// The built-in defaults live in `TextRequestOptions.builtInDefault(forModel:)`.
         static let disabled = ModelReasoningConfig(parameterName: "", parameterValue: "", isEnabled: false)
     }
 

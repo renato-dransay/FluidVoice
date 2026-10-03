@@ -30,4 +30,14 @@ nonisolated enum DictationCleanupWarmPolicy {
         else { return nil }
         return ConnectionWarmer.origin(of: url)
     }
+
+    /// Writes the warm-up's benchmark line; `subject` names the host or provider it went to.
+    static func log(target: String, subject: String, moment: Moment, outcome: ConnectionWarmer.Outcome, startedAt: TimeInterval) {
+        let elapsed = Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded())
+        DebugLogger.shared.benchmark(
+            "APP_BENCH",
+            message: "warm target=\(target) \(subject) at=\(moment.rawValue) result=\(outcome.rawValue) elapsedMs=\(elapsed)",
+            source: "AppBenchmark"
+        )
+    }
 }

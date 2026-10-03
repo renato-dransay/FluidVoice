@@ -4696,11 +4696,8 @@ struct ContentView: View {
         Task {
             let startedAt = ProcessInfo.processInfo.systemUptime
             let outcome = await LLMClient.shared.warmConnection(to: origin)
-            DebugLogger.shared.benchmark(
-                "APP_BENCH",
-                message: "warm target=text host=\(origin.host ?? "unknown") at=\(moment.rawValue) result=\(outcome.rawValue) "
-                    + "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                source: "AppBenchmark"
+            DictationCleanupWarmPolicy.log(
+                target: "text", subject: "host=\(origin.host ?? "unknown")", moment: moment, outcome: outcome, startedAt: startedAt
             )
         }
     }

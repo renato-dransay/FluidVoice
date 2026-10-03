@@ -1090,14 +1090,15 @@ def render_terminal_pipeline(rows, width=None):
 
 def add_idle_before(rows):
     """Time since the previous dictation's text request, so warm-up arms compare like with like.
-    Uptime restarts with the app, so a negative or missing gap is unknown."""
+    Uptime restarts at reboot, so a negative or missing gap is unknown. Command Mode, Edit and meeting
+    summary requests carry no pipeline ID and are not counted, so a connection they opened is invisible."""
     previous_return = None
     for row in rows:
         phases = row["phase_uptime"]
         attempt = phases.get("llm_attempt_start")
         gap = (attempt - previous_return) * 1000 if attempt is not None and previous_return is not None else None
         row["metrics"]["idle_before_ms"] = round(gap, 1) if gap is not None and gap >= 0 else None
-        previous_return = phases.get("llm_call_return") or previous_return
+        previous_return = phases.get("llm_call_return") or attempt or previous_return
 
 
 AGGREGATE_KEYS = ("internal_stop_to_ready_ms", "asr_stop_total_ms", "llm_transport_to_response_ms",

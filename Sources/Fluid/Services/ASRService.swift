@@ -736,11 +736,8 @@ final class ASRService: ObservableObject {
                         Task.detached(priority: .utility) {
                             let startedAt = ProcessInfo.processInfo.systemUptime
                             guard let warm = await session.prewarm(warmOtherProviders: warmOtherProviders) else { return }
-                            DebugLogger.shared.benchmark(
-                                "APP_BENCH",
-                                message: "warm target=speech provider=\(warm.providerID) at=start result=\(warm.outcome.rawValue) "
-                                    + "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                                source: "AppBenchmark"
+                            DictationCleanupWarmPolicy.log(
+                                target: "speech", subject: "provider=\(warm.providerID)", moment: .start, outcome: warm.outcome, startedAt: startedAt
                             )
                         }
                     }

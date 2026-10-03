@@ -74,9 +74,9 @@ struct CloudTranscriptionSession {
     func prewarm(warmOtherProviders: Bool) async -> (providerID: String, outcome: WarmOutcome)? { nil }
 }
 enum DictationSpeedComparison { static let speechWarmUp = true }
-final class DebugLogger: @unchecked Sendable {
-    static let shared = DebugLogger()
-    func benchmark(_ family: String, message: String, source: String) {}
+enum DictationCleanupWarmPolicy {
+    enum Moment { case start }
+    static func log(target: String, subject: String, moment: Moment, outcome: CloudTranscriptionSession.WarmOutcome, startedAt: TimeInterval) {}
 }
 struct LiveTranscriptionConfiguration: Equatable {
     let provider: String

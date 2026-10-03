@@ -45,7 +45,7 @@ defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedLowReasoning
 defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedPredictedOutputs
 ```
 
-`python3 scripts/dictation_log_summary.py --aggregate` groups recent dictations by provider, model and these keys, with median and 90th-percentile timings, how often the connection was reused, and token counts. `--min-idle-seconds N` keeps only dictations that came at least N seconds after the previous text request, which is where opening the connection early can matter.
+`python3 scripts/dictation_log_summary.py --aggregate` groups recent dictations by provider, model and these keys, with median and 90th-percentile timings, how often the connection was reused, and token counts. `--min-idle-seconds N` keeps only dictations that came at least N seconds after the previous dictation's text request, which is where opening the connection early can matter. Command Mode, Edit and meeting summary requests are not counted, so use them sparingly on measurement days.
 
 ## Installation and rollback
 

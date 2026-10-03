@@ -45,8 +45,10 @@ nonisolated final class ConnectionWarmer: @unchecked Sendable {
         var request = URLRequest(url: origin)
         request.httpMethod = "HEAD"
         request.timeoutInterval = Self.requestTimeout
+        request.httpShouldHandleCookies = false
         do {
-            _ = try await session.data(for: request)
+            // A redirect is not followed: the warm-up must reach the provider's own host and no other.
+            _ = try await session.data(for: request, delegate: NoRedirectDelegate())
             self.lock.withLock { self.lastSuccess[key] = now }
             return .sent
         } catch {
@@ -62,5 +64,18 @@ nonisolated final class ConnectionWarmer: @unchecked Sendable {
 
     private func isWarm(_ key: String, now: TimeInterval) -> Bool {
         self.lastSuccess[key].map { now - $0 < Self.window } ?? false
+    }
+}
+
+/// Stops a warm-up at the first response, so a redirect from an API root never reaches another host.
+private final nonisolated class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

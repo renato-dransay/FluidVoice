@@ -62,10 +62,22 @@ final class DictationCleanupSpeedTests: XCTestCase {
         XCTAssertNil(Options.builtInDefault(forModel: "gpt-6-sol"))
         XCTAssertNil(Options.builtInDefault(forModel: "gemini-2.5-flash"))
 
-        XCTAssertEqual(try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "gpt-5.1"))), .openAIGPT5)
-        XCTAssertEqual(try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "o3"))), .openAIO1)
-        XCTAssertEqual(try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "gpt-oss-120b"))), .groqGPTOSS)
-        XCTAssertEqual(try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "deepseek-reasoner"))), .deepSeekReasoner)
+        XCTAssertEqual(
+            try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "gpt-5.1"))),
+            SettingsStore.ModelReasoningConfig(parameterName: "reasoning_effort", parameterValue: "low", isEnabled: true)
+        )
+        XCTAssertEqual(
+            try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "o3"))),
+            SettingsStore.ModelReasoningConfig(parameterName: "reasoning_effort", parameterValue: "medium", isEnabled: true)
+        )
+        XCTAssertEqual(
+            try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "gpt-oss-120b"))),
+            SettingsStore.ModelReasoningConfig(parameterName: "reasoning_effort", parameterValue: "low", isEnabled: true)
+        )
+        XCTAssertEqual(
+            try SettingsStore.reasoningConfig(XCTUnwrap(Options.builtInDefault(forModel: "deepseek-reasoner"))),
+            SettingsStore.ModelReasoningConfig(parameterName: "enable_thinking", parameterValue: "true", isEnabled: true)
+        )
     }
 
     func testGeneralRequestsSendTodaysParameters() {
@@ -86,6 +98,17 @@ final class DictationCleanupSpeedTests: XCTestCase {
             XCTAssertNil(self.resolve(purpose, baseURL: Self.openAI, model: "gpt-5.1", saved: .off).reasoning)
         }
         XCTAssertEqual(Options.reasoning(name: "enable_thinking", value: "false"), Options.Reasoning(name: "enable_thinking", value: .bool(false)))
+    }
+
+    func testASavedConfigurationIsFoundUnderACustomProvidersKey() {
+        self.preserveAppPreferences()
+        let key = ModelRepository.shared.providerKey(for: "my-server")
+        XCTAssertEqual(key, "custom:my-server", "Command Mode and Edit look settings up under this key")
+        SettingsStore.shared.setReasoningConfig(
+            .init(parameterName: "reasoning_effort", parameterValue: "high", isEnabled: true), forModel: "gpt-5.1", provider: key
+        )
+        let options = Options.resolve(purpose: .general, providerKey: key, baseURL: "https://llm.example.com/v1", model: "gpt-5.1", transcript: nil)
+        XCTAssertEqual(options.options.extraParameters as? [String: String], ["reasoning_effort": "high"])
     }
 
     // MARK: - Lower reasoning effort for cleanup (RSN-2)
@@ -264,6 +287,11 @@ final class DictationCleanupSpeedTests: XCTestCase {
     }
 
     func testARejectedOptimisationIsRepeatedPlainAndSuppressed() async throws {
+        self.preserveAppPreferences()
+        UserDefaults.standard.removeObject(forKey: DictationSpeedComparison.lowReasoningKey)
+        SettingsStore.shared.setReasoningConfig(nil, forModel: "gemini-2.5-flash", provider: "google")
+        let before = Options.resolve(purpose: .dictationCleanup, providerKey: "google", baseURL: Self.google, model: "gemini-2.5-flash", transcript: "x")
+        XCTAssertNotEqual(before.options, before.plain, "optimised before the rejection")
         let script = Script([.failure(LLMError.httpError(400, "unknown reasoning_effort")), .success("ok")])
         let text = try await self.send(script, streaming: true, options: self.optimisedGemini, plain: self.plainGemini)
         XCTAssertEqual(text, "ok")

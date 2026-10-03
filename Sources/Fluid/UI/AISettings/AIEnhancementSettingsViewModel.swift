@@ -1698,8 +1698,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
               !self.settings.usesCombinedCloudDictation
         else { return (detail, nil) }
         let baseURL = DictationAIPostProcessingGate.baseURL(for: providerID, settings: self.settings)
-        let cleanup = TextRequestOptions.resolve(purpose: .dictationCleanup, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
-        let general = TextRequestOptions.resolve(purpose: .general, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
+        let cleanup = TextRequestOptions.resolve(
+            purpose: .dictationCleanup, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil, settings: self.settings
+        )
+        let general = TextRequestOptions.resolve(
+            purpose: .general, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil, settings: self.settings
+        )
         guard let lower = cleanup.options.reasoning, lower != general.options.reasoning else { return (detail, nil) }
         return (detail, "Cleanup Styles on this model ask for less reasoning (\(Self.describe(lower))), so dictation finishes sooner. "
             + "Command Mode, Edit and meeting summaries use the setting above.")

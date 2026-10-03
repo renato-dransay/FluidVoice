@@ -2463,7 +2463,7 @@ extension AIEnhancementSettingsView {
                                 } else {
                                     self.viewModel.editingReasoningParamName = newValue
                                     // Set sensible default value when switching
-                                    if newValue == "reasoning_effort", !["none", "minimal", "low", "medium", "high"].contains(self.viewModel.editingReasoningParamValue) {
+                                    if newValue == "reasoning_effort", !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
                                         self.viewModel.editingReasoningParamValue = "low"
                                     } else if newValue == "enable_thinking", !["true", "false"].contains(self.viewModel.editingReasoningParamValue) {
                                         self.viewModel.editingReasoningParamValue = "true"
@@ -2506,11 +2506,9 @@ extension AIEnhancementSettingsView {
 
                         if self.viewModel.editingReasoningParamName == "reasoning_effort" {
                             Picker("", selection: self.$viewModel.editingReasoningParamValue) {
-                                Text("none").tag("none")
-                                Text("minimal").tag("minimal")
-                                Text("low").tag("low")
-                                Text("medium").tag("medium")
-                                Text("high").tag("high")
+                                ForEach(Self.reasoningEffortValues, id: \.self) { value in
+                                    Text(value).tag(value)
+                                }
                                 // A saved value this list does not offer (for example xhigh) stays visible.
                                 if !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
                                     Text(self.viewModel.editingReasoningParamValue).tag(self.viewModel.editingReasoningParamValue)

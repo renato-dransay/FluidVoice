@@ -329,6 +329,30 @@ final class CloudVendorSupportTests: XCTestCase {
         XCTAssertEqual(separate, .sent, "instances do not share state")
     }
 
+    func testAWarmUpInFlightIsNotRepeated() async throws {
+        let recorder = CloudRequestRecorder()
+        let release = DispatchSemaphore(value: 0)
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            _ = release.wait(timeout: .now() + 5)
+            return (200, [:], Data())
+        }
+        let warmer = ConnectionWarmer()
+        let url = try XCTUnwrap(URL(string: "https://api.example.com"))
+        let session = CloudURLProtocol.session()
+        let first = Task { await warmer.warm(origin: url, on: session, now: 100) }
+        for _ in 0 ..< 500 where recorder.requests.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let second = await warmer.warm(origin: url, on: session, now: 100)
+        release.signal()
+        let firstOutcome = await first.value
+        XCTAssertEqual(second, .skipped)
+        XCTAssertEqual(firstOutcome, .sent)
+        XCTAssertEqual(recorder.requests.count, 1)
+        XCTAssertEqual(recorder.requests.first?.httpShouldHandleCookies, false)
+    }
+
     func testAFailedWarmUpDoesNotCountAsWarm() async throws {
         CloudURLProtocol.install { _ in throw URLError(.cannotConnectToHost) }
         let warmer = ConnectionWarmer()
