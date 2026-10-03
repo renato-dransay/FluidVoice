@@ -51,13 +51,14 @@ nonisolated struct TextRequestOptions: Equatable, Sendable {
         }
     }
 
-    /// A one-line description for the benchmark log.
+    /// A one-line description for the benchmark log, without spaces so the log parser keeps it whole.
     var reasoningLogValue: String {
         guard let reasoning else { return "unset" }
-        switch reasoning.value {
-        case let .string(value): return "\(reasoning.name):\(value)"
-        case let .bool(value): return "\(reasoning.name):\(value)"
+        let value = switch reasoning.value {
+        case let .string(value): value
+        case let .bool(value): String(value)
         }
+        return "\(reasoning.name):\(value)".replacingOccurrences(of: " ", with: "_")
     }
 
     static func resolve(_ input: Input) -> TextRequestOptions {
@@ -184,6 +185,7 @@ nonisolated enum DictationSpeedComparison {
     }
 }
 
+@MainActor
 extension TextRequestOptions {
     /// Models that rejected their optimisation in this launch, as "<providerKey>:<model>". Not stored: a
     /// vendor may start accepting the parameter, and one extra request per launch is cheap.

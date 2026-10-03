@@ -1427,7 +1427,8 @@ final class SettingsStore: ObservableObject {
             self.isEnabled = isEnabled
         }
 
-        /// The built-in defaults live in `TextRequestOptions.builtInDefault(forModel:)`.
+        // The built-in defaults live in `TextRequestOptions.builtInDefault(forModel:)`.
+
         static let disabled = ModelReasoningConfig(parameterName: "", parameterValue: "", isEnabled: false)
     }
 
@@ -3265,7 +3266,7 @@ final class SettingsStore: ObservableObject {
             return customConfig.isEnabled ? customConfig : nil
         }
 
-        // No reasoning config needed for standard models (gpt-4.x, claude, llama, etc.)
+        // The built-in default; nil for standard models (gpt-4.x, claude, llama, etc.)
         return TextRequestOptions.builtInDefault(forModel: model).map(Self.reasoningConfig)
     }
 

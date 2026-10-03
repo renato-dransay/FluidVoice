@@ -1175,6 +1175,8 @@ def main():
     args = parser.parse_args()
     if args.last is not None and args.last < 1:
         parser.error("--last must be positive")
+    if args.aggregate and (args.markdown or args.stages or args.details or args.delivery or args.test_runs):
+        parser.error("--aggregate combines only with --json, --log, --last and --min-idle-seconds")
     if args.last is None:
         args.last = 5
         if args.aggregate:

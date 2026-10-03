@@ -919,6 +919,9 @@ final class CommandModeService: ObservableObject {
             model: model,
             transcript: nil
         ).options.extraParameters
+        for (name, value) in extraParams {
+            DebugLogger.shared.debug("Added reasoning param: \(name)=\(value)", source: "CommandModeService")
+        }
 
         // Reset streaming state
         self.streamingText = ""

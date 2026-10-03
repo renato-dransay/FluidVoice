@@ -350,6 +350,9 @@ final class RewriteModeService: ObservableObject {
             transcript: nil,
             settings: settings
         ).options.extraParameters
+        for (name, value) in extraParams {
+            DebugLogger.shared.debug("Added reasoning param: \(name)=\(value)", source: "RewriteModeService")
+        }
 
         // Build LLMClient configuration
         var config = LLMClient.Config(

@@ -4669,9 +4669,12 @@ struct ContentView: View {
     ) {
         let isRecordingDictation: Bool = switch moment {
         case .start:
-            self.asr.isRunningOrStarting
+            // Running, not only starting, so the recording's app is already captured; onboarding practice
+            // and the demo send their cleanup to Fluid Intelligence, never to the user's text provider.
+            self.asr.isRunning
                 && (self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode)
                 && !self.isRecordingForCommand && !self.isRecordingForRewrite
+                && !self.isOnboardingSandboxRouteActive
         case .stop:
             snapshot != nil
         }
