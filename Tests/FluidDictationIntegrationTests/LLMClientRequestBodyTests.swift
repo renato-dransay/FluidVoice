@@ -393,6 +393,7 @@ final class LLMClientRequestBodyTests: XCTestCase {
             )
             session.activate("test.stop")
             session.select(.profile(profile.id), slot: .primary, appID: "test.stop")
+            XCTAssertEqual(settings.dictationOverlayLabel(for: .primary, appBundleID: "test.stop"), "Stop rule")
             let target = TypingService.RecordingTargetContext(id: UUID(), pid: 123, bundleIdentifier: "test.stop", window: nil, element: nil)
             let info = (name: "Stop app", bundleId: "test.stop", windowTitle: "Stop window")
             let snapshot = DictationStopSnapshot.capture(target: target, appInfo: info, slot: .primary, precedingText: "Before cursor")

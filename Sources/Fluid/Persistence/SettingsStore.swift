@@ -800,7 +800,10 @@ final class SettingsStore: ObservableObject {
         let model = modelName.replacingOccurrences(of: "Fluid-1 ", with: "")
         // An unroutable selection runs no cleanup at all, so it reads as Basic rather than
         // as a long "· Unavailable" line that overflows the pill.
-        return model.isEmpty ? "Basic" : "\(mode) · \(model)"
+        guard !model.isEmpty else { return "Basic" }
+        // An external provider's model is chosen on the AI Providers card, so the style name
+        // alone identifies what runs.
+        return route.usesPrivateAI ? "\(mode) · \(model)" : mode
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
