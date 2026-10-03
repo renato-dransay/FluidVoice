@@ -3,6 +3,7 @@
 
 Usage: python3 scripts/dictation_log_summary.py --last 5 [--stages]
 Use --markdown for Markdown export, --details for marker details, --json for data.
+Use --aggregate [--min-idle-seconds N] to compare the dictation speed comparison keys.
 Reads Fluid.log.1 then Fluid.log. Explicit paths are accepted with --log PATH.
 No recording, playback, app activation, or file writes are performed.
 """
@@ -325,7 +326,17 @@ def summarize(run):
         if ai_processing_ms is not None and len(fi_known_ms) == 3
         else None
     )
+    # Dictation speed comparison (cleanup speed spec, MEAS-1): the request's options and comparison keys,
+    # the first connection report after the first attempt, the last text warm-up before it, and the usage.
+    request_options = find("APP_BENCH", {"ai_request_options"}, after)
+    attempt_index = next((index for index, e in enumerate(events)
+                          if e["family"] == "LLM_BENCH" and e["name"] == "attempt_start"), None)
+    connection = find_untimed("LLM_BENCH", {"connection"}, attempt_index) if attempt_index is not None else None
+    warm_text = next((e for e in reversed(events[:attempt_index] if attempt_index is not None else events)
+                      if e["family"] == "APP_BENCH" and e["name"] == "warm" and e["fields"].get("target") == "text"), None)
+    usage = find_untimed("LLM_BENCH", {"usage"})
     metrics = {
+        "connect_ms": numeric_field(connection, "connect_ms"),
         "start_to_pcm_ms": delta(time(find("ASR_BENCH", {"first_audio"})), start),
         "start_to_overlay_ms": delta(time(find("OVERLAY_BENCH", {"bottom_visible", "bottom_order_front"})), start),
         "recording_ms": delta(stop, start),
@@ -429,6 +440,15 @@ def summarize(run):
         "vocab_terms": numeric_field(final_request, "vocabTerms"),
         "ai_provider": ai_call["fields"].get("provider") if ai_call else None,
         "ai_model": ai_call["fields"].get("model") if ai_call else None,
+        "request_reasoning": request_options["fields"].get("reasoning") if request_options else None,
+        "request_prediction": request_options["fields"].get("prediction") if request_options else None,
+        "arm_low_reasoning": request_options["fields"].get("lowReasoning") if request_options else None,
+        "arm_predicted": request_options["fields"].get("predicted") if request_options else None,
+        "arm_warm_up": request_options["fields"].get("warmUp") if request_options else None,
+        "connection_reused": connection["fields"].get("reused") if connection else None,
+        "warm_text_result": warm_text["fields"].get("result") if warm_text else None,
+        "completion_tokens": numeric_field(usage, "completion"),
+        "rejected_prediction_tokens": numeric_field(usage, "rejected_prediction"),
     }
     return {"id": run["id"], "time": run["time"], "outcome": outcome,
             "ready_outcome": ready_summary["fields"].get("outcome") if ready_summary else None,
@@ -1068,9 +1088,76 @@ def render_terminal_pipeline(rows, width=None):
 
 
 
+def add_idle_before(rows):
+    """Time since the previous dictation's text request, so warm-up arms compare like with like.
+    Uptime restarts with the app, so a negative or missing gap is unknown."""
+    previous_return = None
+    for row in rows:
+        phases = row["phase_uptime"]
+        attempt = phases.get("llm_attempt_start")
+        gap = (attempt - previous_return) * 1000 if attempt is not None and previous_return is not None else None
+        row["metrics"]["idle_before_ms"] = round(gap, 1) if gap is not None and gap >= 0 else None
+        previous_return = phases.get("llm_call_return") or previous_return
+
+
+AGGREGATE_KEYS = ("internal_stop_to_ready_ms", "asr_stop_total_ms", "llm_transport_to_response_ms",
+                  "llm_transport_to_first_content_ms", "connect_ms")
+
+
+def aggregate(rows, min_idle_seconds=None):
+    """One group per provider, model and the three comparison keys (cleanup speed spec, MEAS-2)."""
+    groups = {}
+    for row in rows:
+        context, metrics = row["context"], row["metrics"]
+        if context.get("request_reasoning") is None:
+            continue  # no cleanup request in this recording
+        idle = metrics.get("idle_before_ms")
+        if min_idle_seconds is not None and (idle is None or idle < min_idle_seconds * 1000):
+            continue
+        key = tuple(context.get(name) for name in ("ai_provider", "ai_model", "arm_warm_up", "arm_low_reasoning", "arm_predicted"))
+        groups.setdefault(key, []).append(row)
+    result = []
+    for key, members in groups.items():
+        def stats(name):
+            values = sorted(m["metrics"].get(name) for m in members if m["metrics"].get(name) is not None)
+            if not values:
+                return {"median": None, "p90": None}
+            index = max(0, math.ceil(0.9 * len(values)) - 1)
+            return {"median": round(statistics.median(values), 1), "p90": round(values[index], 1)}
+        reused = [m["context"].get("connection_reused") for m in members if m["context"].get("connection_reused") is not None]
+        tokens = {name: [m["context"].get(name) for m in members if m["context"].get(name) is not None]
+                  for name in ("completion_tokens", "rejected_prediction_tokens")}
+        result.append({
+            "provider": key[0], "model": key[1], "warm_up": key[2], "low_reasoning": key[3], "predicted": key[4],
+            "count": len(members),
+            **{name: stats(name) for name in AGGREGATE_KEYS},
+            "connection_reused": f"{sum(value == 'true' for value in reused)}/{len(reused)}",
+            **{f"median_{name}": round(statistics.median(values), 1) if values else None for name, values in tokens.items()},
+        })
+    return result
+
+
+def render_aggregate(groups):
+    if not groups:
+        return "No dictation with a cleanup request in the selected logs."
+    lines = []
+    for group in groups:
+        def fmt(value):
+            return "—" if value is None else f"{value:g}"
+        lines.append(
+            f"{group['provider']} / {group['model']}  warmUp={group['warm_up']} lowReasoning={group['low_reasoning']} "
+            f"predicted={group['predicted']}  n={group['count']}  reused={group['connection_reused']}"
+        )
+        for name in AGGREGATE_KEYS:
+            lines.append(f"  {name}: median {fmt(group[name]['median'])}  p90 {fmt(group[name]['p90'])}")
+        lines.append(f"  completion tokens median {fmt(group['median_completion_tokens'])}  "
+                     f"rejected prediction tokens median {fmt(group['median_rejected_prediction_tokens'])}")
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--last", type=int, default=5, help="number of recent recordings (default: 5)")
+    parser.add_argument("--last", type=int, default=None, help="number of recent recordings (default: 5; every recording with --aggregate)")
     parser.add_argument("--all", action="store_true", help="include every recording retained in the input logs")
     parser.add_argument("--log", type=Path, action="append", help="explicit log; repeat oldest first")
     parser.add_argument("--details", action="store_true", help="include every benchmark marker from start through tail")
@@ -1082,9 +1169,15 @@ def main():
     parser.add_argument("--target-log", type=Path, help="local test-field receipt JSONL")
     parser.add_argument("--test-runs", action="store_true", help="show only dictations with verified local test-field receipts")
     parser.add_argument("--markdown", action="store_true", help="export Markdown instead of the terminal table")
+    parser.add_argument("--aggregate", action="store_true", help="median and p90 per provider, model and comparison key")
+    parser.add_argument("--min-idle-seconds", type=float, help="with --aggregate, only recordings this long after the previous text request")
     args = parser.parse_args()
-    if args.last < 1:
+    if args.last is not None and args.last < 1:
         parser.error("--last must be positive")
+    if args.last is None:
+        args.last = 5
+        if args.aggregate:
+            args.all = True
     base = Path.home() / "Library/Logs/Fluid/Fluid.log"
     paths = args.log if args.log else [p for p in (base.with_name("Fluid.log.1"), base) if p.exists()]
     if not paths:
@@ -1095,6 +1188,7 @@ def main():
     except OSError as error:
         parser.error(str(error))
     rows = [summarize(run) for run in parse_logs(lines)]
+    add_idle_before(rows)
     target_log = args.target_log or (base.with_name("DictationLatencyTarget.jsonl") if args.test_runs and not args.log else None)
     if target_log is not None and (args.target_log or target_log.exists()):
         try:
@@ -1107,6 +1201,10 @@ def main():
         rows = rows[-args.last:]
     if not rows:
         parser.error("no verified test-field runs found" if args.test_runs else "no recording/pipeline start markers found")
+    if args.aggregate:
+        groups = aggregate(rows, args.min_idle_seconds)
+        print(json.dumps(groups, indent=2) if args.json else render_aggregate(groups))
+        return
     add_latency_breakdown(rows)
     add_delivery_breakdown(rows)
     add_pipeline_breakdown(rows)

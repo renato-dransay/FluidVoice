@@ -294,12 +294,14 @@ final class MeetingSummaryController: ObservableObject {
     private func summarizeInCloud(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingCloudSummaryRoute) {
         guard !self.busy, let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         let settings = SettingsStore.shared
-        var extraParameters: [String: Any] = [:]
-        if let config = settings.getReasoningConfig(forModel: route.model, provider: route.providerKey), config.isEnabled {
-            extraParameters[config.parameterName] = config.parameterName == "enable_thinking"
-                ? (config.parameterValue == "true")
-                : config.parameterValue
-        }
+        let extraParameters = TextRequestOptions.resolve(
+            purpose: .general,
+            providerKey: route.providerKey,
+            baseURL: route.baseURL,
+            model: route.model,
+            transcript: nil,
+            settings: settings
+        ).options.extraParameters
         let sendsTemperature = !settings.isTemperatureUnsupported(route.model)
         let generation = UUID()
         self.generation = generation

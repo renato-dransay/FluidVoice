@@ -47,10 +47,16 @@ nonisolated struct CloudTranscriptionSession: Sendable {
         )
     }
 
-    /// Opens OpenRouter's connection while the user is still speaking. Any other provider is left
-    /// alone: the prewarm request goes to openrouter.ai and must never carry another vendor's key (KEY-8).
-    func prewarm() async {
-        guard self.isOpenRouter, let openRouter = self.client as? OpenRouterTranscriptionClient else { return }
-        await openRouter.prewarmIfIdle(apiKey: self.apiKey)
+    /// Opens the provider's connection while the user is still speaking. OpenRouter keeps its own
+    /// authenticated prewarm, which goes to openrouter.ai with OpenRouter's key only (KEY-8), and reports
+    /// nothing. Every other provider gets one request without a key, and only when it has a key saved.
+    func prewarm(warmOtherProviders: Bool) async -> (providerID: String, outcome: ConnectionWarmer.Outcome)? {
+        if self.isOpenRouter {
+            guard let openRouter = self.client as? OpenRouterTranscriptionClient else { return nil }
+            await openRouter.prewarmIfIdle(apiKey: self.apiKey)
+            return nil
+        }
+        guard warmOtherProviders, !self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (self.providerID, await self.client.warmConnection())
     }
 }

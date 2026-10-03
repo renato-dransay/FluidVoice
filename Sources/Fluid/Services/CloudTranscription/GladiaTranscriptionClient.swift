@@ -57,6 +57,10 @@ nonisolated struct GladiaTranscriptionClient: CloudTranscriptionClient {
     var providerName: String { Self.name }
     var maximumRequestSeconds: Int { CloudVendorHTTP.maximumRequestSeconds }
 
+    func warmConnection() async -> ConnectionWarmer.Outcome {
+        await self.http.warm(Self.baseURL)
+    }
+
     func checkKey(apiKey: String) async throws {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         guard let url = URL(string: Self.keyCheckEndpoint) else { throw CloudTranscriptionError.network }

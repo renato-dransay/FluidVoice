@@ -12,6 +12,13 @@ nonisolated protocol CloudTranscriptionClient: Sendable {
     /// A request without audio that succeeds only for a key the vendor accepts.
     func checkKey(apiKey: String) async throws
     func transcribe(samples: [Float], configuration: CloudTranscriptionConfiguration, apiKey: String, wordTimings: Bool) async throws -> CloudTranscriptionResult
+    /// Opens the connection to the upload host while the user speaks, without a key. OpenRouter is
+    /// warmed by its own authenticated prewarm instead, so it keeps this default.
+    func warmConnection() async -> ConnectionWarmer.Outcome
+}
+
+extension CloudTranscriptionClient {
+    func warmConnection() async -> ConnectionWarmer.Outcome { .skipped }
 }
 
 /// The client for each Cloud transcription provider.

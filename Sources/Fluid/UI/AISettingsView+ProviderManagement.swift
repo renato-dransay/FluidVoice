@@ -312,12 +312,17 @@ extension AIEnhancementSettingsView {
             if let error = self.viewModel.fetchModelsError, !error.isEmpty {
                 ProviderActionResultLabel(result: .failure(error))
             }
-            FluidManagementRow(
-                title: "Reasoning",
-                detail: self.viewModel.isReasoningEnabled(for: providerID) ? "Enabled" : "Not enabled"
-            ) {
+            let reasoning = self.viewModel.reasoningStateSummary(for: providerID)
+            FluidManagementRow(title: "Reasoning", detail: reasoning.detail) {
                 Button("Configure…", systemImage: "gearshape") { self.viewModel.openReasoningConfig() }
                     .fluidButton(.compact, size: .small)
+                    .disabled(reasoning.detail.isEmpty)
+            }
+            if let note = reasoning.note {
+                Text(note)
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if self.viewModel.showingReasoningConfig, self.viewModel.selectedProviderID == providerID {
                 self.reasoningConfigSection

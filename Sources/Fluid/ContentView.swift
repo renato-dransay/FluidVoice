@@ -2803,25 +2803,17 @@ struct ContentView: View {
         // Check if this model doesn't support the temperature parameter
         let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel)
 
-        // Get reasoning config for this model (uses per-model settings or auto-detection)
-        // This handles custom parameters like reasoning_effort, enable_thinking, etc.
+        // Reasoning parameters and, for a dictation's Cleanup Style, the speed options come from one place.
         let providerKey = self.providerKey(for: currentSelectedProviderID)
-        let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: derivedSelectedModel, provider: providerKey)
-
-        // Build extra parameters from reasoning config
-        var extraParams: [String: Any] = [:]
-        if let config = reasoningConfig, config.isEnabled {
-            if config.parameterName == "enable_thinking" {
-                // DeepSeek uses boolean
-                extraParams = [config.parameterName: config.parameterValue == "true"]
-            } else {
-                // OpenAI/Groq use string values (reasoning_effort, etc.)
-                extraParams = [config.parameterName: config.parameterValue]
-            }
-            DebugLogger.shared.debug(
-                "Added reasoning param: \(config.parameterName)=\(config.parameterValue)",
-                source: "ContentView"
-            )
+        let requestOptions = TextRequestOptions.resolve(
+            purpose: isDictationCall ? .dictationCleanup : .general,
+            providerKey: providerKey,
+            baseURL: derivedBaseURL,
+            model: derivedSelectedModel,
+            transcript: inputText
+        )
+        if let reasoning = requestOptions.options.reasoning {
+            DebugLogger.shared.debug("Added reasoning param: \(reasoning.name)", source: "ContentView")
         }
 
         let messages = request.messages
@@ -2837,7 +2829,6 @@ struct ContentView: View {
             streaming: enableStreaming,
             tools: [],
             temperature: isTemperatureUnsupported ? nil : 0.2,
-            extraParameters: extraParams,
             benchmarkID: benchmarkID
         )
         if enableStreaming {
@@ -2848,36 +2839,12 @@ struct ContentView: View {
 
         DebugLogger.shared.info("Using LLMClient for transcription (streaming=\(enableStreaming))", source: "ContentView")
 
-        let response: LLMClient.Response
-        if enableStreaming {
-            do {
-                response = try await LLMClient.shared.call(config)
-            } catch {
-                guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error) else {
-                    self.appBench("ai_streaming_fallback_skipped reason=transport_or_cancel")
-                    throw error
-                }
-                self.appBench("ai_streaming_fallback_start")
-                DebugLogger.shared.warning(
-                    "Streaming dictation post-processing failed; retrying without streaming: \(error.localizedDescription)",
-                    source: "ContentView"
-                )
-                let fallbackConfig = LLMClient.Config(
-                    messages: messages,
-                    model: derivedSelectedModel,
-                    baseURL: derivedBaseURL,
-                    apiKey: apiKey,
-                    streaming: false,
-                    tools: [],
-                    temperature: isTemperatureUnsupported ? nil : 0.2,
-                    extraParameters: extraParams,
-                    benchmarkID: benchmarkID
-                )
-                response = try await LLMClient.shared.call(fallbackConfig)
-            }
-        } else {
-            response = try await LLMClient.shared.call(config)
-        }
+        let response = try await TextRequestTransport.send(
+            config,
+            options: requestOptions.options,
+            plain: requestOptions.plain,
+            pair: TextRequestOptions.pair(providerKey: providerKey, model: derivedSelectedModel)
+        )
 
         // Log thinking if present (for debugging)
         if let thinking = response.thinking {
@@ -2960,6 +2927,9 @@ struct ContentView: View {
         let promptTestSessionID = promptTest.isActive ? promptTest.sessionID : nil
         var stopSnapshot = route == .normal && !wasRewriteMode && !wasCommandMode && !promptTest.isActive
             ? self.captureDictationStopSnapshot(slot: activeDictationSlot ?? .primary) : nil
+        if let stopSnapshot {
+            self.warmDictationCleanupIfNeeded(for: activeDictationSlot ?? .primary, at: .stop, snapshot: stopSnapshot)
+        }
         let combinedModelID = self.asr.activeCloudDictationModelID
         let promptAppID = self.recordingAppInfo?.bundleId
         let combinedStyleEnabled = promptTest.isActive || (stopSnapshot?.styleEnabled ??
@@ -4646,6 +4616,7 @@ struct ContentView: View {
                 }
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: .primary)
+                self.warmDictationCleanupIfNeeded(for: .primary, at: .start)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
                     message: "overlay_phase phase=recording trigger=first_pcm",
@@ -4687,6 +4658,51 @@ struct ContentView: View {
             source: "ContentView"
         )
         return true
+    }
+
+    /// Opens the connection to the Cleanup Style's text provider while the user speaks (WARM-3 to WARM-5).
+    /// At stop the snapshot's route and cleanup decision are used, because the app may have changed.
+    private func warmDictationCleanupIfNeeded(
+        for slot: SettingsStore.DictationShortcutSlot,
+        at moment: DictationCleanupWarmPolicy.Moment,
+        snapshot: DictationStopSnapshot? = nil
+    ) {
+        let isRecordingDictation: Bool = switch moment {
+        case .start:
+            self.asr.isRunningOrStarting
+                && (self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode)
+                && !self.isRecordingForCommand && !self.isRecordingForRewrite
+        case .stop:
+            snapshot != nil
+        }
+        guard isRecordingDictation else { return }
+        let appBundleID = self.recordingAppInfo?.bundleId
+        let route = snapshot?.route ?? DictationProviderRoute.resolve(
+            settings: SettingsStore.shared,
+            dictationSlot: slot,
+            appBundleID: appBundleID
+        )
+        let cleanupConfigured = snapshot?.usesAI ?? DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID)
+        guard let origin = DictationCleanupWarmPolicy.origin(.init(
+            isRecordingDictation: isRecordingDictation,
+            isPromptTest: DictationPromptTestCoordinator.shared.isActive,
+            cleanupConfigured: cleanupConfigured,
+            usesFluidIntelligence: route.usesPrivateAI || PrivateAIIntegrationService.shouldHandleDictation(model: route.model),
+            combinedCloudDictation: self.asr.isUsingCombinedCloudDictation,
+            baseURL: route.baseURL,
+            isLocalEndpoint: self.isLocalEndpoint(route.baseURL),
+            warmUpEnabled: DictationSpeedComparison.textWarmUp
+        )) else { return }
+        Task {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let outcome = await LLMClient.shared.warmConnection(to: origin)
+            DebugLogger.shared.benchmark(
+                "APP_BENCH",
+                message: "warm target=text host=\(origin.host ?? "unknown") at=\(moment.rawValue) result=\(outcome.rawValue) "
+                    + "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                source: "AppBenchmark"
+            )
+        }
     }
 
     private func prewarmPrivateAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
@@ -4863,6 +4879,7 @@ struct ContentView: View {
             DictationAppSession.shared.select(selection, slot: slot, appID: DictationAppSession.shared.appID)
             self.applyDictationShortcutSelectionContext(for: slot)
             self.prewarmPrivateAIDictationIfNeeded(for: slot)
+            self.warmDictationCleanupIfNeeded(for: slot, at: .start)
         }
 
         guard self.hotkeyManager == nil else { return }
@@ -5349,6 +5366,7 @@ extension ContentView {
                 }
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                self.warmDictationCleanupIfNeeded(for: slot, at: .start)
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
             if startOutcome == .failed {

@@ -26,6 +26,27 @@ xcodebuild test -project Fluid.xcodeproj -scheme Fluid \
 
 The Tiny Whisper case retains upstream's documented CI exclusion because its hosted output is nondeterministic. Test cloud recognition with synthetic or explicitly selected audio, including multiple languages, long-file boundaries and cancellation; never infer cloud quality from a successful build.
 
+## Dictation speed comparison keys
+
+Four hidden preferences turn each [dictation speed](dictation-speed.md) measure on or off, so its effect can be compared on the installed build. The app reads them on every dictation; no restart is needed. They change the installed app's own preferences, so delete them when a comparison is finished: a key left off keeps that measure off in daily use.
+
+| Key | Default | Turns on or off |
+|---|---|---|
+| `DictationSpeedTextWarmUp` | on | Opening the text provider's connection while you speak |
+| `DictationSpeedSpeechWarmUp` | on | Opening a Cloud speech provider's connection while you speak (OpenRouter's own prewarm is not affected) |
+| `DictationSpeedLowReasoning` | on | The lower reasoning effort for Cleanup Styles |
+| `DictationSpeedPredictedOutputs` | off | OpenAI Predicted Outputs for Cleanup Styles on `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini` and `gpt-4.1-nano`. Predicted text the model does not reuse is billed as output, so a style that rewrites heavily can cost more. |
+
+```sh
+defaults write com.renatobeltrao.fluidvoice.personal DictationSpeedLowReasoning -bool false
+defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedTextWarmUp
+defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedSpeechWarmUp
+defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedLowReasoning
+defaults delete com.renatobeltrao.fluidvoice.personal DictationSpeedPredictedOutputs
+```
+
+`python3 scripts/dictation_log_summary.py --aggregate` groups recent dictations by provider, model and these keys, with median and 90th-percentile timings, how often the connection was reused, and token counts. `--min-idle-seconds N` keeps only dictations that came at least N seconds after the previous text request, which is where opening the connection early can matter.
+
 ## Installation and rollback
 
 Quit the personal app, then install the tested signed product:

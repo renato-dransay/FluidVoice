@@ -911,17 +911,14 @@ final class CommandModeService: ObservableObject {
         let isReasoningModel = settings.isReasoningModel(model)
         let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
 
-        // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
-        let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: model, provider: providerID)
-        var extraParams: [String: Any] = [:]
-        if let rConfig = reasoningConfig, rConfig.isEnabled {
-            if rConfig.parameterName == "enable_thinking" {
-                extraParams = [rConfig.parameterName: rConfig.parameterValue == "true"]
-            } else {
-                extraParams = [rConfig.parameterName: rConfig.parameterValue]
-            }
-            DebugLogger.shared.debug("Added reasoning param: \(rConfig.parameterName)=\(rConfig.parameterValue)", source: "CommandModeService")
-        }
+        // Reasoning parameter for this model (e.g., reasoning_effort, enable_thinking), saved under the provider key
+        let extraParams = TextRequestOptions.resolve(
+            purpose: .general,
+            providerKey: ModelRepository.shared.providerKey(for: providerID),
+            baseURL: baseURL,
+            model: model,
+            transcript: nil
+        ).options.extraParameters
 
         // Reset streaming state
         self.streamingText = ""

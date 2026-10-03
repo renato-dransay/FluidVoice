@@ -5,6 +5,8 @@ import Foundation
 nonisolated struct CloudVendorHTTP: Sendable {
     let providerID: String
     let session: URLSession
+    /// Remembers which hosts this session reached recently, so a warm-up never repeats an open connection.
+    let warmer = ConnectionWarmer()
 
     /// The longest audio a single-request vendor receives: 780 s fits FLAC and the WAV fallback,
     /// whose 25 MB cap sits near 781 s (CLD-3).
@@ -22,6 +24,12 @@ nonisolated struct CloudVendorHTTP: Sendable {
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         return URLSession(configuration: configuration)
+    }
+
+    /// Opens the connection to `endpoint`'s host on this session; see `ConnectionWarmer`.
+    func warm(_ endpoint: String) async -> ConnectionWarmer.Outcome {
+        guard let url = URL(string: endpoint) else { return .skipped }
+        return await self.warmer.warm(origin: url, on: self.session)
     }
 
     /// The key without surrounding whitespace; an empty key fails before anything is sent.
@@ -97,6 +105,7 @@ nonisolated struct CloudVendorHTTP: Sendable {
             if let error = classify?(response.statusCode, data) ?? Self.error(forStatus: response.statusCode) {
                 throw error
             }
+            self.warmer.markSuccess(request.url)
             return (data, response)
         } catch is CancellationError {
             throw CancellationError()

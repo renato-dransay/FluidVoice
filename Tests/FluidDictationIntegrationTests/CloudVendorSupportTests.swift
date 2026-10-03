@@ -249,7 +249,7 @@ final class CloudVendorSupportTests: XCTestCase {
             configuration: .init(providerID: "deepgram", modelID: "nova-3"), speechAPIKey: { keys[$0] ?? "" }, clients: clients
         )
         XCTAssertEqual(session.apiKey, "dg-key")
-        await session.prewarm()
+        _ = await session.prewarm(warmOtherProviders: true)
         let result = try await session.provider(persistChunks: false).transcribe([Float](repeating: 0.1, count: 16_000))
         XCTAssertEqual(result.text, "hi")
         XCTAssertFalse(recorder.requests.isEmpty)
@@ -266,10 +266,78 @@ final class CloudVendorSupportTests: XCTestCase {
         let session = CloudTranscriptionSession(
             configuration: .init(), speechAPIKey: { $0 == "openrouter" ? "or-key" : "other" }, clients: Self.stubbedClients()
         )
-        await session.prewarm()
+        _ = await session.prewarm(warmOtherProviders: true)
         let request = try XCTUnwrap(recorder.requests.first)
         XCTAssertEqual(request.url?.absoluteString, "https://openrouter.ai/api/v1/key")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer or-key")
+    }
+
+    func testAVendorSessionWarmsItsUploadHostWithoutAKey() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (404, [:], Data())
+        }
+        let session = CloudTranscriptionSession(
+            configuration: .init(providerID: "deepgram", modelID: "nova-3"), speechAPIKey: { _ in "dg-key" }, clients: Self.stubbedClients()
+        )
+        let warm = await session.prewarm(warmOtherProviders: true)
+        XCTAssertEqual(warm?.providerID, "deepgram")
+        XCTAssertEqual(warm?.outcome, .sent, "any HTTP status means the connection is open")
+        let request = try XCTUnwrap(recorder.requests.first)
+        XCTAssertEqual(request.httpMethod, "HEAD")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.deepgram.com/")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(request.httpBody)
+    }
+
+    func testNoSpeechWarmUpWhenSwitchedOffOrWithoutAKey() async {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data())
+        }
+        let configuration = CloudTranscriptionConfiguration(providerID: "deepgram", modelID: "nova-3")
+        let keyed = CloudTranscriptionSession(configuration: configuration, speechAPIKey: { _ in "dg-key" }, clients: Self.stubbedClients())
+        let missingKey = await CloudTranscriptionSession(configuration: configuration, speechAPIKey: { _ in " " }, clients: Self.stubbedClients())
+            .prewarm(warmOtherProviders: true)
+        let switchedOff = await keyed.prewarm(warmOtherProviders: false)
+        XCTAssertNil(missingKey)
+        XCTAssertNil(switchedOff)
+        XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
+    func testConnectionWarmerSkipsAWarmOriginAndRetriesAfterTheWindow() async throws {
+        let recorder = CloudRequestRecorder()
+        CloudURLProtocol.install { request in
+            recorder.append(request)
+            return (200, [:], Data())
+        }
+        let warmer = ConnectionWarmer()
+        let url = try XCTUnwrap(URL(string: "https://api.example.com/v1/chat/completions"))
+        let first = await warmer.warm(origin: url, on: CloudURLProtocol.session(), now: 100)
+        let insideWindow = await warmer.warm(origin: url, on: CloudURLProtocol.session(), now: 159)
+        let afterWindow = await warmer.warm(origin: url, on: CloudURLProtocol.session(), now: 161)
+        XCTAssertEqual([first, insideWindow, afterWindow], [.sent, .skipped, .sent])
+        XCTAssertEqual(recorder.requests.count, 2)
+        XCTAssertEqual(recorder.requests.first?.url?.absoluteString, "https://api.example.com/")
+
+        warmer.markSuccess(URL(string: "https://other.example.com/v1/x"), now: 200)
+        let marked = await warmer.warm(origin: try XCTUnwrap(URL(string: "https://other.example.com")), on: CloudURLProtocol.session(), now: 210)
+        XCTAssertEqual(marked, .skipped, "a real request counts as warm")
+        let separate = await ConnectionWarmer().warm(origin: url, on: CloudURLProtocol.session(), now: 162)
+        XCTAssertEqual(separate, .sent, "instances do not share state")
+    }
+
+    func testAFailedWarmUpDoesNotCountAsWarm() async throws {
+        CloudURLProtocol.install { _ in throw URLError(.cannotConnectToHost) }
+        let warmer = ConnectionWarmer()
+        let url = try XCTUnwrap(URL(string: "https://api.example.com"))
+        let failed = await warmer.warm(origin: url, on: CloudURLProtocol.session(), now: 100)
+        XCTAssertEqual(failed, .failed)
+        CloudURLProtocol.install { _ in (200, [:], Data()) }
+        let next = await warmer.warm(origin: url, on: CloudURLProtocol.session(), now: 101)
+        XCTAssertEqual(next, .sent)
     }
 
     func testAChangedConfigurationKeepsTheFrozenProviderAndKey() {

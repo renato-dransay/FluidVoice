@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from dictation_log_summary import main, parse_logs, render, render_stages, render_terminal_stages, summarize, attach_field_receipts, add_latency_breakdown, render_terminal_latency, render_terminal_delivery, add_delivery_breakdown, add_pipeline_breakdown, render_terminal_pipeline, add_boundary_diagnostics
+from dictation_log_summary import aggregate, add_idle_before, main, parse_logs, render, render_stages, render_terminal_stages, summarize, attach_field_receipts, add_latency_breakdown, render_terminal_latency, render_terminal_delivery, add_delivery_breakdown, add_pipeline_breakdown, render_terminal_pipeline, add_boundary_diagnostics
 
 
 def row(family, t, event):
@@ -145,6 +145,58 @@ class DictationLogSummaryTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["llm_decode_tail_ms"], 20)
         self.assertEqual(result["metrics"]["llm_return_hop_ms"], 1)
         self.assertIn("External AI handoff detail", render([result]))
+
+    def speed_run(self, pipeline, t0, reused, warm_up="on", warm_result="sent", rejected=None):
+        lines = [
+            row("APP_BENCH", t0, "begin_recording"),
+            row("APP_BENCH", t0 + 0.1, f"warm target=text host=api.openai.com at=start result={warm_result} elapsedMs=40"),
+            row("APP_BENCH", t0 + 1, f"pipeline_begin id={pipeline}"),
+            row("APP_BENCH", t0 + 1, "stop_path_enter route=normal"),
+            row("APP_BENCH", t0 + 1.1, f"ai_process_call id={pipeline} provider=openai model=gpt-4.1 inputChars=40"),
+            row("APP_BENCH", t0 + 1.101, f"ai_request_options id={pipeline} reasoning=unset prediction=false optimised=false "
+                f"lowReasoning=on predicted=off warmUp={warm_up}"),
+            row("LLM_BENCH", t0 + 1.105, f"id={pipeline} call_enter"),
+            row("LLM_BENCH", t0 + 1.107, f"id={pipeline} attempt_start attempt=1"),
+            row("LLM_BENCH", t0 + 1.120, f"id={pipeline} response_headers"),
+            row("LLM_BENCH", t0 + 1.150, f"id={pipeline} first_content"),
+            row("LLM_BENCH", t0 + 1.171, f"id={pipeline} connection reused={reused} protocol=h2 connect_ms={0 if reused == 'true' else 80}"),
+            row("LLM_BENCH", t0 + 1.172, f"id={pipeline} call_return"),
+            row("APP_BENCH", t0 + 1.2, "text_ready chars=40"),
+        ]
+        if rejected is not None:
+            lines.insert(-2, row("LLM_BENCH", t0 + 1.17, f"id={pipeline} usage completion=20 accepted_prediction=15 rejected_prediction={rejected}"))
+        return lines
+
+    def test_speed_comparison_keys_are_read_per_recording(self):
+        result = self.parse(*self.speed_run("A", 1, "false", rejected=3))[0]
+        self.assertEqual(result["context"]["request_reasoning"], "unset")
+        self.assertEqual(result["context"]["request_prediction"], "false")
+        self.assertEqual(result["context"]["arm_warm_up"], "on")
+        self.assertEqual(result["context"]["arm_low_reasoning"], "on")
+        self.assertEqual(result["context"]["arm_predicted"], "off")
+        self.assertEqual(result["context"]["connection_reused"], "false")
+        self.assertEqual(result["context"]["warm_text_result"], "sent")
+        self.assertEqual(result["metrics"]["connect_ms"], 80)
+        self.assertEqual(result["context"]["completion_tokens"], 20)
+        self.assertEqual(result["context"]["rejected_prediction_tokens"], 3)
+
+    def test_aggregate_groups_by_arm_and_filters_on_idle_time(self):
+        rows = self.parse(
+            *self.speed_run("A", 1, "true"),
+            *self.speed_run("B", 200, "false", warm_up="off", warm_result="skipped"),
+            *self.speed_run("C", 205, "true", warm_up="off", warm_result="skipped"),
+        )
+        add_idle_before(rows)
+        self.assertIsNone(rows[0]["metrics"]["idle_before_ms"])
+        self.assertAlmostEqual(rows[1]["metrics"]["idle_before_ms"], (201.107 - 2.172) * 1000, places=0)
+        self.assertAlmostEqual(rows[2]["metrics"]["idle_before_ms"], (206.107 - 201.172) * 1000, places=0)
+        groups = aggregate(rows)
+        self.assertEqual({(g["warm_up"], g["count"]) for g in groups}, {("on", 1), ("off", 2)})
+        off = next(g for g in groups if g["warm_up"] == "off")
+        self.assertEqual(off["connection_reused"], "1/2")
+        self.assertEqual(off["connect_ms"]["median"], 40)
+        idle = aggregate(rows, min_idle_seconds=60)
+        self.assertEqual([(g["warm_up"], g["count"]) for g in idle], [("off", 1)])
 
     def test_private_fi_summary_uses_low_overhead_completion_log(self):
         result = self.parse(

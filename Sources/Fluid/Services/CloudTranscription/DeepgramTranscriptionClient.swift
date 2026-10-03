@@ -59,6 +59,10 @@ nonisolated struct DeepgramTranscriptionClient: CloudTranscriptionClient {
     var providerName: String { Self.name }
     var maximumRequestSeconds: Int { CloudVendorHTTP.maximumRequestSeconds }
 
+    func warmConnection() async -> ConnectionWarmer.Outcome {
+        await self.http.warm(Self.listenEndpoint)
+    }
+
     func checkKey(apiKey: String) async throws {
         let key = try CloudVendorHTTP.trimmedKey(apiKey)
         guard let url = URL(string: Self.keyCheckURL) else { throw CloudTranscriptionError.network }

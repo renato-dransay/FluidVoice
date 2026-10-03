@@ -58,8 +58,9 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
 /// Unified LLM communication layer for all modes (Transcription, Command, Rewrite).
 /// Handles HTTP requests, SSE streaming, thinking token extraction, and tool call parsing.
-/// Stateless, thread-safe transport. Keeping streaming decode off MainActor prevents
-/// provider token bursts from delaying dictation UI and final text delivery.
+/// Thread-safe transport whose only state is which hosts it reached recently, for warm-ups. Keeping
+/// streaming decode off MainActor prevents provider token bursts from delaying dictation UI and final
+/// text delivery.
 final nonisolated class LLMClient: @unchecked Sendable {
     static let shared = LLMClient()
 
@@ -68,6 +69,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     /// URLSession configured with appropriate timeouts
     private let session: URLSession
+
+    /// The one piece of state: which hosts had a successful request recently, so a dictation's warm-up
+    /// does not repeat a connection that is already open.
+    private let warmer = ConnectionWarmer()
 
     private init() {
         let config = URLSessionConfiguration.default
@@ -151,6 +156,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var onContentChunk: (@Sendable (String) -> Void)?
         var onToolCallStart: (@Sendable (String) -> Void)?
 
+        /// OpenAI Predicted Outputs: text the model may reuse instead of generating it (Chat Completions only).
+        var prediction: String?
+
         init(
             messages: [[String: Any]],
             model: String,
@@ -173,6 +181,35 @@ final nonisolated class LLMClient: @unchecked Sendable {
             self.maxTokens = maxTokens
             self.extraParameters = extraParameters
             self.benchmarkID = benchmarkID
+        }
+
+        /// The same request with these options' reasoning parameter and prediction.
+        func applying(_ options: TextRequestOptions) -> Config {
+            var copy = self
+            copy.extraParameters = options.extraParameters
+            copy.prediction = options.prediction
+            return copy
+        }
+
+        /// The same request without streaming and without its real-time callbacks.
+        func withoutStreaming() -> Config {
+            var copy = Config(
+                messages: self.messages,
+                model: self.model,
+                baseURL: self.baseURL,
+                apiKey: self.apiKey,
+                streaming: false,
+                tools: self.tools,
+                temperature: self.temperature,
+                maxTokens: self.maxTokens,
+                extraParameters: self.extraParameters,
+                benchmarkID: self.benchmarkID
+            )
+            copy.maxRetries = self.maxRetries
+            copy.retryDelayMs = self.retryDelayMs
+            copy.timeoutSeconds = self.timeoutSeconds
+            copy.prediction = self.prediction
+            return copy
         }
     }
 
@@ -210,14 +247,18 @@ final nonisolated class LLMClient: @unchecked Sendable {
         for attempt in 1...config.maxRetries {
             do {
                 self.benchmark(config, "attempt_start attempt=\(attempt)")
+                let response: Response
                 if config.streaming {
                     if self.isResponsesRequest(request) {
-                        return try await self.processResponsesStreaming(request: request, config: config)
+                        response = try await self.processResponsesStreaming(request: request, config: config)
+                    } else {
+                        response = try await self.processStreaming(request: request, config: config)
                     }
-                    return try await self.processStreaming(request: request, config: config)
                 } else {
-                    return try await self.processNonStreaming(request: request, config: config)
+                    response = try await self.processNonStreaming(request: request, config: config)
                 }
+                self.warmer.markSuccess(request.url)
+                return response
             } catch let error as URLError where self.isRetryableError(error) {
                 lastError = LLMError.networkError(error)
                 DebugLogger.shared.warning("LLMClient: Retry \(attempt)/\(config.maxRetries) due to \(error.code.rawValue)", source: "LLMClient")
@@ -237,6 +278,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
         throw lastError ?? LLMError.networkError(
             NSError(domain: "LLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Request failed after retries"])
         )
+    }
+
+    /// Opens the connection to a text provider before the request that needs it. Sends no key or body.
+    func warmConnection(to origin: URL) async -> ConnectionWarmer.Outcome {
+        await self.warmer.warm(origin: origin, on: self.session)
     }
 
     // MARK: - Request Building
@@ -360,6 +406,15 @@ final nonisolated class LLMClient: @unchecked Sendable {
             body[key] = value
         }
 
+        // Predicted Outputs cannot be combined with tools or a token limit. The usage report carries the
+        // rejected prediction tokens, which are billed.
+        if let prediction = config.prediction, config.tools.isEmpty, config.maxTokens == nil {
+            body["prediction"] = ["type": "content", "content": prediction]
+            if config.streaming {
+                body["stream_options"] = ["include_usage": true]
+            }
+        }
+
         // Final Layer: Common parameters with model-specific keys
         if let tokens = config.maxTokens {
             if Self.usesReasoningCompletionTokenParameter(config.model) {
@@ -373,10 +428,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     }
 
     private static func usesReasoningCompletionTokenParameter(_ model: String) -> Bool {
-        var modelLower = model.lowercased()
-        if let slash = modelLower.firstIndex(of: "/") {
-            modelLower = String(modelLower[modelLower.index(after: slash)...])
-        }
+        let modelLower = TextRequestOptions.bareModelID(model)
         return modelLower.hasPrefix("gpt-6") ||
             modelLower.hasPrefix("gpt-5") ||
             modelLower.contains("gpt-5.") ||
@@ -499,7 +551,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processNonStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await self.session.data(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_data bytes=\(data.count)")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -513,6 +565,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw LLMError.invalidResponse
         }
+        self.logPredictionUsage(json, config: config)
 
         let parsed: Response
         if self.isResponsesRequest(request) {
@@ -531,7 +584,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await self.session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -642,7 +695,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await self.session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_headers")
 
         // Check for HTTP errors
@@ -686,8 +739,13 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             guard let jsonData = jsonString.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+            else {
+                continue
+            }
+            // The usage report arrives in a final chunk with empty choices.
+            self.logPredictionUsage(json, config: config)
+            guard let choices = json["choices"] as? [[String: Any]],
                   let delta = choices.first?["delta"] as? [String: Any]
             else {
                 continue
@@ -1060,11 +1118,51 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Logging Helpers
 
+    /// Records what a predicted output cost, for the owner's comparison of Predicted Outputs on and off.
+    private func logPredictionUsage(_ json: [String: Any], config: Config) {
+        guard config.prediction != nil, let usage = json["usage"] as? [String: Any] else { return }
+        let details = usage["completion_tokens_details"] as? [String: Any]
+        let completion = usage["completion_tokens"] as? Int ?? 0
+        let accepted = details?["accepted_prediction_tokens"] as? Int ?? 0
+        let rejected = details?["rejected_prediction_tokens"] as? Int ?? 0
+        self.benchmark(config, "usage completion=\(completion) accepted_prediction=\(accepted) rejected_prediction=\(rejected)")
+    }
+
+    /// Records whether a measured request reused an open connection. Attached only to requests that carry a
+    /// benchmark ID while diagnostics are compiled in, so every other request is sent exactly as before.
+    static func metricsDelegate(for config: Config) -> URLSessionTaskDelegate? {
+        guard DebugLogger.diagnosticsEnabled, let id = config.benchmarkID else { return nil }
+        return ConnectionMetricsLogger(benchmarkID: id)
+    }
+
     private func benchmark(_ config: Config, _ message: @autoclosure () -> String) {
         guard DebugLogger.diagnosticsEnabled, let id = config.benchmarkID else { return }
         DebugLogger.shared.benchmark(
             "LLM_BENCH",
             message: "id=\(id) \(message())",
+            source: "LLMBenchmark"
+        )
+    }
+}
+
+/// Logs the connection facts of one measured request: reused or new, protocol, and connect time with TLS.
+private final nonisolated class ConnectionMetricsLogger: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let benchmarkID: String
+
+    init(benchmarkID: String) {
+        self.benchmarkID = benchmarkID
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard let transaction = metrics.transactionMetrics.last else { return }
+        let connectMilliseconds: Int = {
+            guard let start = transaction.connectStartDate, let end = transaction.connectEndDate else { return 0 }
+            return Int((end.timeIntervalSince(start) * 1000).rounded())
+        }()
+        DebugLogger.shared.benchmark(
+            "LLM_BENCH",
+            message: "id=\(self.benchmarkID) connection reused=\(transaction.isReusedConnection) "
+                + "protocol=\(transaction.networkProtocolName ?? "unknown") connect_ms=\(connectMilliseconds)",
             source: "LLMBenchmark"
         )
     }

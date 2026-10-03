@@ -13,7 +13,6 @@ final nonisolated class OpenRouterTranscriptionClient: CloudTranscriptionClient 
 
     private let lastSuccessLock = NSLock()
     nonisolated(unsafe) private var lastSuccessfulRequestUptime: TimeInterval?
-    private static let warmConnectionWindow: TimeInterval = 60
 
     var providerID: String { CloudTranscriptionCatalog.openRouterID }
     var providerName: String { CloudTranscriptionCatalog.openRouterName }
@@ -39,7 +38,7 @@ final nonisolated class OpenRouterTranscriptionClient: CloudTranscriptionClient 
     func prewarmIfIdle(apiKey: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) async {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let isWarm = self.lastSuccessLock.withLock {
-            self.lastSuccessfulRequestUptime.map { now - $0 < Self.warmConnectionWindow } ?? false
+            self.lastSuccessfulRequestUptime.map { now - $0 < ConnectionWarmer.window } ?? false
         }
         guard !isWarm else { return }
         do {

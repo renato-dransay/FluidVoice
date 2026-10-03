@@ -730,8 +730,19 @@ final class ASRService: ObservableObject {
                         ? SettingsStore.shared.cloudDictationModelID : nil
                     self.frozenTranscriptionProvider = session.provider(persistChunks: activity != .dictation)
                     if activity == .dictation {
-                        // Only OpenRouter is prewarmed; the session ignores every other provider.
-                        Task.detached(priority: .utility) { await session.prewarm() }
+                        // OpenRouter keeps its authenticated prewarm; every other provider gets one request
+                        // without a key unless the owner switched that off for a comparison.
+                        let warmOtherProviders = DictationSpeedComparison.speechWarmUp
+                        Task.detached(priority: .utility) {
+                            let startedAt = ProcessInfo.processInfo.systemUptime
+                            guard let warm = await session.prewarm(warmOtherProviders: warmOtherProviders) else { return }
+                            DebugLogger.shared.benchmark(
+                                "APP_BENCH",
+                                message: "warm target=speech provider=\(warm.providerID) at=start result=\(warm.outcome.rawValue) "
+                                    + "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                                source: "AppBenchmark"
+                            )
+                        }
                     }
                 } else {
                     self.frozenTranscriptionProvider = self.transcriptionProvider

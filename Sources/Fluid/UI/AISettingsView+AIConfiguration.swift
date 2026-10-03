@@ -1277,7 +1277,7 @@ extension AIEnhancementSettingsView {
                             .font(self.theme.typography.captionStrong)
                             .foregroundStyle(self.theme.palette.secondaryText)
                         HStack(spacing: 8) {
-                            Text(self.viewModel.isReasoningEnabled(for: item.id) ? "Enabled" : "Not enabled")
+                            Text(self.viewModel.reasoningStateSummary(for: item.id).detail)
                                 .font(self.theme.typography.body)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                             Spacer()
@@ -2423,9 +2423,15 @@ extension AIEnhancementSettingsView {
                 Toggle("", isOn: self.$viewModel.editingReasoningEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                Text(self.viewModel.editingReasoningEnabled ? "Enabled" : "Disabled")
+                Text("Send a reasoning parameter")
                     .font(.fluidSystem(.caption))
                     .foregroundStyle(self.viewModel.editingReasoningEnabled ? self.theme.palette.accent : .secondary)
+            }
+            if !self.viewModel.editingReasoningEnabled {
+                Text("Nothing is sent, so the model uses its own default.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if self.viewModel.editingReasoningEnabled {
@@ -2500,6 +2506,10 @@ extension AIEnhancementSettingsView {
 
                         if self.viewModel.editingReasoningParamName == "reasoning_effort" {
                             Picker("", selection: self.$viewModel.editingReasoningParamValue) {
+                                // A saved value this list does not offer (for example xhigh) stays visible.
+                                if !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
+                                    Text(self.viewModel.editingReasoningParamValue).tag(self.viewModel.editingReasoningParamValue)
+                                }
                                 Text("none").tag("none")
                                 Text("minimal").tag("minimal")
                                 Text("low").tag("low")
@@ -2530,6 +2540,15 @@ extension AIEnhancementSettingsView {
                 .padding(.leading, 4)
             }
 
+            if !self.viewModel.hasSavedReasoningConfig {
+                let losesLowerEffort = self.viewModel.reasoningStateSummary(for: self.viewModel.selectedProviderID).note != nil
+                Text("Automatic is in use. Saving replaces it with this setting for every feature."
+                    + (losesLowerEffort ? " Cleanup Styles then stop using the lower reasoning effort." : ""))
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 8) {
                 Button(action: { self.saveReasoningConfig() }) {
                     Text("Save")
@@ -2537,11 +2556,21 @@ extension AIEnhancementSettingsView {
                 }
                 .fluidButton(.accent, size: .small)
                 .frame(minWidth: 60, minHeight: 26)
+                .disabled(!self.viewModel.canSaveReasoningConfig)
+                .help(self.viewModel.reasoningSaveBlocker ?? "")
 
                 Button("Cancel") { self.viewModel.showingReasoningConfig = false }
                     .fluidButton(.compact, size: .compact)
                     .font(.fluidSystem(size: 12))
                     .frame(minWidth: 60, minHeight: 26)
+
+                if self.viewModel.hasSavedReasoningConfig {
+                    Spacer()
+                    Button("Reset to Automatic") { self.viewModel.resetReasoningToAutomatic() }
+                        .fluidButton(.compact, size: .compact)
+                        .font(.fluidSystem(size: 12))
+                        .frame(minHeight: 26)
+                }
             }
         }
         .padding(12)
@@ -2560,6 +2589,8 @@ extension AIEnhancementSettingsView {
     func saveReasoningConfig() {
         self.viewModel.saveReasoningConfig()
     }
+
+    static let reasoningEffortValues = ["none", "minimal", "low", "medium", "high"]
 
     var connectionTestSection: some View {
         let selectedProviderAPIKey = self.viewModel.providerAPIKey(for: self.viewModel.selectedProviderID)

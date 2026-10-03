@@ -254,12 +254,15 @@ final class DictationPostProcessingService {
             throw AIProcessingError.missingAPIKey(provider: resolved.providerKey)
         }
 
-        var extraParams: [String: Any] = [:]
-        if let config = settings.getReasoningConfig(forModel: resolved.model, provider: resolved.providerKey), config.isEnabled {
-            extraParams[config.parameterName] = config.parameterName == "enable_thinking"
-                ? (config.parameterValue == "true")
-                : config.parameterValue
-        }
+        // The Local API keeps its requests as they are: no Cleanup Style speed options.
+        let extraParams = TextRequestOptions.resolve(
+            purpose: .general,
+            providerKey: resolved.providerKey,
+            baseURL: resolved.baseURL,
+            model: resolved.model,
+            transcript: nil,
+            settings: settings
+        ).options.extraParameters
 
         var config = LLMClient.Config(
             messages: request.messages,

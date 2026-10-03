@@ -123,7 +123,7 @@ final class CloudProviderRoutingTests: XCTestCase {
             speechAPIKey: { $0 == "deepgram" ? "dg-key" : "or-key" },
             clients: clients
         )
-        await session.prewarm()
+        _ = await session.prewarm(warmOtherProviders: true)
         let provider = session.provider(persistChunks: false)
         try await provider.prepare(progressHandler: nil)
         let result = try await provider.transcribe([Float](repeating: 0.1, count: 16_000))

@@ -23,6 +23,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var availableModels: [String] = []
     @Published var selectedModel: String = "" {
         didSet {
+            // The reasoning editor's fields belong to the model in its title.
+            if self.selectedModel != oldValue { self.showingReasoningConfig = false }
             guard self.selectedModel != "__ADD_MODEL__" else { return }
             guard !self.currentProvider.isEmpty else { return }
             self.selectedModelByProvider[self.currentProvider] = self.selectedModel
@@ -41,6 +43,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var editingReasoningParamName: String = "reasoning_effort"
     @Published var editingReasoningParamValue: String = "low"
     @Published var editingReasoningEnabled: Bool = false
+    /// What the editor was filled with, so Save can tell whether a saved configuration was changed.
+    private var reasoningBaseline: (enabled: Bool, name: String, value: String)?
 
     // Provider Management
     @Published var providerAPIKeys: [String: String] = [:]
@@ -50,6 +54,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     var managedOriginalKey: String?
     @Published var selectedProviderID: String {
         didSet {
+            if self.selectedProviderID != oldValue { self.showingReasoningConfig = false }
             guard self.persistsSelectedProvider else { return }
             self.settings.selectedProviderID = self.selectedProviderID
             self.syncPromptSelectionForSelectedProvider()
@@ -1602,31 +1607,37 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Intentionally empty. Selection is sticky.
     }
 
+    /// Fills the editor with what is sent today: the saved configuration, else the built-in default. A model
+    /// saved as off keeps its switch off, with the default's name and value ready for when it is turned on.
     func openReasoningConfig() {
-        let pKey = self.providerKey(for: self.selectedProviderID)
-        if let config = self.settings.getReasoningConfig(forModel: selectedModel, provider: pKey) {
-            self.editingReasoningParamName = config.parameterName
-            self.editingReasoningParamValue = config.parameterValue
-            self.editingReasoningEnabled = config.isEnabled
-        } else {
-            let modelLower = self.selectedModel.lowercased()
-            if modelLower.hasPrefix("gpt-5") || modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.contains("gpt-oss") {
-                self.editingReasoningParamName = "reasoning_effort"; self.editingReasoningParamValue = "low"; self.editingReasoningEnabled = true
-            } else if modelLower.contains("deepseek"), modelLower.contains("reasoner") {
-                self.editingReasoningParamName = "enable_thinking"; self.editingReasoningParamValue = "true"; self.editingReasoningEnabled = true
-            } else {
-                self.editingReasoningParamName = "reasoning_effort"; self.editingReasoningParamValue = "low"; self.editingReasoningEnabled = false
-            }
+        let saved = self.settings.savedReasoning(forModel: self.selectedModel, provider: self.providerKey(for: self.selectedProviderID))
+        let builtIn = TextRequestOptions.builtInDefault(forModel: self.selectedModel)
+        let fallback = TextRequestOptions.Reasoning(name: "reasoning_effort", value: .string("low"))
+        let fill: TextRequestOptions.Reasoning
+        switch saved {
+        case let .on(reasoning):
+            self.editingReasoningEnabled = true
+            fill = reasoning
+        case .off:
+            self.editingReasoningEnabled = false
+            fill = builtIn ?? fallback
+        case .nothing:
+            self.editingReasoningEnabled = builtIn != nil
+            fill = builtIn ?? fallback
         }
+        self.editingReasoningParamName = fill.name
+        self.editingReasoningParamValue = Self.reasoningValueText(fill.value)
+        self.reasoningBaseline = (self.editingReasoningEnabled, self.editingReasoningParamName, self.editingReasoningParamValue)
         self.showingReasoningConfig = true
     }
 
     func saveReasoningConfig() {
+        guard self.canSaveReasoningConfig else { return }
         let pKey = self.providerKey(for: self.selectedProviderID)
         if self.editingReasoningEnabled {
             let config = SettingsStore.ModelReasoningConfig(
-                parameterName: self.editingReasoningParamName,
-                parameterValue: self.editingReasoningParamValue,
+                parameterName: self.editingReasoningParamName.trimmingCharacters(in: .whitespacesAndNewlines),
+                parameterValue: self.editingReasoningParamValue.trimmingCharacters(in: .whitespacesAndNewlines),
                 isEnabled: true
             )
             self.settings.setReasoningConfig(config, forModel: self.selectedModel, provider: pKey)
@@ -1636,6 +1647,62 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         self.reasoningConfigVersion += 1 // Trigger view update
         self.showingReasoningConfig = false
+    }
+
+    /// Removes the saved configuration, so the model is back on Automatic.
+    func resetReasoningToAutomatic() {
+        self.settings.setReasoningConfig(nil, forModel: self.selectedModel, provider: self.providerKey(for: self.selectedProviderID))
+        self.reasoningConfigVersion += 1
+        self.showingReasoningConfig = false
+    }
+
+    /// True when a configuration is saved for the model in the editor.
+    var hasSavedReasoningConfig: Bool {
+        _ = self.reasoningConfigVersion
+        return self.settings.hasCustomReasoningConfig(forModel: self.selectedModel, provider: self.providerKey(for: self.selectedProviderID))
+    }
+
+    /// Why Save is unavailable for a reason the user can fix, or nil.
+    var reasoningSaveBlocker: String? {
+        guard self.editingReasoningEnabled else { return nil }
+        let name = self.editingReasoningParamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = self.editingReasoningParamValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty || value.isEmpty ? "Enter a parameter name and value." : nil
+    }
+
+    /// While nothing is saved, saving turns Automatic into a saved setting, even unchanged. A saved setting
+    /// can only be saved again once it differs; with the switch off, only the switch is compared.
+    var canSaveReasoningConfig: Bool {
+        guard self.reasoningSaveBlocker == nil else { return false }
+        guard self.hasSavedReasoningConfig, let baseline = self.reasoningBaseline else { return true }
+        if !self.editingReasoningEnabled, !baseline.enabled { return false }
+        return self.editingReasoningEnabled != baseline.enabled
+            || self.editingReasoningParamName != baseline.name
+            || self.editingReasoningParamValue != baseline.value
+    }
+
+    /// The Reasoning row's text for a provider's selected model, and a note when Cleanup Styles send a lower
+    /// effort than the other text features. Every reasoning row takes its wording from here.
+    func reasoningStateSummary(for providerID: String) -> (detail: String, note: String?) {
+        _ = self.reasoningConfigVersion
+        let pKey = self.providerKey(for: providerID)
+        let model = self.selectedModelByProvider[pKey] ?? ""
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ("", nil) }
+        let detail = switch self.settings.savedReasoning(forModel: model, provider: pKey) {
+        case let .on(reasoning): "Custom: \(Self.describe(reasoning))"
+        case .off: "Custom: model's own default"
+        case .nothing: TextRequestOptions.builtInDefault(forModel: model).map { "Automatic: \(Self.describe($0))" }
+            ?? "Automatic: model's own default"
+        }
+        guard DictationDefaultProvider.isDefaultTextProvider(providerID, selectedProviderID: self.settings.selectedProviderID),
+              !self.settings.usesCombinedCloudDictation
+        else { return (detail, nil) }
+        let baseURL = DictationAIPostProcessingGate.baseURL(for: providerID, settings: self.settings)
+        let cleanup = TextRequestOptions.resolve(purpose: .dictationCleanup, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
+        let general = TextRequestOptions.resolve(purpose: .general, providerKey: pKey, baseURL: baseURL, model: model, transcript: nil)
+        guard let lower = cleanup.options.reasoning, lower != general.options.reasoning else { return (detail, nil) }
+        return (detail, "Cleanup Styles on this model send \(Self.describe(lower)) instead, so dictation finishes sooner. "
+            + "Command Mode, Edit and meeting summaries use the setting above.")
     }
 
     /// Check if reasoning is enabled for a specific provider/model
@@ -1649,6 +1716,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return false
         }
         return config.isEnabled
+    }
+
+    private static func describe(_ reasoning: TextRequestOptions.Reasoning) -> String {
+        "\(reasoning.name) = \(self.reasoningValueText(reasoning.value))"
+    }
+
+    private static func reasoningValueText(_ value: TextRequestOptions.Value) -> String {
+        switch value {
+        case let .string(text): text
+        case let .bool(flag): flag ? "true" : "false"
+        }
     }
 
     func saveNewProvider() {

@@ -3285,31 +3285,24 @@ final class SettingsStore: ObservableObject {
             return customConfig.isEnabled ? customConfig : nil
         }
 
-        // Apply smart defaults for known model patterns
-        let modelLower = model.lowercased()
-
-        // OpenAI gpt-5.x models
-        if modelLower.hasPrefix("gpt-5") || modelLower.contains("gpt-5.") {
-            return .openAIGPT5
-        }
-
-        // OpenAI o-series reasoning models
-        if modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("o4") {
-            return .openAIO1
-        }
-
-        // Groq gpt-oss models
-        if modelLower.contains("gpt-oss") || modelLower.hasPrefix("openai/") {
-            return .groqGPTOSS
-        }
-
-        // DeepSeek reasoner models
-        if modelLower.contains("deepseek"), modelLower.contains("reasoner") {
-            return .deepSeekReasoner
-        }
-
         // No reasoning config needed for standard models (gpt-4.x, claude, llama, etc.)
-        return nil
+        return TextRequestOptions.builtInDefault(forModel: model).map(Self.reasoningConfig)
+    }
+
+    /// What the user saved in the Reasoning editor for this model, without the built-in default.
+    func savedReasoning(forModel model: String, provider: String) -> TextRequestOptions.Saved {
+        guard let saved = self.modelReasoningConfigs["\(provider):\(model)"] else { return .nothing }
+        return saved.isEnabled
+            ? .on(TextRequestOptions.reasoning(name: saved.parameterName, value: saved.parameterValue))
+            : .off
+    }
+
+    static func reasoningConfig(_ reasoning: TextRequestOptions.Reasoning) -> ModelReasoningConfig {
+        let value = switch reasoning.value {
+        case let .string(value): value
+        case let .bool(value): value ? "true" : "false"
+        }
+        return ModelReasoningConfig(parameterName: reasoning.name, parameterValue: value, isEnabled: true)
     }
 
     /// Set reasoning config for a specific model
@@ -3349,10 +3342,7 @@ final class SettingsStore: ObservableObject {
         // family checks below match prefixed reasoning IDs like "openai/o3"
         // without also matching every non-reasoning "openai/*" model (e.g.
         // "openai/gpt-4o"), which would strip its temperature control.
-        var modelLower = model.lowercased()
-        if let slash = modelLower.firstIndex(of: "/") {
-            modelLower = String(modelLower[modelLower.index(after: slash)...])
-        }
+        let modelLower = TextRequestOptions.bareModelID(model)
         return modelLower.hasPrefix("gpt-6") ||
             modelLower.hasPrefix("gpt-5") ||
             modelLower.contains("gpt-5.") ||
