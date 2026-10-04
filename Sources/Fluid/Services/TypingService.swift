@@ -568,10 +568,14 @@ final class TypingService {
             toggleStopRequestedAt: toggleStopRequestedAt,
             completedAt: completedAt
         )
-        if verifiesLanding, SettingsStore.shared.showPasteCheckAlerts,
+        if verifiesLanding,
            result == .commandPosted, deliveryPath != .direct, let verificationBefore
         {
-            self.verifyPasteLanded(text, before: verificationBefore)
+            self.verifyPasteLanded(
+                text,
+                before: verificationBefore,
+                postsFailureNotification: SettingsStore.shared.showPasteCheckAlerts
+            )
         }
         // The caller starts correction tracking after completing delivery UI.
         return result
@@ -698,7 +702,11 @@ final class TypingService {
 
     /// Off-main read-back after a paste. Logs every verdict; only a certain
     /// `notLanded` reaches the UI.
-    private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot) {
+    private func verifyPasteLanded(
+        _ text: String,
+        before: PasteVerifier.Snapshot,
+        postsFailureNotification: Bool
+    ) {
         Task.detached(priority: .utility) {
             let startedAt = ProcessInfo.processInfo.systemUptime
             var verdict = await PasteVerifier.verify(before: before, pastedText: text)
@@ -715,9 +723,12 @@ final class TypingService {
                 source: "TypingService"
             )
             guard case .notLanded = verdict else { return }
-            await MainActor.run {
+            let shouldPost = postsFailureNotification
+            await Task { @MainActor in
+                await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: true)
+                guard shouldPost else { return }
                 NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil, userInfo: ["transcript": text])
-            }
+            }.value
         }
     }
 

@@ -2463,13 +2463,13 @@ struct ContentView: View {
         return result.isReady
     }
 
-    private func showStoppedDictationDeliveryFailure(_ failure: TextDeliveryFailure, transcript: String, snapshot: DictationStopSnapshot?) {
+    private func showStoppedDictationDeliveryFailure(_ failure: TextDeliveryFailure, transcript: String, snapshot: DictationStopSnapshot?) async {
         if let snapshot {
             // Retry retains its captured-target behavior, now for the field selected at stop.
             NotchContentState.shared.recordingTargetContext = snapshot.target
             NotchContentState.shared.recordingTargetPID = snapshot.target?.pid
         }
-        self.showTextDeliveryFailure(failure, transcript: transcript)
+        await self.showTextDeliveryFailure(failure, transcript: transcript)
     }
 
     private func resolveTypingTargetPID(returnToStartingField: Bool = true) -> (pid: pid_t?, shouldRestoreOriginalFocus: Bool) {
@@ -3428,7 +3428,7 @@ struct ContentView: View {
 
             if case let .recoverableFailure(failure) = deliveryResult {
                 didFailTextDelivery = true
-                self.showStoppedDictationDeliveryFailure(failure, transcript: finalText, snapshot: stopSnapshot)
+                await self.showStoppedDictationDeliveryFailure(failure, transcript: finalText, snapshot: stopSnapshot)
             } else if !shouldShowAIProcessingFailure, !stopOverlay.didRequestHide {
                 self.hideOverlayAfterOutput()
             }
@@ -3742,9 +3742,12 @@ struct ContentView: View {
         NotchContentState.shared.setSpokenSendIndicatorState(shouldSend ? .detected : .hidden)
     }
 
-    private func showTextDeliveryFailure(_ failure: TextDeliveryFailure, transcript: String) {
+    private func showTextDeliveryFailure(_ failure: TextDeliveryFailure, transcript: String) async {
         let failure = failure != .emptyText && !AXIsProcessTrusted() ? TextDeliveryFailure.accessibilityNotTrusted : failure
         DebugLogger.shared.warning("Text delivery failed: \(failure.rawValue)", source: "ContentView")
+        if failure != .emptyText {
+            await PasteDeliveryCoordinator.shared.copyBackup(transcript, enabled: true)
+        }
         NotchContentState.shared.recordTextDeliveryFailure(failure, transcript: transcript)
         guard failure.userFacingMessage != nil else {
             self.hideOverlayAfterOutput()
@@ -4110,6 +4113,7 @@ struct ContentView: View {
             // the previous recording's saved target. Never restore that older focus here.
             guard let targetPID = TypingService.currentFocusedPID(), targetPID != ProcessInfo.processInfo.processIdentifier else {
                 DebugLogger.shared.info("Actions: Paste skipped - no external target field available", source: "ContentView")
+                await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: true)
                 return
             }
             let appInfo = self.getCurrentAppInfo()
@@ -4124,7 +4128,7 @@ struct ContentView: View {
                 preferredTargetPID: targetPID
             )
             if case let .recoverableFailure(failure) = result {
-                self.showTextDeliveryFailure(failure, transcript: text)
+                await self.showTextDeliveryFailure(failure, transcript: text)
             } else {
                 DebugLogger.shared.info("Actions: Pasted latest transcription into focused field", source: "ContentView")
             }
@@ -4141,7 +4145,7 @@ struct ContentView: View {
         if typingTarget.shouldRestoreOriginalFocus,
            !(await self.prepareRecordingTargetForDelivery(transcript, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard))
         {
-            self.showTextDeliveryFailure(.targetRestoreFailed, transcript: transcript)
+            await self.showTextDeliveryFailure(.targetRestoreFailed, transcript: transcript)
             return
         }
 
@@ -4151,7 +4155,7 @@ struct ContentView: View {
             preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
         )
         if case let .recoverableFailure(failure) = result {
-            self.showTextDeliveryFailure(failure, transcript: transcript)
+            await self.showTextDeliveryFailure(failure, transcript: transcript)
         } else {
             self.hideOverlayAfterOutput()
         }
@@ -4257,7 +4261,7 @@ struct ContentView: View {
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard) else {
-                    self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
+                    await self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
             }
@@ -4267,7 +4271,7 @@ struct ContentView: View {
                 preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
             )
             if case let .recoverableFailure(failure) = result {
-                self.showTextDeliveryFailure(failure, transcript: finalText)
+                await self.showTextDeliveryFailure(failure, transcript: finalText)
             }
         } else {
             await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: SettingsStore.shared.copyTranscriptionToClipboard)
@@ -4386,7 +4390,7 @@ struct ContentView: View {
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard) else {
-                    self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
+                    await self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
             }
@@ -4396,7 +4400,7 @@ struct ContentView: View {
                 preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
             )
             if case let .recoverableFailure(failure) = result {
-                self.showTextDeliveryFailure(failure, transcript: finalText)
+                await self.showTextDeliveryFailure(failure, transcript: finalText)
                 return
             }
         } else {
@@ -4448,7 +4452,7 @@ struct ContentView: View {
             let typingTarget = self.resolveTypingTargetPID()
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(self.rewriteModeService.rewrittenText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard) else {
-                    self.showTextDeliveryFailure(
+                    await self.showTextDeliveryFailure(
                         .targetRestoreFailed,
                         transcript: self.rewriteModeService.rewrittenText
                     )
@@ -4462,7 +4466,7 @@ struct ContentView: View {
                 preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
             )
             if case let .recoverableFailure(failure) = deliveryResult {
-                self.showTextDeliveryFailure(failure, transcript: self.rewriteModeService.rewrittenText)
+                await self.showTextDeliveryFailure(failure, transcript: self.rewriteModeService.rewrittenText)
                 return
             }
 

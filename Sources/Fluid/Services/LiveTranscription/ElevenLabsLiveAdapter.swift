@@ -103,7 +103,7 @@ nonisolated struct ElevenLabsLiveAdapter: LiveTranscriptionAdapter {
     func keyCheckFailure(status: Int, body: Data) -> LiveTranscriptionError? {
         if (200 ..< 300).contains(status) { return nil }
         let codes = Self.errorCodes(in: body)
-        if status == 403, codes.contains(where: { $0 == "insufficient_permissions" || $0 == "missing_permissions" }) { return nil }
+        if status == 403, codes.contains("insufficient_permissions") || codes.contains("missing_permissions") { return nil }
         if status == 401, codes.contains("quota_exceeded") { return .quotaExhausted }
         return LiveHTTPStatus.failure(for: status)
     }
