@@ -118,13 +118,16 @@ nonisolated struct ElevenLabsTranscriptionClient: CloudTranscriptionClient {
     /// The key check also reads a 403 for a missing permission (`insufficient_permissions`, or the
     /// legacy `missing_permissions`) as a key that authenticated, keeping its status apart from a refused key.
     static let classifyKeyCheck: @Sendable (Int, Data) -> CloudTranscriptionError? = { status, data in
-        if status == 403,
-           let error = try? JSONDecoder().decode(ErrorBody.self, from: data),
-           [error.detail.code, error.detail.status].contains(where: { $0 == "insufficient_permissions" || $0 == "missing_permissions" })
-        {
+        if status == 403, Self.missingPermission(in: data) {
             return .server(403)
         }
         return classify(status, data)
+    }
+
+    private static func missingPermission(in data: Data) -> Bool {
+        guard let error = try? JSONDecoder().decode(ErrorBody.self, from: data) else { return false }
+        let codes = [error.detail.code, error.detail.status]
+        return codes.contains("insufficient_permissions") || codes.contains("missing_permissions")
     }
 
     private struct ErrorBody: Decodable {
