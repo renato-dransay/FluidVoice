@@ -732,7 +732,7 @@ final class PasteDeliveryCoordinator {
     @discardableResult
     func copyBackup(_ text: String, enabled: Bool, expectedChangeCount: Int? = nil) async -> Bool {
         guard enabled, !text.isEmpty, !Task.isCancelled else { return false }
-        let requestedChangeCount = expectedChangeCount ?? self.pasteboard.changeCount
+        let requestedChangeCount = expectedChangeCount ?? self.lastWrittenChangeCount ?? self.pasteboard.changeCount
         await self.acquireDeliverySlot()
         defer { self.releaseDeliverySlot() }
         guard !Task.isCancelled else { return false }

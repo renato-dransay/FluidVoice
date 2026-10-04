@@ -39,6 +39,96 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(pasteboard.restoreCount, 1)
     }
 
+    func testUnbackedSettlementThenRetainCopyReplacesRestoredClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: FakePasteCommandPoster(),
+            settlementDelayNanoseconds: .max
+        )
+
+        let result = await coordinator.deliver("dictated text", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(result, .commandPosted)
+        coordinator.runPendingSettlementForTesting()
+        XCTAssertEqual(pasteboard.text, "before")
+
+        let copied = await coordinator.copyBackup("dictated text", enabled: true)
+        XCTAssertTrue(copied)
+        XCTAssertEqual(pasteboard.text, "dictated text")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 1)
+    }
+
+    func testRetainCopyKeepsClipboardChangedAfterSettlement() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: FakePasteCommandPoster(),
+            settlementDelayNanoseconds: .max
+        )
+
+        _ = await coordinator.deliver("dictated text", preserveTranscriptOnClipboard: false)
+        coordinator.runPendingSettlementForTesting()
+        pasteboard.simulateExternalCopy("user copy")
+
+        let copied = await coordinator.copyBackup("dictated text", enabled: true)
+        XCTAssertFalse(copied)
+        XCTAssertEqual(pasteboard.text, "user copy")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+    }
+
+    func testRetainCopySkipsEmptyTranscript() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: FakePasteCommandPoster(),
+            settlementDelayNanoseconds: .max
+        )
+
+        _ = await coordinator.deliver("dictated text", preserveTranscriptOnClipboard: false)
+        coordinator.runPendingSettlementForTesting()
+
+        let copied = await coordinator.copyBackup("", enabled: true)
+        XCTAssertFalse(copied)
+        XCTAssertEqual(pasteboard.text, "before")
+        XCTAssertEqual(pasteboard.intentionalWriteCount, 0)
+    }
+
+    func testRetainCopyAfterFailedPasteCommandReplacesRestoredClipboard() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: FakePasteCommandPoster(succeeds: false),
+            settlementDelayNanoseconds: .max
+        )
+
+        let result = await coordinator.deliver("dictated text", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(result, .recoverableFailure(.pasteCommandFailed))
+        XCTAssertEqual(pasteboard.text, "before")
+
+        let copied = await coordinator.copyBackup("dictated text", enabled: true)
+        XCTAssertTrue(copied)
+        XCTAssertEqual(pasteboard.text, "dictated text")
+    }
+
+    func testRetainCopyAfterFailedPasteCommandKeepsExternalCopy() async {
+        let pasteboard = FakePasteboardManager(text: "before")
+        let commandPoster = FakePasteCommandPoster(succeeds: false)
+        commandPoster.onPost = { pasteboard.simulateExternalCopy("user copy") }
+        let coordinator = PasteDeliveryCoordinator(
+            pasteboard: pasteboard,
+            commandPoster: commandPoster,
+            settlementDelayNanoseconds: .max
+        )
+
+        let result = await coordinator.deliver("dictated text", preserveTranscriptOnClipboard: false)
+        XCTAssertEqual(result, .recoverableFailure(.pasteCommandFailed))
+
+        let copied = await coordinator.copyBackup("dictated text", enabled: true)
+        XCTAssertFalse(copied)
+        XCTAssertEqual(pasteboard.text, "user copy")
+        XCTAssertEqual(pasteboard.restoreCount, 0)
+    }
+
     func testQueuedDeliveryKeepsFirstPayloadUntilConsumptionWindowEnds() async {
         let pasteboard = FakePasteboardManager(text: "before")
         let commandPoster = FakePasteCommandPoster()
