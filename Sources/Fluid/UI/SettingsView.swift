@@ -145,9 +145,9 @@ struct SettingsView: View {
             get: {
                 switch self.settings.dictationPromptSelection(for: slot) {
                 case .off:
-                    return "__OFF__"
+                    return SettingsStore.shortcutPickerOffTag
                 case .default:
-                    return "__DEFAULT__"
+                    return SettingsStore.shortcutPickerDefaultTag
                 case .privateAI:
                     return PrivateAIProviderPromptFormat.promptSelectionID
                 case let .profile(id):
@@ -155,17 +155,7 @@ struct SettingsView: View {
                 }
             },
             set: { newValue in
-                switch newValue {
-                case "__OFF__":
-                    self.settings.setDictationPromptSelection(.off, for: slot)
-                case "__DEFAULT__":
-                    self.settings.setDictationPromptSelection(.default, for: slot)
-                case PrivateAIProviderPromptFormat.promptSelectionID:
-                    guard PrivateAIProviderPromptFormat.isAvailable(settings: self.settings) else { return }
-                    self.settings.setDictationPromptSelection(.privateAI, for: slot)
-                default:
-                    self.settings.setDictationPromptSelection(.profile(newValue), for: slot)
-                }
+                self.settings.applyDictationShortcutPickerTag(newValue, for: slot)
             }
         )
     }
@@ -190,7 +180,7 @@ struct SettingsView: View {
                 Picker("Cleanup style", selection: selection) {
                     // Names the engine that hears the dictation; never "ON-DEVICE" while audio leaves the Mac.
                     Section(self.settings.dictationEngineBadge) {
-                        Text("Basic — No cleanup").tag("__OFF__")
+                        Text("Basic — No cleanup").tag(SettingsStore.shortcutPickerOffTag)
                         if PrivateFeatures.privateAIProvider {
                             Text(SettingsStore.DictationModeLabels.smartWithModel)
                                 .tag(PrivateAIProviderPromptFormat.promptSelectionID)
@@ -198,7 +188,7 @@ struct SettingsView: View {
                         }
                     }
                     Section("CUSTOM STYLES") {
-                        Text(SettingsStore.DictationModeLabels.externalDefault).tag("__DEFAULT__")
+                        Text(SettingsStore.DictationModeLabels.externalDefault).tag(SettingsStore.shortcutPickerDefaultTag)
                         ForEach(profiles) { profile in
                             Text(profile.name.isEmpty ? "Untitled" : profile.name)
                                 .tag(profile.id)

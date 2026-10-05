@@ -2241,13 +2241,40 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         for slot in SettingsStore.DictationShortcutSlot.allCases
             where DictationProviderRoute.resolve(settings: self.settings, dictationSlot: slot).usesPrivateAI
         {
-            self.settings.setDictationPromptSelection(.off, for: slot)
+            self.settings.setDictationCleanupEnabled(false, for: slot)
         }
         self.refreshPromptSelectionState()
     }
 
     func selectPrimaryDictationPromptOff() {
         self.settings.setDictationPromptSelection(.off)
+        self.refreshPromptSelectionState()
+    }
+
+    func rememberedDictationPromptSelection(for slot: SettingsStore.DictationShortcutSlot) -> SettingsStore.DictationPromptSelection {
+        self.settings.rememberedDictationPromptSelection(for: slot)
+    }
+
+    var isDictationCleanupEnabled: Bool {
+        self.settings.isDictationCleanupEnabled
+    }
+
+    func setDictationCleanupEnabled(_ isEnabled: Bool) {
+        self.settings.setDictationCleanupEnabled(isEnabled)
+        self.refreshPromptSelectionState()
+    }
+
+    func chooseDictationStyle(
+        _ selection: SettingsStore.DictationPromptSelection,
+        for slot: SettingsStore.DictationShortcutSlot
+    ) {
+        guard selection != .off else { return }
+        guard selection != .privateAI || self.isPrivateAIPromptAvailable() else { return }
+        if self.settings.isDictationPromptOff(for: slot) {
+            self.settings.setRememberedDictationPromptSelection(selection, for: slot)
+        } else {
+            self.settings.setDictationPromptSelection(selection, for: slot)
+        }
         self.refreshPromptSelectionState()
     }
 

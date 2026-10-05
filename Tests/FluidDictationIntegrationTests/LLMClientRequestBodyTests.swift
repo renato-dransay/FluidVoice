@@ -360,11 +360,138 @@ final class LLMClientRequestBodyTests: XCTestCase {
         }
     }
 
+    func testDisablingCleanupKeepsTheSelectedStyleAndRestoresIt() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+            let custom = SettingsStore.DictationPromptProfile(
+                name: "Custom",
+                prompt: "Keep this style.",
+                mode: .dictate
+            )
+            let mail = SettingsStore.DictationPromptProfile(
+                name: "Mail",
+                prompt: "Mail rules.",
+                mode: .dictate
+            )
+            settings.dictationPromptProfiles = [custom, mail]
+            settings.appPromptBindings = [
+                SettingsStore.AppPromptBinding(
+                    mode: .dictate,
+                    appBundleID: "com.apple.mail",
+                    appName: "Mail",
+                    promptID: mail.id
+                ),
+            ]
+            settings.setDictationPromptSelection(.profile(custom.id), for: .primary)
+
+            settings.setDictationCleanupEnabled(false)
+
+            XCTAssertFalse(settings.isDictationCleanupEnabled)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
+            XCTAssertEqual(settings.selectedDictationPromptID, custom.id)
+            XCTAssertTrue(settings.dictationPromptProfiles.contains(where: { $0.id == custom.id }))
+            XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary))
+            XCTAssertFalse(DictationAIPostProcessingGate.isStyleConfigured(for: .primary))
+            XCTAssertEqual(settings.effectiveDictationPromptBody(for: .primary), "")
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "com.apple.mail"), .off)
+            XCTAssertEqual(settings.effectiveDictationPromptBody(for: .primary, appBundleID: "com.apple.mail"), "")
+            XCTAssertFalse(CloudDictationDeliveryPolicy.usesCombinedRequest(
+                isDictation: true,
+                cloudStylesActive: true,
+                styleEnabled: settings.resolvedDictationPromptSelection(for: .primary, appBundleID: nil) != .off
+            ))
+
+            settings.setRememberedDictationPromptSelection(.profile(custom.id), for: .primary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
+
+            settings.setDictationCleanupEnabled(true)
+
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
+            XCTAssertEqual(settings.selectedDictationPromptID, custom.id)
+            XCTAssertEqual(settings.effectiveDictationSystemPrompt(for: .primary), custom.prompt)
+        }
+    }
+
+    func testDictationShortcutsRestoreCleanupStylesIndependently() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+            let primary = SettingsStore.DictationPromptProfile(name: "Primary", prompt: "Primary style.", mode: .dictate)
+            let secondary = SettingsStore.DictationPromptProfile(name: "Secondary", prompt: "Secondary style.", mode: .dictate)
+            settings.dictationPromptProfiles = [primary, secondary]
+            settings.setDictationPromptSelection(.profile(primary.id), for: .primary)
+            settings.setDictationPromptSelection(.profile(secondary.id), for: .secondary)
+
+            settings.setDictationCleanupEnabled(false)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .off)
+            XCTAssertEqual(settings.selectedDictationPromptID, primary.id)
+            XCTAssertEqual(settings.promptModeSelectedPromptID, secondary.id)
+
+            settings.setDictationCleanupEnabled(true)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(primary.id))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .profile(secondary.id))
+
+            settings.setPromptOff(true, for: .dictate)
+            XCTAssertEqual(settings.selectedDictationPromptID, primary.id)
+            XCTAssertEqual(settings.promptModeSelectedPromptID, secondary.id)
+            settings.setPromptOff(false, for: .dictate)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(primary.id))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .profile(secondary.id))
+
+            settings.setDictationCleanupEnabled(false, for: .secondary)
+            settings.setDictationPromptSelection(.default, for: .primary)
+            settings.setDictationCleanupEnabled(true)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .default)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .profile(secondary.id))
+            XCTAssertNil(settings.selectedDictationPromptID)
+            XCTAssertEqual(settings.promptModeSelectedPromptID, secondary.id)
+
+            settings.setSelectedDictationPromptID(nil, for: .primary)
+            settings.setDictationCleanupEnabled(false, for: .primary)
+            settings.setDictationCleanupEnabled(true, for: .primary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .default)
+        }
+    }
+
+    func testShortcutSettingsPickerOffAndOnRestoresTheSameStyle() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+            let custom = SettingsStore.DictationPromptProfile(name: "Picker", prompt: "Picker style.", mode: .dictate)
+            let other = SettingsStore.DictationPromptProfile(name: "Other", prompt: "Other style.", mode: .dictate)
+            settings.dictationPromptProfiles = [custom, other]
+            settings.applyDictationShortcutPickerTag(custom.id, for: .primary)
+            settings.applyDictationShortcutPickerTag(other.id, for: .secondary)
+
+            settings.applyDictationShortcutPickerTag(SettingsStore.shortcutPickerOffTag, for: .primary)
+            settings.applyDictationShortcutPickerTag(SettingsStore.shortcutPickerOffTag, for: .secondary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .off)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .off)
+            XCTAssertEqual(settings.selectedDictationPromptID, custom.id)
+            XCTAssertEqual(settings.promptModeSelectedPromptID, other.id)
+            XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary))
+            XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .secondary))
+
+            settings.applyDictationShortcutPickerTag(custom.id, for: .primary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), .profile(custom.id))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .off)
+            XCTAssertEqual(settings.promptModeSelectedPromptID, other.id)
+
+            settings.applyDictationShortcutPickerTag(other.id, for: .secondary)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), .profile(other.id))
+            XCTAssertEqual(settings.selectedDictationPromptID, custom.id)
+        }
+    }
+
     private func resetPromptSettings(_ settings: SettingsStore) {
         settings.dictationPromptProfiles = []
         settings.appPromptBindings = []
         settings.selectedDictationPromptID = nil
+        settings.promptModeSelectedPromptID = nil
         settings.isDictationPromptOff = false
+        settings.isSecondaryDictationPromptOff = false
         settings.dictationPromptRoutingScope = .allApps
         settings.defaultDictationPromptOverride = nil
     }

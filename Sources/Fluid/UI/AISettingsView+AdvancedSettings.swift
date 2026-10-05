@@ -142,23 +142,37 @@ extension AIEnhancementSettingsView {
     ) -> some View {
         let tone = Color.fluidGreen
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        let isSelected = assignments?.isDefault == true
 
         return VStack(spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
-                self.promptCardIcon(
-                    title: title,
-                    mode: mode,
-                    tone: tone
-                )
+                HStack(alignment: .center, spacing: 12) {
+                    self.promptCardIcon(
+                        title: title,
+                        mode: mode,
+                        tone: tone
+                    )
 
-                self.promptCardTitleBlock(
-                    title: title,
-                    subtitle: subtitle,
-                    mode: mode,
-                    assignments: assignments,
-                    notice: notice,
-                    tone: tone
-                )
+                    self.promptCardTitleBlock(
+                        title: title,
+                        subtitle: subtitle,
+                        mode: mode,
+                        assignments: assignments,
+                        notice: notice,
+                        tone: tone
+                    )
+
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.fluidSystem(size: 12, weight: .semibold))
+                            .foregroundStyle(self.theme.palette.accent)
+                            .accessibilityLabel("Selected")
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    assignments?.onMakeDefault()
+                }
 
                 Spacer(minLength: 10)
 
@@ -215,11 +229,12 @@ extension AIEnhancementSettingsView {
                 .overlay(
                     shape
                         .stroke(
-                            self.theme.palette.cardBorder,
-                            lineWidth: 1
+                            isSelected ? self.theme.palette.accent : self.theme.palette.cardBorder,
+                            lineWidth: isSelected ? 1.5 : 1
                         )
                 )
         )
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func promptCardIcon(
@@ -431,12 +446,12 @@ extension AIEnhancementSettingsView {
     ) -> PromptCardAssignments {
         let configuration = self.settings.dictationPromptConfiguration(for: selection)
         return PromptCardAssignments(
-            isDefault: self.viewModel.isDictationPromptSelection(selection, for: .primary),
+            isDefault: self.viewModel.rememberedDictationPromptSelection(for: .primary) == selection,
             isReady: self.isPromptConfigurationReady(isPrivateAI: isPrivateAI),
             shortcutDisplay: configuration.shortcut?.displayString,
             modelPicker: self.promptModelPicker(isPrivateAI: isPrivateAI),
             onMakeDefault: {
-                self.viewModel.setDictationPromptSelection(selection, for: .primary)
+                self.viewModel.chooseDictationStyle(selection, for: .primary)
             }
         )
     }
@@ -961,6 +976,10 @@ extension AIEnhancementSettingsView {
         let isSelectedAppsOnly = self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
 
         VStack(alignment: .leading, spacing: 18) {
+            if mode.normalized == .dictate {
+                self.cleanupEnabledSwitch
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 Label("Switch styles from the dictation overlay", systemImage: "info.circle")
                     .font(self.theme.typography.bodyStrong)
@@ -1082,6 +1101,30 @@ extension AIEnhancementSettingsView {
         .padding(.top, 2)
     }
 
+    private var cleanupEnabledSwitch: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cleanup")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .accessibilityHidden(true)
+                Text("Turn off to skip cleanup for both dictation shortcuts. Styles stay saved.")
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Toggle("Cleanup", isOn: Binding(
+                get: { self.viewModel.isDictationCleanupEnabled },
+                set: { self.viewModel.setDictationCleanupEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(self.theme.palette.accent)
+            .accessibilityLabel("Cleanup")
+        }
+    }
+
     private func builtInStyleCard(
         title: String,
         symbol: String,
@@ -1091,7 +1134,8 @@ extension AIEnhancementSettingsView {
         isEnabled: Bool,
         action: (title: String, perform: () -> Void)
     ) -> some View {
-        HStack(alignment: .center, spacing: 16) {
+        let isSelected = assignments.isDefault
+        return HStack(alignment: .center, spacing: 16) {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: symbol)
                     .font(.fluidSystem(size: 20, weight: .medium))
@@ -1099,9 +1143,17 @@ extension AIEnhancementSettingsView {
                     .frame(width: 24, height: 24)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.fluidSystem(size: 14, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.primaryText)
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.fluidSystem(size: 14, weight: .semibold))
+                            .foregroundStyle(self.theme.palette.primaryText)
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.fluidSystem(size: 12, weight: .semibold))
+                                .foregroundStyle(self.theme.palette.accent)
+                                .accessibilityLabel("Selected")
+                        }
+                    }
                     Text(subtitle)
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -1110,6 +1162,10 @@ extension AIEnhancementSettingsView {
                         .foregroundStyle(assignments.isReady ? self.theme.palette.secondaryText : self.theme.palette.warning)
                 }
                 .fixedSize(horizontal: false, vertical: true)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                assignments.onMakeDefault()
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
@@ -1132,9 +1188,10 @@ extension AIEnhancementSettingsView {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
+                .strokeBorder(isSelected ? self.theme.palette.accent : self.theme.palette.cardBorder, lineWidth: isSelected ? 1.5 : 1)
                 .allowsHitTesting(false)
         }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func styleConfigurationSummary(_ assignments: PromptCardAssignments) -> String {
