@@ -9,6 +9,8 @@ struct MeetingCloudSettingsSection: View {
         case liveCloud
     }
 
+    /// The on-device transcript language from the recording defaults draft; Cloud and Live cloud use their own language.
+    @Binding var localLanguageCode: String
     /// Leaves FluidMeet settings for another screen: AI Providers for keys, Voice Engine for live providers.
     let onNavigate: (AppNavigationDestination) -> Void
     @ObservedObject private var settings = SettingsStore.shared
@@ -45,8 +47,7 @@ struct MeetingCloudSettingsSection: View {
                 switch self.engine {
                 case .openRouter: self.openRouterSettings
                 case .liveCloud: self.liveCloudSettings
-                case .local:
-                    self.caption("Parakeet transcribes English on this Mac. Live captions also run on this Mac, in English.")
+                case .local: self.localSettings
                 }
                 self.caption(self.engine == .liveCloud
                     ? "Changes apply when the next recording starts."
@@ -69,6 +70,23 @@ struct MeetingCloudSettingsSection: View {
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var localSettings: some View {
+        Menu {
+            Picker("Meeting language", selection: self.$localLanguageCode) {
+                ForEach(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])) { language in
+                    Text(language.displayName).tag(language.id)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Text(VoiceEngineLanguageCatalog.language(id: self.localLanguageCode, availableModels: [.parakeetTDT])?.displayName ?? "Choose language…")
+        }
+        .fluidDropdownStyle(fillsWidth: true)
+        .accessibilityLabel("Meeting transcript language")
+        self.caption("Parakeet transcribes 25 languages on this Mac. Live captions also run on this Mac, in English only.")
     }
 
     private var transcriptLanguagePicker: some View {

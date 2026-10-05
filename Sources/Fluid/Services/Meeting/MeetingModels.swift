@@ -140,6 +140,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     var microphoneCaptureDeviceID: String?
     var microphoneCoreAudioUID: String?
     var microphoneRole: MeetingMicrophoneRole
+    var languageCode: String? = nil
 
     static let unconfigured = Self(
         isConfigured: false,
@@ -272,6 +273,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var chunkDuration: TimeInterval
     /// Calendar event this recording was matched to, when the calendar toggle is on and access was granted.
     var calendar: MeetingCalendarMatch? = nil
+    var timestampDefaultTitle: Bool? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -281,7 +283,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         application: MeetingApplicationIdentity? = nil,
         microphone: MeetingMicrophoneIdentity,
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
-        calendar: MeetingCalendarMatch? = nil
+        calendar: MeetingCalendarMatch? = nil,
+        timestampDefaultTitle: Bool = false
     ) {
         self.mode = mode
         self.title = title
@@ -291,10 +294,13 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
         self.calendar = calendar
+        self.timestampDefaultTitle = timestampDefaultTitle
     }
 
     func validate() throws {
-        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode) else {
+        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode)
+            || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode)
+        else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {
@@ -777,6 +783,8 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var sourceTrackID: MeetingAudioTrackID
     var speakerID: SessionSpeakerID?
     var text: String
+    /// The initial ASR wording is retained when a user corrects this turn.
+    var originalText: String? = nil
     var revision: Int
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
@@ -867,6 +875,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var schemaVersion: Int
     var id: MeetingSessionID
     var title: String
+    /// Present only for automatically named recordings; cleared when the user renames one.
+    var defaultTitleBase: String? = nil
     var languageCode: String
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
@@ -914,7 +924,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.id = id
-        self.title = configuration.title
+        self.defaultTitleBase = configuration.timestampDefaultTitle == true ? configuration.title : nil
+        self.title = self.defaultTitleBase.map {
+            "\($0) · \(startedAt.formatted(.dateTime.year().month(.abbreviated).day().hour().minute()))"
+        } ?? configuration.title
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
         self.platform = configuration.platform
@@ -1044,7 +1057,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode) else {
+        guard MeetingCloudLanguage.supportedCodes.contains(self.languageCode)
+            || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode)
+        else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
@@ -1190,6 +1205,8 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
     case cannotMergeSpeakerWithItself
     case cannotMergeSpeakers
     case emptyMeetingTitle
+    case emptyTranscriptText
+    case staleTranscriptEdit
 
     var errorDescription: String? {
         switch self {
@@ -1207,6 +1224,10 @@ nonisolated enum MeetingDomainError: LocalizedError, Equatable {
             return "A speaker can't be merged into itself."
         case .cannotMergeSpeakers:
             return "These speakers can't be merged."
+        case .emptyTranscriptText:
+            return "Transcript text cannot be empty."
+        case .staleTranscriptEdit:
+            return "This paragraph changed while you were editing. Reopen it and try again."
         case .emptyMeetingTitle:
             return "Meeting title cannot be empty."
         }
@@ -1240,7 +1261,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
         case let .unsupportedSchema(version):
             return "Unsupported meeting schema version \(version)."
         case .unsupportedLanguage:
-            return "The selected meeting language is not supported."
+            return "Choose a supported meeting language from Recording settings."
         case .missingMicrophone:
             return "A microphone must be selected."
         case .missingOnlineApplication:

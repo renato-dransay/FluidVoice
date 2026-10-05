@@ -1777,8 +1777,8 @@ final class MeetingSessionModelTests: XCTestCase {
     private func micTurn(
         _ cluster: UUID, _ start: Double, _ end: Double,
         overlapsRemote: Bool = true, echoScored: Bool = true, isEcho: Bool = false
-    // Mirror the test fixture fields in one named return value.
-    // swiftlint:disable:next large_tuple
+        // Mirror the test fixture fields in one named return value.
+        // swiftlint:disable:next large_tuple
     ) -> (clusterID: UUID, start: Double, end: Double, overlapsRemote: Bool, echoScored: Bool, isEcho: Bool) {
         (cluster, start, end, overlapsRemote, echoScored, isEcho)
     }

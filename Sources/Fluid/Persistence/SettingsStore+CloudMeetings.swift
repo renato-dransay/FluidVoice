@@ -2,8 +2,15 @@ import Combine
 import Foundation
 
 extension SettingsStore {
+    /// Cloud backends use the cloud meeting language; local backends use the language chosen in Recording settings.
     var meetingRecordingLanguageCode: String {
-        self.meetingTranscriptionBackendID.usesCloudLanguage ? self.meetingCloudLanguageCode : "en"
+        self.meetingRecordingLanguageCode(
+            localLanguageCode: self.meetingRecordingDefaults.languageCode ?? MeetingFinalProcessingConfiguration.defaultLanguageCode
+        )
+    }
+
+    func meetingRecordingLanguageCode(localLanguageCode: String) -> String {
+        self.meetingTranscriptionBackendID.usesCloudLanguage ? self.meetingCloudLanguageCode : localLanguageCode
     }
 
     var meetingCloudModelID: String {

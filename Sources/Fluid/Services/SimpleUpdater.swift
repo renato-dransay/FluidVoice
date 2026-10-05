@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import PromiseKit
 
@@ -9,6 +10,7 @@ enum SimpleUpdateError: Error, LocalizedError {
     case jsonDecoding
     case noSuitableRelease
     case noAsset
+    case releaseChanged
     case updateAlreadyInProgress
     case downloadFailed
     case unzipFailed
@@ -24,6 +26,7 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .invalidResponse: return "Invalid HTTP response from GitHub."
         case .jsonDecoding: return "The data couldn’t be read because it isn’t in the correct format."
         case .noSuitableRelease: return "No suitable release found."
+        case .releaseChanged: return "A different update is now available. Please review it before installing."
         case .noAsset: return "No matching asset found in the latest release."
         case .updateAlreadyInProgress: return "An update is already being installed."
         case .downloadFailed: return "Failed to download update."
@@ -111,7 +114,7 @@ private struct SemanticVersion: Comparable {
 }
 
 @MainActor
-final class SimpleUpdater {
+final class SimpleUpdater: ObservableObject {
     struct ReleaseBuildOption {
         let version: String
         let url: URL
@@ -127,17 +130,59 @@ final class SimpleUpdater {
     }
 
     static let shared = SimpleUpdater()
-    private init() {}
+    init(
+        session: URLSession = .shared,
+        defaults: UserDefaults = .standard,
+        promptPresenter: UpdatePromptPresenter = .shared,
+        managedLocally: Bool = ForkIdentity.isPersonalBuild
+    ) {
+        self.updateSession = session
+        self.updateDefaults = defaults
+        self.updatePrompts = promptPresenter
+        self.managedLocally = managedLocally
+    }
+
+    /// Personal builds are updated by the fork's local installer, so the official updater never
+    /// checks, installs or rolls back. Only isolated test fixtures turn this off.
+    private let managedLocally: Bool
+
+    @Published private(set) var availableUpdateVersion: String?
+    @Published private(set) var isCheckingForUpdates = false
+    @Published private(set) var isUpdateInProgress = false
+    private let updateSession: URLSession
+    private let updateDefaults: UserDefaults
+    private let updatePrompts: UpdatePromptPresenter
+    private var checkTask: Task<Void, Never>?
+    private var checkID: UUID?
+    private var checkIsExplicit = false
+    private var checkChannelRevision: Int?
+    private var availableChannelRevision: Int?
+    #if DEBUG
+    var simulationInstallHandler: (@MainActor () async throws -> Void)?
+    var simulationHasUpdate = true
+    #endif
+
+    private var betaChannel: Bool {
+        self.updateDefaults.bool(forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
+    }
+
+    private var channelRevision: Int {
+        self.updateDefaults.integer(forKey: SettingsStore.UpdateKeys.channelPreferenceRevision)
+    }
+
+    private var popupRevision: Int {
+        self.updateDefaults.integer(forKey: SettingsStore.UpdateKeys.popupPreferenceRevision)
+    }
+
+    private var popupsEnabled: Bool {
+        self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.showUpdatePopups) as? Bool ?? true
+    }
 
     private let fileManager = FileManager.default
     private let maxRollbackBackups = 3
     private let rollbackBackupDirectoryName = "RollbackBackups"
     private var updateOperationGate = UpdateOperationGate()
     private var updateStatusWindow: NSWindow?
-
-    var isUpdateInProgress: Bool {
-        return self.updateOperationGate.isActive
-    }
 
     private var installedAppName: String {
         return Bundle.main.bundleURL.deletingPathExtension().lastPathComponent
@@ -148,7 +193,7 @@ final class SimpleUpdater {
     }
 
     func hasRollbackBackup() -> Bool {
-        guard !ForkIdentity.isPersonalBuild else { return false }
+        guard !self.managedLocally else { return false }
         return self.latestRollbackBackup() != nil
     }
 
@@ -158,11 +203,16 @@ final class SimpleUpdater {
     }
 
     func rollbackToLatestBackup() async throws {
-        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
+        guard !self.managedLocally else { throw SimpleUpdateError.personalBuildManagedLocally }
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
 
+        self.isUpdateInProgress = true
+        self.cancelUpdateCheck()
+        self.availableUpdateVersion = nil
+        self.availableChannelRevision = nil
+        self.updatePrompts.dismissUpdateOffers()
         var shouldKeepOperationActive = false
         defer {
             if !shouldKeepOperationActive {
@@ -307,10 +357,16 @@ final class SimpleUpdater {
         repo: String,
         includePrerelease: Bool = false
     ) async throws -> (hasUpdate: Bool, latestVersion: String) {
-        guard !ForkIdentity.isPersonalBuild else { return (false, self.currentAppVersion) }
+        guard !self.managedLocally else { return (false, self.currentAppVersion) }
         guard !self.isUpdateInProgress else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
+
+        #if DEBUG
+        if self === Self.shared, UpdatePromptSimulation.isEnabled {
+            return (self.simulationHasUpdate, "Simulation")
+        }
+        #endif
 
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
 
@@ -337,22 +393,197 @@ final class SimpleUpdater {
         return (latestVersion > current, latestTag)
     }
 
+    func checkForUpdatesAutomatically() {
+        guard self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled) as? Bool ?? true else { return }
+        self.startUpdateCheck(explicit: false)
+    }
+
+    func checkForUpdatesManually() {
+        self.startUpdateCheck(explicit: true)
+    }
+
+    func showAvailableUpdate() {
+        guard !self.isUpdateInProgress,
+              let version = self.availableUpdateVersion,
+              self.availableChannelRevision == self.channelRevision
+        else { return }
+        self.presentUpdateOffer(version: version, automatic: false)
+    }
+
+    func automaticUpdatePopupPreferenceDidChange(isEnabled _: Bool) {
+        // The callback may arrive after another toggle. Read the current preference.
+        if !self.popupsEnabled { self.updatePrompts.dismissAutomaticUpdateOffers() }
+    }
+
+    func updateChannelDidChange() {
+        let revision = self.channelRevision
+        if self.checkID != nil, self.checkChannelRevision != revision { self.cancelUpdateCheck() }
+        if self.availableChannelRevision != revision {
+            self.availableUpdateVersion = nil
+            self.availableChannelRevision = nil
+            self.updatePrompts.dismissUpdateOffers()
+        }
+    }
+
+    private func startUpdateCheck(explicit: Bool) {
+        guard !self.isUpdateInProgress else { return }
+        if explicit { self.updatePrompts.dismissUpdateCheckResults() }
+        self.updateChannelDidChange()
+        if self.checkID != nil {
+            self.checkIsExplicit = self.checkIsExplicit || explicit
+            return
+        }
+        let requestID = UUID()
+        let channel = self.betaChannel
+        let channelRevision = self.channelRevision
+        let popupRevision = self.popupRevision
+        self.checkID = requestID
+        self.checkChannelRevision = channelRevision
+        self.checkIsExplicit = explicit
+        self.isCheckingForUpdates = true
+        self.checkTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.checkID == requestID { self.cancelUpdateCheck() }
+            }
+            do {
+                let result = try await self.checkForUpdate(owner: "altic-dev", repo: "Fluid-oss", includePrerelease: channel)
+                guard self.checkID == requestID, self.channelRevision == channelRevision, !self.isUpdateInProgress else { return }
+                self.recordUpdateCheckDate()
+                self.availableChannelRevision = channelRevision
+                self.availableUpdateVersion = result.hasUpdate ? result.latestVersion : nil
+                if result.hasUpdate {
+                    if self.checkIsExplicit {
+                        self.presentUpdateOffer(version: result.latestVersion, automatic: false)
+                    } else if self.popupsEnabled, self.popupRevision == popupRevision,
+                              self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled) as? Bool ?? true,
+                              self.shouldShowUpdateOffer(version: result.latestVersion)
+                    {
+                        self.presentUpdateOffer(version: result.latestVersion, automatic: true)
+                    }
+                } else {
+                    self.updatePrompts.dismissUpdateOffers()
+                    if self.checkIsExplicit {
+                        self.showUpdateCheckResult(title: channel ? "No Beta Updates" : "No Updates", message: "You're already running the latest available version of FluidVoice.")
+                    }
+                }
+            } catch {
+                guard self.checkID == requestID, self.channelRevision == channelRevision, !self.isUpdateInProgress else { return }
+                self.recordUpdateCheckDate()
+                self.availableUpdateVersion = nil
+                self.availableChannelRevision = nil
+                self.updatePrompts.dismissUpdateOffers()
+                if self.checkIsExplicit {
+                    self.showUpdateCheckResult(title: "Update Check Failed", message: "Unable to check for updates. Please try again later.\n\nError: \(error.localizedDescription)")
+                } else {
+                    DebugLogger.shared.debug("Automatic update check failed: \(error.localizedDescription)", source: "SimpleUpdater")
+                }
+            }
+        }
+    }
+
+    private func recordUpdateCheckDate() {
+        #if DEBUG
+        if self === Self.shared, UpdatePromptSimulation.isEnabled { return }
+        #endif
+        self.updateDefaults.set(Date(), forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+    }
+
+    private func cancelUpdateCheck() {
+        self.checkID = nil
+        self.checkChannelRevision = nil
+        self.checkTask?.cancel()
+        self.checkTask = nil
+        self.isCheckingForUpdates = false
+        self.checkIsExplicit = false
+    }
+
+    private func shouldShowUpdateOffer(version: String) -> Bool {
+        if let snoozed = self.updateDefaults.string(forKey: SettingsStore.UpdateKeys.snoozedUpdateVersion), snoozed != version { return true }
+        guard let until = self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil) as? Date else { return true }
+        return Date() >= until
+    }
+
+    private func presentUpdateOffer(version: String, automatic: Bool) {
+        let channel = self.betaChannel
+        let revision = self.channelRevision
+        self.updatePrompts.presentFloatingPrompt(
+            title: "Update Available",
+            message: "FluidVoice \(version) is now available. The app will restart automatically after installation.",
+            actions: [
+                FloatingPromptAction(title: "Install Now") { [weak self] in
+                    guard let self, self.availableUpdateVersion == version, self.channelRevision == revision, !self.isUpdateInProgress else { return }
+                    self.installApprovedUpdate(version: version, channel: channel)
+                },
+                FloatingPromptAction(title: "Later") { [weak self] in
+                    guard let self, self.availableUpdateVersion == version, self.channelRevision == revision else { return }
+                    #if DEBUG
+                    if self === Self.shared, UpdatePromptSimulation.isEnabled { return }
+                    #endif
+                    self.updateDefaults.set(version, forKey: SettingsStore.UpdateKeys.snoozedUpdateVersion)
+                    self.updateDefaults.set(Date().addingTimeInterval(24 * 60 * 60), forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil)
+                },
+            ],
+            isAutomaticUpdateOffer: automatic
+        )
+    }
+
+    private func installApprovedUpdate(version: String, channel: Bool) {
+        Task {
+            do {
+                try await self.checkAndUpdate(owner: "altic-dev", repo: "Fluid-oss", includePrerelease: channel, expectedVersion: version)
+            } catch SimpleUpdateError.releaseChanged {
+                if self.availableUpdateVersion != nil, self.availableChannelRevision == self.channelRevision {
+                    self.showAvailableUpdate()
+                } else {
+                    self.checkForUpdatesManually()
+                }
+            } catch SimpleUpdateError.updateAlreadyInProgress {
+                return
+            } catch {
+                let cancelled = (error as? PMKError)?.isCancelled == true
+                self.showUpdateCheckResult(
+                    title: cancelled ? "No Updates" : "Update Failed",
+                    message: cancelled ? "You're already running the latest available version of FluidVoice."
+                        : "Unable to install the update. Please try again later.\n\nError: \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func showUpdateCheckResult(title: String, message: String) {
+        self.updatePrompts.presentFloatingPrompt(title: title, message: message, actions: [FloatingPromptAction(title: "OK") {}])
+    }
+
     func checkAndUpdate(
         owner: String,
         repo: String,
-        includePrerelease: Bool = false
+        includePrerelease: Bool = false,
+        expectedVersion: String? = nil
     ) async throws {
-        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
+        guard !self.managedLocally else { throw SimpleUpdateError.personalBuildManagedLocally }
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
 
+        let approvedChannelRevision = self.channelRevision
+        self.isUpdateInProgress = true
+        self.cancelUpdateCheck()
+        self.updatePrompts.dismissUpdateOffers()
         var shouldKeepOperationActive = false
         defer {
             if !shouldKeepOperationActive {
                 self.resetUpdateOperation()
             }
         }
+
+        #if DEBUG
+        if self === Self.shared, UpdatePromptSimulation.isEnabled {
+            self.showUpdateInstallStatus(version: "Simulation")
+            shouldKeepOperationActive = true
+            return
+        }
+        #endif
 
         let releases = try await self.fetchReleases(owner: owner, repo: repo)
 
@@ -378,8 +609,32 @@ final class SimpleUpdater {
         let currentBundle = Bundle.main
         // up to date
         if !(latestVersion > current) {
+            self.availableUpdateVersion = nil
+            self.availableChannelRevision = nil
             throw PMKError.cancelled // mimic AppUpdater semantics for up-to-date
         }
+
+        if expectedVersion != nil, self.channelRevision != approvedChannelRevision {
+            self.availableUpdateVersion = nil
+            self.availableChannelRevision = nil
+            throw SimpleUpdateError.releaseChanged
+        }
+        if let expectedVersion, expectedVersion != latestTag {
+            self.availableChannelRevision = self.channelRevision
+            self.availableUpdateVersion = latestTag
+            throw SimpleUpdateError.releaseChanged
+        }
+        if expectedVersion != nil, self.betaChannel != includePrerelease {
+            throw SimpleUpdateError.releaseChanged
+        }
+        self.updateDefaults.removeObject(forKey: SettingsStore.UpdateKeys.updatePromptSnoozedUntil)
+        self.updateDefaults.removeObject(forKey: SettingsStore.UpdateKeys.snoozedUpdateVersion)
+        #if DEBUG
+        if let simulationInstallHandler {
+            try await simulationInstallHandler()
+            return
+        }
+        #endif
 
         // Find asset matching: "{repo-lower}-{version-from-tag}.*" and zip preferred
         let rawVersion = latestTag.hasPrefix("v") ? String(latestTag.dropFirst()) : latestTag
@@ -475,7 +730,8 @@ final class SimpleUpdater {
 
     // MARK: - Helpers
 
-    private func showUpdateInstallStatus(version: String) {
+    func showUpdateInstallStatus(version: String) {
+        self.updatePrompts.dismissAll()
         guard self.updateStatusWindow == nil else { return }
 
         let panel = NSPanel(
@@ -485,6 +741,7 @@ final class SimpleUpdater {
             defer: false
         )
         panel.title = "Installing FluidVoice \(version)"
+        panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -532,8 +789,21 @@ final class SimpleUpdater {
         self.updateStatusWindow = panel
     }
 
+    #if DEBUG
+    func finishSimulatedUpdate() {
+        guard UpdatePromptSimulation.isEnabled else { return }
+        self.resetUpdateOperation()
+    }
+    #endif
+
     private func resetUpdateOperation() {
         self.updateOperationGate.finish()
+        self.isUpdateInProgress = false
+        self.dismissUpdateInstallStatus()
+    }
+
+    func dismissUpdateInstallStatus() {
+        self.updateStatusWindow?.orderOut(nil)
         self.updateStatusWindow?.close()
         self.updateStatusWindow = nil
     }
@@ -543,7 +813,7 @@ final class SimpleUpdater {
             throw SimpleUpdateError.invalidURL
         }
 
-        let (data, response) = try await URLSession.shared.data(from: releasesURL)
+        let (data, response) = try await self.updateSession.data(from: releasesURL)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw SimpleUpdateError.invalidResponse
         }
@@ -858,7 +1128,7 @@ final class SimpleUpdater {
     }
 
     private func performSwapAndRelaunch(installedAppURL: URL, downloadedAppURL: URL) throws {
-        guard !ForkIdentity.isPersonalBuild else { throw SimpleUpdateError.personalBuildManagedLocally }
+        guard !self.managedLocally else { throw SimpleUpdateError.personalBuildManagedLocally }
         // Handle app name changes: if the downloaded app has a different name,
         // we need to replace the old app and use the new name
         let installedAppName = installedAppURL.lastPathComponent
@@ -897,6 +1167,14 @@ final class SimpleUpdater {
             finalAppURL = installedAppURL
         }
 
+        self.availableUpdateVersion = nil
+        self.availableChannelRevision = nil
+
+        // Installation is finished. Do not leave the floating progress window owned by
+        // the old process until it exits: quitting may be delayed or cancelled by AppKit.
+        // Keep the operation gate active so that old process cannot start another install.
+        self.dismissUpdateInstallStatus()
+
         // Use modern NSWorkspace API for more reliable app launching
         DispatchQueue.main.async {
             DebugLogger.shared.info("SimpleUpdater: Attempting to relaunch app at: \(finalAppURL.path)", source: "SimpleUpdater")
@@ -926,7 +1204,7 @@ final class SimpleUpdater {
                 DebugLogger.shared.info("SimpleUpdater: Successfully relaunched app, terminating old instance", source: "SimpleUpdater")
                 // Give the new instance time to fully start before terminating
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    NSApp.terminate(nil)
+                    UpdateTerminationScheduler.requestTermination()
                 }
             }
         }

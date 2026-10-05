@@ -268,7 +268,12 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             }
         } catch {
             DebugLogger.shared.error("Failed to delete model \(model.displayName): \(error)", source: "VoiceEngineVM")
+            self.asr.errorTitle = "Model Deletion Failed"
+            self.asr.errorMessage = error.localizedDescription
+            self.asr.showError = true
         }
+        // Inactive-model deletion must refresh its card without switching the active model.
+        self.objectWillChange.send()
     }
 
     /// The line under "Selected local model" while Local is not the engine (VE-8). Live cloud leaves imported
@@ -655,6 +660,7 @@ extension ASRService {
     /// model and engine actions and the provider removals in AI Providers all wait for it.
     var blocksSpeechEngineChanges: Bool {
         self.isRunning
+            || self.deletingModelID != nil
             || self.activeExclusiveActivity != nil
             || self.downloadingModelId != nil
             || self.hasActiveModelDownload

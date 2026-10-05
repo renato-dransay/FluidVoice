@@ -46,7 +46,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
 
     init(
         asrProvider: MeetingASRProvider = .local,
-        asrModel: String = Self.defaultASRModel,
+        asrModel: String? = nil,
         languageCode: String = Self.defaultLanguageCode,
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
@@ -56,7 +56,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         pipelineVersion: Int = Self.defaultPipelineVersion
     ) {
         self.asrProvider = asrProvider
-        self.asrModel = asrModel
+        self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
         self.languageCode = languageCode
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled

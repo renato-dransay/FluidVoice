@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct MeetingSummaryView: View {
@@ -97,8 +96,6 @@ struct MeetingSummaryView: View {
                 EmptyView()
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: 620, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, self.theme.metrics.spacing.md)
         .task(id: self.refreshID) { await self.controller.refresh(session: self.session, kind: self.kind) }

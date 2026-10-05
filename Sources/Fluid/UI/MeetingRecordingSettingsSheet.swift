@@ -18,7 +18,7 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .recording: "Choose audio sources and how meetings are transcribed."
+        case .recording: "Choose audio sources, transcript language and how meetings are transcribed."
         case .automation: "Choose when to see a recording prompt and how long to keep audio."
         case .integrations: "Connect your meeting notes to the AI assistants you already use."
         }
@@ -81,6 +81,7 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var canSave: Bool {
+        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.draft.languageCode) else { return false }
         guard self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) else { return false }
         return self.draft.mode == .inRoom
             || self.draft.usesAutomaticApplication
@@ -276,7 +277,7 @@ struct MeetingRecordingSettingsSheet: View {
                     .accessibilityLabel("Refresh audio sources")
             }
 
-            MeetingCloudSettingsSection(onNavigate: self.onNavigate)
+            MeetingCloudSettingsSection(localLanguageCode: self.$draft.languageCode, onNavigate: self.onNavigate)
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {

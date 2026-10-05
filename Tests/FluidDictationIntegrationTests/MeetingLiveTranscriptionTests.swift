@@ -317,6 +317,19 @@ final class MeetingLiveEchoFilterTests: XCTestCase {
 }
 
 final class MeetingLiveMemoryGateTests: XCTestCase {
+    func testNonEnglishRecordingDoesNotStartEnglishCaptionEngines() {
+        let notice = expectation(description: "Final transcript available after recording")
+        let coordinator = MeetingLiveTranscriptionCoordinator { snapshot in
+            let reason = "Live captions on this Mac support English only. Your transcript will be generated after recording. "
+                + "To caption other languages, choose a live provider under Live captions in meeting settings."
+            XCTAssertEqual(snapshot.availability, .unavailable(reason: reason))
+            XCTAssertTrue(snapshot.utterances.isEmpty)
+            notice.fulfill()
+        }
+        coordinator.start(mode: .onlineCall, languageCode: "de")
+        wait(for: [notice], timeout: 1)
+    }
+
     func testBelowThresholdDisablesLive() {
         let oneGigabyte: UInt64 = 1 * 1024 * 1024 * 1024
         XCTAssertFalse(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: oneGigabyte))

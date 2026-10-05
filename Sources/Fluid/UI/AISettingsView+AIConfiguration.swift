@@ -714,7 +714,7 @@ extension AIEnhancementSettingsView {
     private var privateAIRuntimeSection: some View {
         let model = self.privateAIController.selectedPrivateAIModel
         let status = self.privateAIModelStatus(for: model)
-        let isInstalled = PrivateAIIntegrationService.isModelInstalled(model)
+        let isInstalled = !self.privateAIController.privateAILoadState.needsDownload(model.id) && PrivateAIIntegrationService.isModelInstalled(model)
         let isDownloading = self.privateAIController.privateAILoadState.isDownloading(model.id)
         let downloadProgress = self.privateAIController.privateAILoadState.downloadProgress(for: model.id)
         let isLoading = self.privateAIController.privateAILoadState.isLoading(model.id)
@@ -882,12 +882,11 @@ extension AIEnhancementSettingsView {
     }
 
     private func privateAIBackendPicker(isBusy: Bool) -> some View {
-        Picker("", selection: self.privateAIBackendBinding) {
+        FluidDropdownPicker("Backend", selectedTitle: self.privateAIBackendBinding.wrappedValue.displayName, selection: self.privateAIBackendBinding) {
             ForEach(self.privateAISelectableBackendPreferences) { preference in
                 Text(preference.displayName).tag(preference)
             }
         }
-        .pickerStyle(.menu)
         .fluidDropdownStyle()
         .labelsHidden()
         .disabled(isBusy)
@@ -1068,6 +1067,13 @@ extension AIEnhancementSettingsView {
             return PrivateAIProviderModelStatus(
                 detail: "For dictation only.",
                 color: Color.fluidGreen
+            )
+        }
+
+        if self.privateAIController.privateAILoadState.needsDownload(model.id) {
+            return PrivateAIProviderModelStatus(
+                detail: "Model files are missing. Download again to repair.",
+                color: self.theme.palette.secondaryText
             )
         }
 
@@ -1490,7 +1496,7 @@ extension AIEnhancementSettingsView {
                 : primaryPromptSelection == .default && item.id == self.settings.selectedProviderID)
         let fluidModel = self.privateAIController.selectedPrivateAIModel
         let fluidStatus = self.privateAIModelStatus(for: fluidModel)
-        let isFluidInstalled = PrivateAIIntegrationService.isModelInstalled(fluidModel)
+        let isFluidInstalled = !self.privateAIController.privateAILoadState.needsDownload(fluidModel.id) && PrivateAIIntegrationService.isModelInstalled(fluidModel)
         let isFluidDownloading = self.privateAIController.privateAILoadState.isDownloading(fluidModel.id)
         let fluidDownloadProgress = self.privateAIController.privateAILoadState.downloadProgress(for: fluidModel.id)
         let isFluidLoading = self.privateAIController.privateAILoadState.isLoading(fluidModel.id)
@@ -2443,39 +2449,42 @@ extension AIEnhancementSettingsView {
                             .foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
 
-                        Picker("", selection: Binding(
-                            get: {
-                                if self.viewModel.editingReasoningParamName == "reasoning_effort" {
-                                    return "reasoning_effort"
-                                } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
-                                    return "enable_thinking"
-                                } else {
-                                    return "custom"
-                                }
-                            },
-                            set: { newValue in
-                                if newValue == "custom" {
-                                    if self.viewModel.editingReasoningParamName == "reasoning_effort" ||
-                                        self.viewModel.editingReasoningParamName == "enable_thinking"
-                                    {
-                                        self.viewModel.editingReasoningParamName = ""
+                        FluidDropdownPicker(
+                            "Reasoning parameter",
+                            selectedTitle: ["reasoning_effort", "enable_thinking"].contains(self.viewModel.editingReasoningParamName) ? self.viewModel.editingReasoningParamName : "Custom…",
+                            selection: Binding(
+                                get: {
+                                    if self.viewModel.editingReasoningParamName == "reasoning_effort" {
+                                        return "reasoning_effort"
+                                    } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
+                                        return "enable_thinking"
+                                    } else {
+                                        return "custom"
                                     }
-                                } else {
-                                    self.viewModel.editingReasoningParamName = newValue
-                                    // Set sensible default value when switching
-                                    if newValue == "reasoning_effort", !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
-                                        self.viewModel.editingReasoningParamValue = "low"
-                                    } else if newValue == "enable_thinking", !["true", "false"].contains(self.viewModel.editingReasoningParamValue) {
-                                        self.viewModel.editingReasoningParamValue = "true"
+                                },
+                                set: { newValue in
+                                    if newValue == "custom" {
+                                        if self.viewModel.editingReasoningParamName == "reasoning_effort" ||
+                                            self.viewModel.editingReasoningParamName == "enable_thinking"
+                                        {
+                                            self.viewModel.editingReasoningParamName = ""
+                                        }
+                                    } else {
+                                        self.viewModel.editingReasoningParamName = newValue
+                                        // Set sensible default value when switching
+                                        if newValue == "reasoning_effort", !Self.reasoningEffortValues.contains(self.viewModel.editingReasoningParamValue) {
+                                            self.viewModel.editingReasoningParamValue = "low"
+                                        } else if newValue == "enable_thinking", !["true", "false"].contains(self.viewModel.editingReasoningParamValue) {
+                                            self.viewModel.editingReasoningParamValue = "true"
+                                        }
                                     }
                                 }
-                            }
-                        )) {
+                            )
+                        ) {
                             Text("reasoning_effort").tag("reasoning_effort")
                             Text("enable_thinking").tag("enable_thinking")
                             Text("Custom…").tag("custom")
                         }
-                        .pickerStyle(.menu)
                         .fluidDropdownStyle()
                         .labelsHidden()
                         .frame(width: 140)
@@ -2505,7 +2514,11 @@ extension AIEnhancementSettingsView {
                             .frame(width: 70, alignment: .trailing)
 
                         if self.viewModel.editingReasoningParamName == "reasoning_effort" {
-                            Picker("", selection: self.$viewModel.editingReasoningParamValue) {
+                            FluidDropdownPicker(
+                                "Reasoning value",
+                                selectedTitle: self.viewModel.editingReasoningParamValue,
+                                selection: self.$viewModel.editingReasoningParamValue
+                            ) {
                                 ForEach(Self.reasoningEffortValues, id: \.self) { value in
                                     Text(value).tag(value)
                                 }
@@ -2514,16 +2527,18 @@ extension AIEnhancementSettingsView {
                                     Text(self.viewModel.editingReasoningParamValue).tag(self.viewModel.editingReasoningParamValue)
                                 }
                             }
-                            .pickerStyle(.menu)
                             .fluidDropdownStyle()
                             .labelsHidden()
                             .frame(width: 100)
                         } else if self.viewModel.editingReasoningParamName == "enable_thinking" {
-                            Picker("", selection: self.$viewModel.editingReasoningParamValue) {
+                            FluidDropdownPicker(
+                                "Reasoning value",
+                                selectedTitle: self.viewModel.editingReasoningParamValue,
+                                selection: self.$viewModel.editingReasoningParamValue
+                            ) {
                                 Text("true").tag("true")
                                 Text("false").tag("false")
                             }
-                            .pickerStyle(.menu)
                             .fluidDropdownStyle()
                             .labelsHidden()
                             .frame(width: 100)
