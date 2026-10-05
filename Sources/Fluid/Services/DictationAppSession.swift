@@ -56,6 +56,7 @@ final class DictationAppSession: @unchecked Sendable {
         let selection = self.lock.withLock { self.state.choice(slot: slot.rawValue, appID: appID) }
         guard let selection else { return nil }
         guard case let .profile(id) = selection, !self.dictationProfileExists(id) else { return selection }
+        guard let appID else { return nil }
         self.lock.withLock { self.state.removeChoice(slot: slot.rawValue, appID: appID) }
         SettingsStore.shared.removeWidgetDictationPromptChoice(slot: slot, appBundleID: appID)
         return nil
