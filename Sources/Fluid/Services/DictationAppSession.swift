@@ -2,17 +2,19 @@ import AppKit
 import Combine
 import Foundation
 
-/// Event-driven and memory-only. Watching while the overlay is hidden catches A → B → A.
+/// Remembers the last widget cleanup choice for each app, including after a restart.
 final class DictationAppSession: @unchecked Sendable {
     static let shared = DictationAppSession()
     private let lock = NSLock()
     private var state = ForegroundAppOverride<SettingsStore.DictationPromptSelection>()
+    private var didLoadChoices = false
     private var observer: NSObjectProtocol?
     private var mainWindowObserver: NSObjectProtocol?
     var appID: String? { self.lock.withLock { self.state.appID } }
 
     @MainActor
     func start() {
+        self.loadChoicesIfNeeded()
         guard self.observer == nil else { return }
         self.activate(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
         self.observer = NSWorkspace.shared.notificationCenter.addObserver(
@@ -41,11 +43,55 @@ final class DictationAppSession: @unchecked Sendable {
     @MainActor
     func select(_ selection: SettingsStore.DictationPromptSelection, slot: SettingsStore.DictationShortcutSlot, appID: String?) {
         guard let appID else { return }
-        self.lock.withLock { self.state.select(selection, slot: slot.rawValue, appID: appID) }
+        self.loadChoicesIfNeeded()
+        let stored = self.lock.withLock { self.state.select(selection, slot: slot.rawValue, appID: appID) }
+        if stored {
+            SettingsStore.shared.setWidgetDictationPromptChoice(selection, slot: slot, appBundleID: appID)
+        }
         SettingsStore.shared.objectWillChange.send()
     }
 
     func choice(for slot: SettingsStore.DictationShortcutSlot, appID: String?) -> SettingsStore.DictationPromptSelection? {
-        self.lock.withLock { self.state.choice(slot: slot.rawValue, appID: appID) }
+        self.loadChoicesIfNeeded()
+        let selection = self.lock.withLock { self.state.choice(slot: slot.rawValue, appID: appID) }
+        guard let selection else { return nil }
+        guard case let .profile(id) = selection, !self.dictationProfileExists(id) else { return selection }
+        self.lock.withLock { self.state.removeChoice(slot: slot.rawValue, appID: appID) }
+        SettingsStore.shared.removeWidgetDictationPromptChoice(slot: slot, appBundleID: appID)
+        return nil
+    }
+
+    /// Drops the in-memory map so the next read reloads persisted widget choices.
+    func discardInMemoryChoices() {
+        self.lock.withLock {
+            self.state.removeAllChoices()
+            self.didLoadChoices = false
+        }
+    }
+
+    func dropLoadedWidgetChoices(appBundleID: String) {
+        self.lock.withLock { self.state.removeChoices(appID: appBundleID) }
+    }
+
+    func dropLoadedWidgetChoices(profileIDs: Set<String>) {
+        guard !profileIDs.isEmpty else { return }
+        self.lock.withLock {
+            self.state.removeChoices { selection in
+                guard case let .profile(id) = selection else { return false }
+                return profileIDs.contains(id)
+            }
+        }
+    }
+
+    private func loadChoicesIfNeeded() {
+        self.lock.withLock {
+            guard !self.didLoadChoices else { return }
+            self.didLoadChoices = true
+            self.state.mergeAbsentChoices(SettingsStore.shared.widgetDictationPromptChoices)
+        }
+    }
+
+    private func dictationProfileExists(_ id: String) -> Bool {
+        SettingsStore.shared.dictationPromptProfiles.contains { $0.id == id && $0.mode.normalized == .dictate }
     }
 }

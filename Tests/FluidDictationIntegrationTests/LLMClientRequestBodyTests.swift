@@ -348,15 +348,100 @@ final class LLMClientRequestBodyTests: XCTestCase {
             XCTAssertEqual(settings.dictationPromptSelection(for: .primary), originalSelection)
             XCTAssertEqual(settings.appPromptBindings.first?.promptID, saved.id)
             session.activate("test.other")
+            XCTAssertNil(session.choice(for: .primary, appID: "test.other"))
             session.activate("test.editor")
-            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.editor"), .profile(saved.id))
-            XCTAssertEqual(settings.effectiveDictationSystemPrompt(for: .primary, appBundleID: "test.editor"), "App rule body")
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.editor"), .off)
+            XCTAssertEqual(settings.dictationOverlayLabel(for: .primary, appBundleID: "test.editor"), "Basic")
+            XCTAssertEqual(settings.effectiveDictationSystemPrompt(for: .primary, appBundleID: "test.editor"), "")
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), originalSelection)
+            XCTAssertEqual(settings.appPromptBindings.first?.promptID, saved.id)
+            settings.setDictationPromptSelection(.off, for: .primary)
+            XCTAssertEqual(session.choice(for: .primary, appID: "test.editor"), .off)
+            settings.setDictationPromptSelection(originalSelection, for: .primary)
+            XCTAssertEqual(session.choice(for: .primary, appID: "test.editor"), .off)
             settings.dictationPromptRoutingScope = .selectedAppsOnly
             session.activate("test.unbound")
             XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.unbound"), .off)
             session.select(.profile(manual.id), slot: .primary, appID: "test.unbound")
             XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.unbound"), .profile(manual.id))
             XCTAssertEqual(settings.effectiveDictationSystemPrompt(for: .primary, appBundleID: "test.unbound"), "Temporary body")
+            session.activate("test.other")
+            session.activate("test.unbound")
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.unbound"), .profile(manual.id))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), originalSelection)
+            XCTAssertEqual(settings.appPromptBindings.first?.promptID, saved.id)
+        }
+    }
+
+    func testStoredWidgetChoiceLoadsAfterInMemoryMapIsCleared() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+            let session = DictationAppSession.shared
+            let previousApp = session.appID
+            defer { session.activate(previousApp ?? "test.finished") }
+            let casual = SettingsStore.DictationPromptProfile(name: "Casual", prompt: "Keep it casual.", mode: .dictate)
+            settings.dictationPromptProfiles = [casual]
+            settings.appPromptBindings = [.init(mode: .dictate, appBundleID: "test.slack", appName: "Slack", promptID: casual.id)]
+            let global = settings.dictationPromptSelection(for: .primary)
+            let secondary = settings.dictationPromptSelection(for: .secondary)
+            session.activate("Test.Slack")
+            session.select(.off, slot: .primary, appID: "Test.Slack")
+            session.select(.profile(casual.id), slot: .secondary, appID: "Test.Slack")
+            session.activate("test.mail")
+            session.select(.default, slot: .primary, appID: "test.mail")
+            session.discardInMemoryChoices()
+            XCTAssertEqual(session.choice(for: .primary, appID: "test.slack"), .off)
+            XCTAssertEqual(session.choice(for: .secondary, appID: "TEST.SLACK"), .profile(casual.id))
+            XCTAssertEqual(session.choice(for: .primary, appID: "test.mail"), .default)
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.slack"), .off)
+            XCTAssertEqual(settings.effectiveDictationSystemPrompt(for: .primary, appBundleID: "test.slack"), "")
+            XCTAssertEqual(settings.appPromptBindings.first?.promptID, casual.id)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), global)
+            XCTAssertEqual(settings.dictationPromptSelection(for: .secondary), secondary)
+        }
+    }
+
+    func testChangingOrRemovingAppAssignmentClearsRememberedChoice() {
+        self.withPromptSettingsRestored {
+            let settings = SettingsStore.shared
+            self.resetPromptSettings(settings)
+            let session = DictationAppSession.shared
+            let previousApp = session.appID
+            defer { session.activate(previousApp ?? "test.finished") }
+            let casual = SettingsStore.DictationPromptProfile(name: "Casual", prompt: "Casual body", mode: .dictate)
+            let formal = SettingsStore.DictationPromptProfile(name: "Formal", prompt: "Formal body", mode: .dictate)
+            settings.dictationPromptProfiles = [casual, formal]
+            settings.appPromptBindings = [.init(mode: .dictate, appBundleID: "test.slack", appName: "Slack", promptID: casual.id)]
+            let global = settings.dictationPromptSelection(for: .primary)
+            session.activate("test.slack")
+            session.select(.off, slot: .primary, appID: "test.slack")
+            session.select(.default, slot: .secondary, appID: "test.slack")
+            settings.upsertAppPromptBinding(for: .edit, appBundleID: "test.slack", appName: "Slack", promptID: nil)
+            settings.upsertAppPromptBinding(for: .dictate, appBundleID: "test.slack", appName: "Slack renamed", promptID: casual.id)
+            XCTAssertEqual(session.choice(for: .primary, appID: "test.slack"), .off)
+            XCTAssertEqual(session.choice(for: .secondary, appID: "test.slack"), .default)
+            XCTAssertEqual(settings.appPromptBindings.first { $0.mode.normalized == .dictate }?.promptID, casual.id)
+            settings.upsertAppPromptBinding(for: .dictate, appBundleID: "test.slack", appName: "Slack", promptID: formal.id)
+            XCTAssertNil(session.choice(for: .primary, appID: "test.slack"))
+            XCTAssertNil(session.choice(for: .secondary, appID: "test.slack"))
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.slack"), .profile(formal.id))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), global)
+            session.select(.off, slot: .primary, appID: "test.slack")
+            settings.removeAppPromptBinding(for: .dictate, appBundleID: "test.slack")
+            XCTAssertNil(session.choice(for: .primary, appID: "test.slack"))
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.slack"), global)
+            XCTAssertNil(settings.appPromptBinding(for: .dictate, appBundleID: "test.slack"))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), global)
+            settings.appPromptBindings = [.init(mode: .dictate, appBundleID: "test.slack", appName: "Slack", promptID: casual.id)]
+            session.select(.profile(formal.id), slot: .primary, appID: "test.slack")
+            settings.dictationPromptProfiles = [casual]
+            XCTAssertNil(session.choice(for: .primary, appID: "test.slack"))
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.slack"), .profile(casual.id))
+            session.select(.profile(formal.id), slot: .primary, appID: "test.slack")
+            XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.slack"), .profile(casual.id))
+            XCTAssertNil(session.choice(for: .primary, appID: "test.slack"))
+            XCTAssertEqual(settings.dictationPromptSelection(for: .primary), global)
         }
     }
 
@@ -459,8 +544,16 @@ final class LLMClientRequestBodyTests: XCTestCase {
     }
 
     func testMainWindowEndsAppVisitButOverlayDoesNot() {
+        let preferences = AppPreferencesSnapshot()
+        defer {
+            preferences.restore()
+            DictationAppSession.shared.discardInMemoryChoices()
+        }
         let session = DictationAppSession.shared
         let previousApp = session.appID
+        let settings = SettingsStore.shared
+        let originalSelection = settings.dictationPromptSelection(for: .primary)
+        let originalBindings = settings.appPromptBindings
         defer { session.activate(previousApp ?? "test.finished") }
         session.activate("test.editor")
         session.select(.off, slot: .primary, appID: "test.editor")
@@ -469,7 +562,10 @@ final class LLMClientRequestBodyTests: XCTestCase {
         session.activate(Bundle.main.bundleIdentifier, isMainWindow: true)
         XCTAssertEqual(session.appID, Bundle.main.bundleIdentifier)
         session.activate("test.editor")
-        XCTAssertNil(session.choice(for: .primary, appID: "test.editor"))
+        XCTAssertEqual(session.choice(for: .primary, appID: "test.editor"), .off)
+        XCTAssertEqual(settings.resolvedDictationPromptSelection(for: .primary, appBundleID: "test.editor"), .off)
+        XCTAssertEqual(settings.dictationPromptSelection(for: .primary), originalSelection)
+        XCTAssertEqual(settings.appPromptBindings, originalBindings)
     }
 
     func testStopTargetUsesEndFieldWithoutChangingExplicitStartingFieldPolicy() {
@@ -487,7 +583,11 @@ final class LLMClientRequestBodyTests: XCTestCase {
         // lossy, since an absent routing scope came back as an explicit "allApps" and an absent
         // speech source as an explicit "local", and keys written as side effects were never restored.
         let preferences = AppPreferencesSnapshot()
-        defer { preferences.restore() }
+        DictationAppSession.shared.discardInMemoryChoices()
+        defer {
+            preferences.restore()
+            DictationAppSession.shared.discardInMemoryChoices()
+        }
         // OpenRouter may be the owner's active engine; these expectations describe local dictation.
         SettingsStore.shared.speechExecutionSource = .local
 

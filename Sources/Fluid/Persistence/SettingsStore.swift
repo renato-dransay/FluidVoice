@@ -428,13 +428,20 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            if let encoded = try? JSONEncoder().encode(newValue.map {
+            let previousIDs = Set(self.dictationPromptProfiles.filter { $0.mode.normalized == .dictate }.map(\.id))
+            let migrated = newValue.map {
                 Self.migrateExplicitDictationPrompt($0, legacySendOnly: self.defaults.bool(forKey: Keys.sendCustomPromptOnly))
-            }) {
+            }
+            if let encoded = try? JSONEncoder().encode(migrated) {
                 self.defaults.set(encoded, forKey: Keys.dictationPromptProfiles)
             } else {
                 // If encoding fails, avoid writing corrupt data.
                 self.defaults.removeObject(forKey: Keys.dictationPromptProfiles)
+            }
+            let removedIDs = previousIDs.subtracting(Set(migrated.filter { $0.mode.normalized == .dictate }.map(\.id)))
+            if !removedIDs.isEmpty {
+                self.removeWidgetDictationPromptChoices(profileIDs: removedIDs)
+                DictationAppSession.shared.dropLoadedWidgetChoices(profileIDs: removedIDs)
             }
         }
     }
@@ -909,10 +916,17 @@ final class SettingsStore: ObservableObject {
         let now = Date()
 
         var bindings = self.appPromptBindings
-        if let idx = bindings.firstIndex(where: {
+        let existingIndex = bindings.firstIndex(where: {
             $0.mode.normalized == normalizedMode &&
                 $0.appBundleID == normalizedBundleID
-        }) {
+        })
+        let previousPromptID: String?
+        if let existingIndex {
+            previousPromptID = bindings[existingIndex].promptID
+        } else {
+            previousPromptID = nil
+        }
+        if let idx = existingIndex {
             bindings[idx].mode = normalizedMode
             bindings[idx].appName = resolvedName
             bindings[idx].promptID = resolvedPromptID
@@ -930,12 +944,24 @@ final class SettingsStore: ObservableObject {
             )
         }
 
+        let promptChanged = existingIndex == nil || previousPromptID != resolvedPromptID
+        if normalizedMode == .dictate && promptChanged {
+            self.removeWidgetDictationPromptChoices(appBundleID: normalizedBundleID)
+            DictationAppSession.shared.dropLoadedWidgetChoices(appBundleID: normalizedBundleID)
+        }
         self.appPromptBindings = bindings
     }
 
     func removeAppPromptBinding(id: String) {
+        let removedDictateApps = self.appPromptBindings
+            .filter { $0.id == id && $0.mode.normalized == .dictate }
+            .map(\.appBundleID)
         var bindings = self.appPromptBindings
         bindings.removeAll { $0.id == id }
+        for appBundleID in removedDictateApps {
+            self.removeWidgetDictationPromptChoices(appBundleID: appBundleID)
+            DictationAppSession.shared.dropLoadedWidgetChoices(appBundleID: appBundleID)
+        }
         self.appPromptBindings = bindings
     }
 
@@ -943,9 +969,17 @@ final class SettingsStore: ObservableObject {
         guard let normalizedBundleID = Self.normalizeAppBundleID(appBundleID) else { return }
         let normalizedMode = mode.normalized
         var bindings = self.appPromptBindings
+        let removed = bindings.contains {
+            $0.mode.normalized == normalizedMode &&
+                $0.appBundleID == normalizedBundleID
+        }
         bindings.removeAll {
             $0.mode.normalized == normalizedMode &&
                 $0.appBundleID == normalizedBundleID
+        }
+        if removed && normalizedMode == .dictate {
+            self.removeWidgetDictationPromptChoices(appBundleID: normalizedBundleID)
+            DictationAppSession.shared.dropLoadedWidgetChoices(appBundleID: normalizedBundleID)
         }
         self.appPromptBindings = bindings
     }
@@ -960,6 +994,121 @@ final class SettingsStore: ObservableObject {
         guard let value else { return nil }
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized.isEmpty ? nil : normalized
+    }
+
+    var widgetDictationPromptChoices: [String: [String: DictationPromptSelection]] {
+        self.readWidgetDictationPromptChoiceMap().compactMapValues { slots in
+            let decoded = slots.compactMapValues(Self.decodeWidgetDictationPromptChoice)
+            return decoded.isEmpty ? nil : decoded
+        }
+    }
+
+    func setWidgetDictationPromptChoice(
+        _ selection: DictationPromptSelection,
+        slot: DictationShortcutSlot,
+        appBundleID: String
+    ) {
+        guard let bundleID = Self.normalizeAppBundleID(appBundleID) else { return }
+        var map = self.readWidgetDictationPromptChoiceMap()
+        var slots = map[bundleID] ?? [:]
+        slots[slot.rawValue] = Self.encodeWidgetDictationPromptChoice(selection)
+        map[bundleID] = slots
+        self.writeWidgetDictationPromptChoiceMap(map)
+    }
+
+    func removeWidgetDictationPromptChoice(slot: DictationShortcutSlot, appBundleID: String?) {
+        guard let bundleID = Self.normalizeAppBundleID(appBundleID) else { return }
+        var map = self.readWidgetDictationPromptChoiceMap()
+        guard var slots = map[bundleID] else { return }
+        slots.removeValue(forKey: slot.rawValue)
+        if slots.isEmpty {
+            map.removeValue(forKey: bundleID)
+        } else {
+            map[bundleID] = slots
+        }
+        self.writeWidgetDictationPromptChoiceMap(map)
+    }
+
+    func removeWidgetDictationPromptChoices(appBundleID: String) {
+        guard let bundleID = Self.normalizeAppBundleID(appBundleID) else { return }
+        var map = self.readWidgetDictationPromptChoiceMap()
+        guard map.removeValue(forKey: bundleID) != nil else { return }
+        self.writeWidgetDictationPromptChoiceMap(map)
+    }
+
+    func removeWidgetDictationPromptChoices(profileIDs: Set<String>) {
+        guard !profileIDs.isEmpty else { return }
+        var map = self.readWidgetDictationPromptChoiceMap()
+        var changed = false
+        for bundleID in Array(map.keys) {
+            guard var slots = map[bundleID] else { continue }
+            let before = slots.count
+            slots = slots.filter { raw in
+                guard case let .profile(id) = Self.decodeWidgetDictationPromptChoice(raw.value) else { return true }
+                return !profileIDs.contains(id)
+            }
+            guard slots.count != before else { continue }
+            changed = true
+            if slots.isEmpty {
+                map.removeValue(forKey: bundleID)
+            } else {
+                map[bundleID] = slots
+            }
+        }
+        if changed {
+            self.writeWidgetDictationPromptChoiceMap(map)
+        }
+    }
+
+    private func readWidgetDictationPromptChoiceMap() -> [String: [String: String]] {
+        guard let data = self.defaults.data(forKey: Keys.widgetDictationPromptChoices),
+              let decoded = try? JSONDecoder().decode([String: [String: String]].self, from: data)
+        else { return [:] }
+        var normalized: [String: [String: String]] = [:]
+        for (bundleID, slots) in decoded {
+            guard let key = Self.normalizeAppBundleID(bundleID), !slots.isEmpty else { continue }
+            normalized[key, default: [:]].merge(slots) { _, new in new }
+        }
+        return normalized
+    }
+
+    private func writeWidgetDictationPromptChoiceMap(_ map: [String: [String: String]]) {
+        if map.isEmpty {
+            self.defaults.removeObject(forKey: Keys.widgetDictationPromptChoices)
+            return
+        }
+        if let encoded = try? JSONEncoder().encode(map) {
+            self.defaults.set(encoded, forKey: Keys.widgetDictationPromptChoices)
+        }
+    }
+
+    private static func encodeWidgetDictationPromptChoice(_ selection: DictationPromptSelection) -> String {
+        switch selection {
+        case .off:
+            return "off"
+        case .default:
+            return "default"
+        case .privateAI:
+            return "privateAI"
+        case let .profile(id):
+            return "profile:\(id)"
+        }
+    }
+
+    private static func decodeWidgetDictationPromptChoice(_ raw: String) -> DictationPromptSelection? {
+        switch raw {
+        case "off":
+            return .off
+        case "default":
+            return .default
+        case "privateAI":
+            return .privateAI
+        default:
+            guard raw.hasPrefix("profile:") else { return nil }
+            let id = String(raw.dropFirst("profile:".count))
+            guard !id.isEmpty else { return nil }
+            return .profile(id)
+        }
     }
 
     /// Optional override for the built-in default dictation system prompt.
@@ -5961,6 +6110,7 @@ private extension SettingsStore {
         // Dictation Prompt Profiles (multi-prompt system)
         static let dictationPromptProfiles = "DictationPromptProfiles"
         static let appPromptBindings = "AppPromptBindings"
+        static let widgetDictationPromptChoices = "WidgetDictationPromptChoices"
         static let selectedDictationPromptID = "SelectedDictationPromptID"
         static let sendCustomPromptOnly = "SendCustomPromptOnly"
         static let editPromptOff = "EditPromptOff"
