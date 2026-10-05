@@ -271,6 +271,9 @@ final class SettingsStore: ObservableObject {
         case profile(String)
     }
 
+    static let shortcutPickerOffTag = "__OFF__"
+    static let shortcutPickerDefaultTag = "__DEFAULT__"
+
     struct DictationPromptProfile: Codable, Identifiable, Hashable {
         let id: String
         var name: String
@@ -521,6 +524,10 @@ final class SettingsStore: ObservableObject {
 
     func dictationPromptSelection(for slot: DictationShortcutSlot) -> DictationPromptSelection {
         if self.isDictationPromptOff(for: slot) { return .off }
+        return self.rememberedDictationPromptSelection(for: slot)
+    }
+
+    func rememberedDictationPromptSelection(for slot: DictationShortcutSlot) -> DictationPromptSelection {
         if let promptID = self.selectedDictationPromptID(for: slot) {
             if promptID == PrivateAIProviderPromptFormat.promptSelectionID {
                 if self.usesCombinedCloudDictation { return .default }
@@ -531,18 +538,72 @@ final class SettingsStore: ObservableObject {
         return .default
     }
 
+    func setRememberedDictationPromptSelection(_ selection: DictationPromptSelection, for slot: DictationShortcutSlot) {
+        guard selection != .off else { return }
+        self.setSelectedDictationPromptID(self.storedPromptID(for: selection), for: slot)
+    }
+
     func setDictationPromptSelection(_ selection: DictationPromptSelection, for slot: DictationShortcutSlot) {
-        let selectedID: String?
+        if selection == .off {
+            self.setDictationPromptOff(true, for: slot)
+            return
+        }
+        self.setDictationPromptOff(false, for: slot)
+        self.setSelectedDictationPromptID(self.storedPromptID(for: selection), for: slot)
+    }
+
+    var isDictationCleanupEnabled: Bool {
+        DictationShortcutSlot.allCases.contains { !self.isDictationPromptOff(for: $0) }
+    }
+
+    func setDictationCleanupEnabled(_ isEnabled: Bool) {
+        for slot in DictationShortcutSlot.allCases {
+            if isEnabled, !self.isDictationPromptOff(for: slot) { continue }
+            self.setDictationCleanupEnabled(isEnabled, for: slot)
+        }
+    }
+
+    func setDictationCleanupEnabled(_ isEnabled: Bool, for slot: DictationShortcutSlot) {
+        if isEnabled {
+            self.setDictationPromptOff(false, for: slot)
+        } else {
+            self.setDictationPromptSelection(.off, for: slot)
+        }
+    }
+
+    func applyDictationShortcutPickerTag(_ tag: String, for slot: DictationShortcutSlot) {
+        switch tag {
+        case Self.shortcutPickerOffTag:
+            self.setDictationCleanupEnabled(false, for: slot)
+        case Self.shortcutPickerDefaultTag:
+            self.applyDictationShortcutPickerSelection(.default, for: slot)
+        case PrivateAIProviderPromptFormat.promptSelectionID:
+            guard PrivateAIProviderPromptFormat.isAvailable(settings: self) else { return }
+            self.applyDictationShortcutPickerSelection(.privateAI, for: slot)
+        default:
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            self.applyDictationShortcutPickerSelection(.profile(trimmed), for: slot)
+        }
+    }
+
+    private func applyDictationShortcutPickerSelection(_ selection: DictationPromptSelection, for slot: DictationShortcutSlot) {
+        if self.isDictationPromptOff(for: slot), self.rememberedDictationPromptSelection(for: slot) == selection {
+            self.setDictationCleanupEnabled(true, for: slot)
+            return
+        }
+        self.setDictationPromptSelection(selection, for: slot)
+    }
+
+    private func storedPromptID(for selection: DictationPromptSelection) -> String? {
         switch selection {
         case .off, .default:
-            selectedID = nil
+            return nil
         case .privateAI:
-            selectedID = PrivateAIProviderPromptFormat.promptSelectionID
+            return PrivateAIProviderPromptFormat.promptSelectionID
         case let .profile(promptID):
-            selectedID = promptID
+            return promptID
         }
-        self.setDictationPromptOff(selection == .off, for: slot)
-        self.setSelectedDictationPromptID(selectedID, for: slot)
     }
 
     func dictationPromptConfigurationKey(for selection: DictationPromptSelection) -> String? {
@@ -730,7 +791,7 @@ final class SettingsStore: ObservableObject {
     func setPromptOff(_ isOff: Bool, for mode: PromptMode) {
         switch mode.normalized {
         case .dictate:
-            self.setDictationPromptSelection(isOff ? .off : .default)
+            self.setDictationCleanupEnabled(!isOff)
         case .edit, .write, .rewrite:
             self.isEditPromptOff = isOff
         }
