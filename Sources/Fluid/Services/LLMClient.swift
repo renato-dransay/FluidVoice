@@ -58,7 +58,7 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
 /// Unified LLM communication layer for all modes (Transcription, Command, Rewrite).
 /// Handles HTTP requests, SSE streaming, thinking token extraction, and tool call parsing.
-/// Thread-safe transport whose only state is which hosts it reached recently, for warm-ups. Keeping
+/// Thread-safe transport whose state is its pooled URL session and which hosts it reached recently. Keeping
 /// streaming decode off MainActor prevents provider token bursts from delaying dictation UI and final
 /// text delivery.
 final nonisolated class LLMClient: @unchecked Sendable {
@@ -67,11 +67,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Default timeout for LLM requests (30 seconds)
     static let defaultTimeoutSeconds: TimeInterval = 30
 
-    /// URLSession configured with appropriate timeouts
-    private let session: URLSession
+    /// Pooled connections idle longer than this can be dead on some network paths: the next
+    /// request stalls ~6.5 s before failing with -1005 (#1016). Requests under ~60 s apart were fine.
+    static let idleConnectionLimit: TimeInterval = 45
 
-    /// The one piece of state: which hosts had a successful request recently, so a dictation's warm-up
-    /// does not repeat a connection that is already open.
+    /// URLSession configured with appropriate timeouts; replaced after an idle gap.
+    private var session: URLSession
+    private let idleConnectionLimit: TimeInterval
+    private let sessionLock = NSLock()
+    private var activeRequests = 0
+    private var lastRequestEnd: Date?
+
+    /// Which hosts had a successful request recently, so a dictation's warm-up does not repeat a
+    /// connection that is already open. Cleared whenever the session is replaced.
     private let warmer = ConnectionWarmer()
 
     private init() {
@@ -79,11 +87,13 @@ final nonisolated class LLMClient: @unchecked Sendable {
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
         config.timeoutIntervalForResource = Self.defaultTimeoutSeconds * 2 // Allow extra time for resource loading
         self.session = URLSession(configuration: config)
+        self.idleConnectionLimit = Self.idleConnectionLimit
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
-    init(session: URLSession) {
+    init(session: URLSession, idleConnectionLimit: TimeInterval = LLMClient.idleConnectionLimit) {
         self.session = session
+        self.idleConnectionLimit = idleConnectionLimit
     }
 
     // MARK: - Response Types
@@ -243,6 +253,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     /// Execute request with retry logic (extracted for timeout wrapper)
     private func executeWithRetry(request: URLRequest, config: Config) async throws -> Response {
+        let session = self.acquireSession()
+        defer { self.releaseSession() }
         var lastError: Error?
         for attempt in 1...config.maxRetries {
             do {
@@ -250,12 +262,12 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 let response: Response
                 if config.streaming {
                     if self.isResponsesRequest(request) {
-                        response = try await self.processResponsesStreaming(request: request, config: config)
+                        response = try await self.processResponsesStreaming(request: request, config: config, session: session)
                     } else {
-                        response = try await self.processStreaming(request: request, config: config)
+                        response = try await self.processStreaming(request: request, config: config, session: session)
                     }
                 } else {
-                    response = try await self.processNonStreaming(request: request, config: config)
+                    response = try await self.processNonStreaming(request: request, config: config, session: session)
                 }
                 self.warmer.markSuccess(request.url)
                 return response
@@ -281,8 +293,38 @@ final nonisolated class LLMClient: @unchecked Sendable {
     }
 
     /// Opens the connection to a text provider before the request that needs it. Sends no key or body.
+    /// It counts as activity, so a warm-up after an idle gap opens its connection on the fresh session
+    /// and the request that follows reuses it.
     func warmConnection(to origin: URL) async -> ConnectionWarmer.Outcome {
-        await self.warmer.warm(origin: origin, on: self.session)
+        let session = self.acquireSession()
+        defer { self.releaseSession() }
+        return await self.warmer.warm(origin: origin, on: session)
+    }
+
+    /// Returns the session for one call, replacing it first if no request ran for longer than
+    /// `idleConnectionLimit`, so a connection the network path dropped is not reused (#1016).
+    private func acquireSession() -> URLSession {
+        self.sessionLock.withLock {
+            if self.activeRequests == 0, let lastEnd = self.lastRequestEnd {
+                let idle = Date().timeIntervalSince(lastEnd)
+                if idle > self.idleConnectionLimit {
+                    DebugLogger.shared.debug("LLMClient: Opening a fresh connection after \(Int(idle)) s idle", source: "LLMClient")
+                    self.session.finishTasksAndInvalidate()
+                    self.session = URLSession(configuration: self.session.configuration)
+                    // The new session has no open connections, so no host counts as warm any more.
+                    self.warmer.reset()
+                }
+            }
+            self.activeRequests += 1
+            return self.session
+        }
+    }
+
+    private func releaseSession() {
+        self.sessionLock.withLock {
+            self.activeRequests -= 1
+            self.lastRequestEnd = Date()
+        }
     }
 
     // MARK: - Request Building
@@ -548,10 +590,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     // MARK: - Non-Streaming Response
 
-    private func processNonStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processNonStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await self.session.data(for: request, delegate: Self.metricsDelegate(for: config))
+        let (data, response) = try await session.data(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_data bytes=\(data.count)")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -581,10 +623,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return parsed
     }
 
-    private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processResponsesStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
+        let (bytes, response) = try await session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -692,10 +734,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return parsed
     }
 
-    private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
+        let (bytes, response) = try await session.bytes(for: request, delegate: Self.metricsDelegate(for: config))
         self.benchmark(config, "response_headers")
 
         // Check for HTTP errors

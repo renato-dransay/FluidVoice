@@ -62,6 +62,11 @@ nonisolated final class ConnectionWarmer: @unchecked Sendable {
         self.lock.withLock { self.lastSuccess[origin.absoluteString] = now }
     }
 
+    /// Forgets every warm host, for when the owner replaced its URL session and the old connections are gone.
+    func reset() {
+        self.lock.withLock { self.lastSuccess.removeAll() }
+    }
+
     private func isWarm(_ key: String, now: TimeInterval) -> Bool {
         self.lastSuccess[key].map { now - $0 < Self.window } ?? false
     }
