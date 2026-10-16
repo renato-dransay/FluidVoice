@@ -92,6 +92,12 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
     }
 
     func testDevelopmentCandidateIsRejectedAsReleaseButAcceptedAsRollbackAndRetained() throws {
+        // The production pipeline accepts an installed app from the official teams only, so a
+        // personal build signed by another team never reaches the development-certificate rejection.
+        try XCTSkipUnless(
+            Fixture.officialTeams.contains(Fixture.hostTeamIdentifier() ?? ""),
+            "The installed-app policy requires a test host signed by an official team."
+        )
         let fixture = try Fixture(incomingDeveloperID: false, candidateVersion: "1.6.10-beta.6")
         defer { fixture.cleanup() }
         XCTAssertThrowsError(try fixture.prepare(expectedVersion: fixture.candidateVersion)) { error in
@@ -177,7 +183,24 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         static let installedVersion = "1.6.10-beta.7"
         static let installedBuild = "26"
         static let incomingVersion = "1.6.10-beta.8"
-        static let approvedTeams: Set<String> = ["V4J43B279J", "537RRRT57V"]
+        static let officialTeams: Set<String> = ["V4J43B279J", "537RRRT57V"]
+        static let approvedTeams: Set<String> = {
+            var teams = Self.officialTeams
+            // Personal builds sign the test host, and so these fixtures, with the local developer's
+            // team; that team must pass the same policy as the official teams.
+            if let team = Self.hostTeamIdentifier() { teams.insert(team) }
+            return teams
+        }()
+
+        static func hostTeamIdentifier() -> String? {
+            var staticCode: SecStaticCode?
+            guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &staticCode) == errSecSuccess,
+                  let staticCode else { return nil }
+            var information: CFDictionary?
+            guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess
+            else { return nil }
+            return (information as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
+        }
 
         let root: URL
         let installed: URL

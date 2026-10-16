@@ -21,10 +21,11 @@ python3 -m unittest discover -s tools/fork -p 'test_*.py' -v
 swiftlint lint --strict --config .swiftlint.yml
 xcodebuild test -project Fluid.xcodeproj -scheme Fluid \
   -destination 'platform=macOS,arch=arm64' \
-  -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture
+  -skip-testing:FluidDictationIntegrationTests/DictationE2ETests/testDictationEndToEnd_whisperTiny_transcribesFixture \
+  DEVELOPMENT_TEAM=<your 10-character Team ID>
 ```
 
-The Tiny Whisper case retains upstream's documented CI exclusion because its hosted output is nondeterministic. Test cloud recognition with synthetic or explicitly selected audio, including multiple languages, long-file boundaries and cancellation; never infer cloud quality from a successful build.
+The project file carries upstream's team, so `xcodebuild test` needs the `DEVELOPMENT_TEAM` override (the build wrapper resolves it from the installed Apple Development identity on its own). The test host runs with the personal app's real preferences; tests that exercise the local engine pin `SpeechExecutionSource` to `local` through `pinLocalSpeechExecutionSource()`. Upstream's update-pipeline tests skip under a personal signing team because the production updater accepts the official teams only. The Tiny Whisper case retains upstream's documented CI exclusion because its hosted output is nondeterministic. Test cloud recognition with synthetic or explicitly selected audio, including multiple languages, long-file boundaries and cancellation; never infer cloud quality from a successful build.
 
 ## Dictation speed comparison keys
 

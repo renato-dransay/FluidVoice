@@ -80,12 +80,12 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             let edit = self.profile(id: "edit-only", mode: .edit)
             let shortcut = HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .option])
             let imported: [String: SettingsStore.DictationPromptConfiguration] = [
-                "profile:imported": .init(shortcut: shortcut, providerID: "openai", modelName: "imported-model"),
-                "profile:missing": .init(shortcut: shortcut, providerID: "openai", modelName: "missing-model"),
-                "profile:edit-only": .init(shortcut: shortcut, providerID: "openai", modelName: "edit-model"),
+                "profile:imported": .init(shortcut: shortcut),
+                "profile:missing": .init(shortcut: shortcut),
+                "profile:edit-only": .init(shortcut: shortcut),
                 "unknown": .init(shortcut: shortcut),
-                "__default__": .init(shortcut: HotkeyShortcut(keyCode: 2, modifierFlags: []), providerID: "openai", modelName: "default-model"),
-                "__privateAI__": .init(shortcut: shortcut, providerID: "apple-intelligence", modelName: "retired-model"),
+                "__default__": .init(shortcut: HotkeyShortcut(keyCode: 2, modifierFlags: [])),
+                "__privateAI__": .init(shortcut: shortcut),
             ]
             var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings.makeBackupPayload())) as? [String: Any])
             json["dictationPromptConfigurations"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(imported))
@@ -100,7 +100,6 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             XCTAssertNil(settings.dictationPromptConfigurations["profile:previous"])
             XCTAssertNil(settings.dictationPromptConfigurations["unknown"])
             XCTAssertNil(settings.dictationPromptConfiguration(for: .default).shortcut)
-            XCTAssertEqual(settings.dictationPromptConfiguration(for: .default).modelName, "default-model")
             XCTAssertEqual(settings.dictationPromptConfigurations["__privateAI__"], .init(shortcut: shortcut))
             XCTAssertEqual(settings.dictationPromptShortcutAssignments().count, 2)
             XCTAssertEqual(settings.selectedProviderID, payload.selectedProviderID)
@@ -122,9 +121,9 @@ final class SettingsBackupRoundTripTests: XCTestCase {
 
     private func configurations(profileID: String) -> [String: SettingsStore.DictationPromptConfiguration] {
         [
-            "__default__": .init(shortcut: HotkeyShortcut(keyCode: 2, modifierFlags: .control), providerID: "openai", modelName: "default-model"),
-            "__privateAI__": .init(shortcut: HotkeyShortcut(keyCode: 3, modifierFlags: .control), providerID: "fluid-fixture", modelName: "private-model"),
-            "profile:\(profileID)": .init(shortcut: HotkeyShortcut(keyCode: 5, modifierFlags: .control), providerID: "custom:fixture", modelName: "profile-model"),
+            "__default__": .init(shortcut: HotkeyShortcut(keyCode: 2, modifierFlags: .control)),
+            "__privateAI__": .init(shortcut: HotkeyShortcut(keyCode: 3, modifierFlags: .control)),
+            "profile:\(profileID)": .init(shortcut: HotkeyShortcut(keyCode: 5, modifierFlags: .control)),
         ]
     }
 

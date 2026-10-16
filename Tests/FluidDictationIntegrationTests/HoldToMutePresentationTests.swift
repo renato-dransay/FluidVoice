@@ -31,7 +31,8 @@ final class HoldToMutePresentationTests: XCTestCase {
                 let layout = BottomOverlayView.LayoutConstants.get(for: size)
                 let view = BottomOverlayView()
                     .padding(24)
-                    .frame(width: max(400, layout.overlayWidth + 48), height: max(220, layout.overlayHeight + 80))
+                    // The fork's overlay sizes itself from its content; the host only needs room for the widest size.
+                    .frame(width: max(400, layout.containerWidth + 48), height: 300)
                     .background(scheme == .dark ? Color(white: 0.08) : Color(white: 0.94))
                     .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
                     .environment(\.colorScheme, scheme)

@@ -37,6 +37,12 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
 
 @MainActor
 final class VoiceModelDeletionTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        // The test host carries the local user's preferences; these tests exercise the local engine.
+        self.pinLocalSpeechExecutionSource()
+    }
+
     private func makeNoHardwareController(for asr: ASRService) -> DirectCoreAudioLifecycleController {
         DirectCoreAudioLifecycleController(
             packetHandler: asr.recoveryPacketHandlerForTesting,
