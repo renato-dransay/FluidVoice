@@ -175,7 +175,13 @@ ASR_ERROR
 struct ASRActivityLease: Equatable { let id: UUID; let activity: ASRExclusiveActivity }
 @MainActor final class HandoffProbe { var isRecovering = false }
 @MainActor final class ResidencyProbe { var isExclusive = false }
+final class LiveCloudTranscriptionProvider {}
 @MainActor final class ASRService {
+    // Live cloud dictation state that the production lease release clears.
+    var frozenTranscriptionProvider: AnyObject?, frozenSpeechExecutionSource: String?
+    var frozenCloudSession: AnyObject?, frozenCloudDictationModelID: String?
+    var asrReadyBeforeLiveLease: Bool?
+    func endLiveCloudStream() {}
     var isTerminating = false
     var activeActivityLease: ASRActivityLease?
     var activeExclusiveActivity: ASRExclusiveActivity?

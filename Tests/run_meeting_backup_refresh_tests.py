@@ -68,6 +68,8 @@ final class SettingsStore {
     var meetingRecordingDefaults = Defaults()
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
+    var meetingCalendarNamesEnabled = true
+    var meetingCalendarRemindersEnabled = true
     var meetingAudioRetentionPolicy = 7
 }
 struct Identity { let id: String }
