@@ -1,6 +1,6 @@
 > **FluidVoice Personal:** This fork adds optional OpenRouter speech recognition for dictation, imported files, and completed meetings, with local speaker detection. Dictation can send audio and Cleanup Style instructions together in one request. A Live cloud voice engine streams dictation to a speech provider of your choice (Soniox, Deepgram, AssemblyAI, ElevenLabs, Mistral, OpenAI, Speechmatics or Gladia) with your own key, showing words while you speak. It uses a separate app identity and local data, and does not install official upstream binaries.
 >
-> See [cloud transcription setup](docs/personal/cloud-transcription.md), [Live cloud transcription](docs/personal/live-transcription.md), [dictation speed](docs/personal/dictation-speed.md), and [signed builds, rollback, and reviewed upstream updates](docs/personal/maintenance.md). Build with `./build.sh personal`. The public source build excludes the private Fluid Intelligence runtime. Cloud recognition is off by default.
+> See [cloud transcription setup](docs/personal/cloud-transcription.md), [Live cloud transcription](docs/personal/live-transcription.md), [dictation speed](docs/personal/dictation-speed.md), and [signed builds, rollback, and upstream updates](docs/personal/maintenance.md). Build with `./build.sh personal`. The public source build excludes the private Fluid Intelligence runtime. Cloud recognition is off by default.
 
 ## Keeping this personal fork up to date
 
@@ -11,19 +11,11 @@
 | `origin` | Our fork: [`renato-dransay/FluidVoice`](https://github.com/renato-dransay/FluidVoice). Personal changes are pushed here. |
 | `upstream` | Original project: [`altic-dev/FluidVoice`](https://github.com/altic-dev/FluidVoice). Updates are fetched from here; our automation never pushes to it. |
 | `origin/main` | Fast-forward-only mirror of `upstream/main`. It does not contain our personal changes. |
-| `origin/personal` | Our working release branch. Feature and upstream-update pull requests merge here. |
+| `origin/personal` | Our working release branch. Finished work and upstream merges land here directly. |
 
-The **Personal fork upstream updates** workflow runs every Monday at **08:23 UTC**. It refreshes the `main` mirror, checks the latest stable upstream release, and opens one update pull request into `personal` when that release is not already included. It merges the release into a candidate based on our existing `personal` branch, preserving our changes. Beta releases are excluded. Conflicts or divergent history produce an issue for manual resolution; the workflow never force-pushes or merges automatically.
+Upstream releases are imported by hand. A local scheduled review compares new upstream releases with `personal` and recommends whether to import them; the owner then merges the chosen release in a clean worktree, resolves conflicts and runs the checks in [maintenance](docs/personal/maintenance.md#upstream-updates). Nothing on GitHub opens update pull requests.
 
-Run the same check immediately from GitHub Actions, or with:
-
-```sh
-gh workflow run fork-upstream.yml --repo renato-dransay/FluidVoice --ref personal
-```
-
-The workflow explicitly starts our fork checks for each update pull request. After the checks pass, the owner reviews the changes and merges the pull request. **No approval from a second reviewer is required.** The three required checks remain enforced. Upstream release notifications provide a backup reminder.
-
-After merging an update, refresh the local checkout and build the personal app:
+After an update lands, refresh the local checkout and build the personal app:
 
 ```sh
 cd /Users/renatobeltrao/Projects/fluidvoice

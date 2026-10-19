@@ -4,7 +4,7 @@ The personal fork starts at upstream `main` commit `3b509ea1754022d0a3825717308b
 
 ## Branches and builds
 
-`origin` is `renato-dransay/FluidVoice`; `upstream` is `altic-dev/FluidVoice`. Keep `main` as a fast-forward-only upstream mirror. The default branch is `personal`. This is a personal fork developed locally: finished work is verified locally (build, relevant tests, SwiftLint), merged into `personal` and pushed directly, then the local app is rebuilt and reinstalled. Pull requests are opened only when something requires one, such as the upstream update workflow below. `personal` has no branch protection, so a push lands without waiting for CI; `Personal fork checks` still runs on every push to `personal` and reports failures after the fact.
+`origin` is `renato-dransay/FluidVoice`; `upstream` is `altic-dev/FluidVoice`. Keep `main` as a fast-forward-only upstream mirror. The default branch is `personal`. This is a personal fork developed locally: finished work is verified locally (build, relevant tests, SwiftLint), merged into `personal` and pushed directly, then the local app is rebuilt and reinstalled. Pull requests are opened only when something requires one. `personal` has no branch protection, so a push lands without waiting for CI; `Personal fork checks` still runs on every push to `personal` and reports failures after the fact.
 
 Build on Apple Silicon with full Xcode selected and an installed Apple Development signing identity:
 
@@ -69,14 +69,19 @@ Rollback saves the current state as a new rescue snapshot before restoring the p
 
 The fork uses fresh preferences under its bundle identifier, the Keychain service `com.renatobeltrao.fluidvoice.personal.provider-api-keys`, data under `~/Library/Application Support/FluidVoice Personal`, and logs under `~/Library/Logs/FluidVoice Personal`. It does not import official preferences or credentials. Existing recordings can be imported deliberately. Model downloads may use shared caches. Official binary updater entry points refuse installation, and personal builds replace their settings controls with local build and rollback guidance. Use the same signing identity across rebuilds to retain macOS permission identity; grant microphone, accessibility and meeting capture permissions on first launch.
 
-## Reviewed upstream updates
+## Upstream updates
 
-`Personal fork upstream updates` runs weekly on Monday at 08:23 UTC and supports manual dispatch. It fetches current upstream `main` and the latest stable GitHub release, fast-forwards the fork's `main`, skips an already included release, and prepares one update pull request per release. Beta releases are excluded. Release ancestry must descend from the initial baseline and belong to upstream `main`; divergence and merge conflicts produce a deduplicated issue requiring manual review. Existing closed update pull requests are not recreated. Existing open update pull requests have checks re-dispatched to recover from a failed dispatch.
+There is no GitHub automation for upstream updates; it was removed because the fork has issues disabled and every conflict run failed. A local scheduled review lists upstream releases not yet in `personal`, test-merges them with `git merge-tree` and recommends importing, cherry-picking, waiting or skipping. Beta releases are normally left until the stable release.
 
-The bot never force-pushes, merges a pull request, publishes a binary or installs an application. It explicitly dispatches `Personal fork checks` on the candidate branch because pull requests opened with `GITHUB_TOKEN` do not trigger ordinary pull-request workflows. The checks are `Fork tooling tests`, `Personal SwiftLint`, and `Personal build and tests`; nothing enforces them, so review the diff and CI before merging. Then rebuild locally, run app smoke checks, and install through the snapshot helper.
+To import a release, keep `main` a fast-forward mirror (`git push origin upstream/main:main`), then merge in a clean worktree so other work in the checkout is untouched:
 
-Enable Actions and "Allow GitHub Actions to create and approve pull requests" in the fork settings; the workflow only creates pull requests and never approves them. Keep default workflow token permissions read-only. Workflow-level permissions grant only the update job its necessary writes. Inherited upstream bots are restricted by repository guards to `altic-dev/FluidVoice`. Keep the two personal workflows enabled; other upstream maintenance workflows can stay disabled. `personal` has no branch protection, so nothing on GitHub blocks force-pushes or deletion; avoid both. Repository auto-merge is disabled. Merge commits remain allowed for upstream integration.
+```sh
+git fetch --tags upstream
+git worktree add -b renato/upstream-<tag> .claude/worktrees/upstream-<tag> origin/personal
+cd .claude/worktrees/upstream-<tag>
+git merge <tag>
+```
 
-GitHub scheduled workflows in inactive public repositories may stop after 60 days. Upstream **Watch > Custom > Releases** notifications were enabled and verified in GitHub during the initial setup. Check that the scheduled workflow stays active. For another account, configure the same releases-only option in GitHub; its REST subscription API does not provide that selector.
+After resolving conflicts, check that the personal identity survived (`python3 -m unittest tools/fork/test_personal_identity.py`; the project file auto-merges duplicate `PRODUCT_BUNDLE_IDENTIFIER`, `PRODUCT_NAME` and `MARKETING_VERSION` keys), bump the `release:` string in `ReleaseHighlightsContent.swift` with the version, run the checks above, push `personal` and install through the snapshot helper. Do not discard personal work or reset `personal` to upstream.
 
-If an update branch conflicts or falls behind `personal`, resolve it manually in a clean checkout, push the reviewed resolution, and re-dispatch `fork-ci.yml` for that branch. Do not discard personal work or reset `personal` to upstream.
+`Personal fork checks` (`fork-ci.yml`) still runs on every push to `personal` and reports failures after the fact; nothing enforces it.
