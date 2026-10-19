@@ -75,6 +75,18 @@ class PersonalIdentityTests(unittest.TestCase):
             with self.subTest(configuration=name):
                 self.assertEqual(setting_value(settings, "MARKETING_VERSION"), [plist_version])
 
+    def test_every_referenced_swift_file_exists(self):
+        # A cherry-pick or merge can carry upstream-only test files into the project file without
+        # the files themselves, and the build then fails with "Build input files cannot be found".
+        referenced = set(re.findall(r"isa = PBXFileReference;[^}]*?path = \"?([^\";]+\.swift)\"?;", self.project))
+        present = {
+            path.name
+            for top in ("Sources", "Tests")
+            for path in (ROOT / top).rglob("*.swift")
+        }
+        missing = sorted(Path(name).name for name in referenced if Path(name).name not in present)
+        self.assertEqual(missing, [], f"project file references missing files {missing}")
+
     def test_info_plist_reads_identity_from_build_settings(self):
         with INFO_PLIST.open("rb") as handle:
             plist = plistlib.load(handle)
