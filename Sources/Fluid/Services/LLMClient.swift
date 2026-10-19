@@ -105,6 +105,22 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// True when the provider stopped before finishing, for example at its output-token limit.
+        var isIncomplete = false
+
+        /// Finish reasons that mean the text was cut off rather than completed.
+        static func isIncompleteFinishReason(_ reason: String) -> Bool {
+            ["length", "max_tokens", "content_filter"].contains(reason.lowercased())
+        }
+
+        /// A Responses API body or `response` event object that did not complete.
+        static func isIncompleteResponsesObject(_ json: [String: Any]) -> Bool {
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            return (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
+        }
     }
 
     struct ToolCall: @unchecked Sendable {
@@ -609,15 +625,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
         self.logPredictionUsage(json, config: config)
 
-        let parsed: Response
+        var parsed: Response
         if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
+            parsed.isIncomplete = Response.isIncompleteResponsesObject(json)
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
                   let choice = choices.first,
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            if let reason = choice["finish_reason"] as? String {
+                parsed.isIncomplete = Response.isIncompleteFinishReason(reason)
+            }
         }
         self.benchmark(config, "response_decoded")
         return parsed
@@ -641,6 +661,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var contentBuffer: [String] = []
         var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
         var didLogFirstContent = false
+        var isIncomplete = false
 
         for try await rawLine in bytes.lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -706,6 +727,12 @@ final nonisolated class LLMClient: @unchecked Sendable {
                     call.arguments = item["arguments"] as? String ?? call.arguments
                 }
                 toolCallsByIndex[index] = call
+            case "response.incomplete":
+                isIncomplete = true
+            case "response.completed":
+                if let response = event["response"] as? [String: Any], Response.isIncompleteResponsesObject(response) {
+                    isIncomplete = true
+                }
             default:
                 continue
             }
@@ -728,7 +755,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let parsed = Response(
             thinking: nil,
             content: contentBuffer.joined().trimmingCharacters(in: .whitespacesAndNewlines),
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            isIncomplete: isIncomplete
         )
         self.benchmark(config, "response_decoded")
         return parsed
@@ -760,6 +788,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var tagDetectionBuffer = ""
         var usesSeparateReasoningFields = false
         var didLogFirstContent = false
+        var isIncomplete = false
 
         // Tool call accumulation
         var toolCallId: String?
@@ -787,6 +816,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
             // The usage report arrives in a final chunk with empty choices.
             self.logPredictionUsage(json, config: config)
+            if let reason = (json["choices"] as? [[String: Any]])?.first?["finish_reason"] as? String {
+                isIncomplete = Response.isIncompleteFinishReason(reason)
+            }
             guard let choices = json["choices"] as? [[String: Any]],
                   let delta = choices.first?["delta"] as? [String: Any]
             else {
@@ -937,7 +969,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let parsed = Response(
             thinking: thinkingText.isEmpty ? nil : thinkingText,
             content: contentText,
-            toolCalls: parsedToolCalls
+            toolCalls: parsedToolCalls,
+            isIncomplete: isIncomplete
         )
         self.benchmark(config, "response_decoded")
         return parsed

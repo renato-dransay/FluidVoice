@@ -8,9 +8,15 @@ struct MeetingSummaryView: View {
     @StateObject private var controller = MeetingSummaryController()
     @State private var confirmDeletion = false
     @State private var kind = MeetingSummaryKind.executive
+    @State private var customPrompt = MeetingSummaryCustomPrompt.load()
 
     private var refreshID: String {
-        "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)"
+        let prompt = self.kind == .custom ? MeetingSummaryCustomPrompt.fingerprint(self.customPrompt) : ""
+        return "\(self.session?.id.uuidString ?? "home")-\(self.session?.updatedAt.timeIntervalSince1970 ?? 0)-\(self.kind.rawValue)-\(prompt)"
+    }
+
+    private var needsCustomPrompt: Bool {
+        self.kind == .custom && self.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var hint: String {
@@ -54,7 +60,7 @@ struct MeetingSummaryView: View {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     if self.controller.installed {
                         Picker("Summary type", selection: self.$kind) {
-                            ForEach(MeetingSummaryKind.allCases) { kind in Text(kind.title).tag(kind) }
+                            ForEach(MeetingSummaryKind.available(onDevice: !self.isCloud)) { kind in Text(kind.title).tag(kind) }
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
@@ -63,6 +69,9 @@ struct MeetingSummaryView: View {
                         .disabled(self.controller.busy)
                     }
                     self.actions
+                }
+                if self.kind == .custom, self.isCloud {
+                    self.customPromptEditor
                 }
                 if self.controller.downloading {
                     Text(PrivateAIModelDownloadProgressText.detailText(for: self.controller.progress))
@@ -98,7 +107,19 @@ struct MeetingSummaryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, self.theme.metrics.spacing.md)
-        .task(id: self.refreshID) { await self.controller.refresh(session: self.session, kind: self.kind) }
+        .task(id: self.refreshID) {
+            if self.kind == .custom {
+                // Typing in the prompt changes the refresh key on every keystroke; wait for a pause.
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            await self.controller.refresh(session: self.session, kind: self.kind, customPrompt: self.customPrompt)
+        }
+        .onChange(of: self.isCloud) { _, isCloud in
+            if !isCloud, self.kind == .custom {
+                self.kind = .executive
+            }
+        }
         .onDisappear { self.controller.cancel() }
         .alert("Delete summary model?", isPresented: self.$confirmDeletion) {
             Button("Cancel", role: .cancel) {}
@@ -144,11 +165,21 @@ struct MeetingSummaryView: View {
                 } else {
                     Button("Summarize", systemImage: "sparkles") {
                         if let session {
-                            self.controller.summarize(session: session, kind: self.kind, asr: self.asrService)
+                            self.controller.summarize(
+                                session: session,
+                                kind: self.kind,
+                                customPrompt: self.customPrompt,
+                                asr: self.asrService
+                            )
                         }
                     }
                     .fluidGlassAction(prominent: true)
-                    .disabled(self.session?.transcriptSegments.isEmpty != false || (!self.isCloud && self.asrService == nil) || !self.isQuiescent)
+                    .disabled(
+                        self.session?.transcriptSegments.isEmpty != false
+                            || (!self.isCloud && self.asrService == nil)
+                            || !self.isQuiescent
+                            || self.needsCustomPrompt
+                    )
                 }
                 if !self.isCloud {
                     self.modelMenu
@@ -162,6 +193,33 @@ struct MeetingSummaryView: View {
                     .disabled(self.controller.generating)
                 }
             }
+        }
+    }
+
+    private var customPromptEditor: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            TextEditor(text: self.$customPrompt)
+                .font(self.theme.typography.bodySmall)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 72, maxHeight: 160)
+                .padding(self.theme.metrics.spacing.xs)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(self.theme.palette.tertiaryText.opacity(0.4))
+                )
+                .disabled(self.controller.busy)
+                .accessibilityLabel("Custom summary prompt")
+                .accessibilityIdentifier("meeting-summary-custom-prompt")
+                .onChange(of: self.customPrompt) { _, prompt in
+                    if prompt.count > MeetingSummaryCustomPrompt.maximumLength {
+                        self.customPrompt = String(prompt.prefix(MeetingSummaryCustomPrompt.maximumLength))
+                        return
+                    }
+                    MeetingSummaryCustomPrompt.save(prompt)
+                }
+            Text("Say what you want from the transcript, for example \"List every customer request with who asked for it.\" Used for every meeting.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.tertiaryText)
         }
     }
 

@@ -23,6 +23,23 @@ final class MeetingSummaryInputTests: XCTestCase {
         XCTAssertNotEqual(corrected, MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)))
     }
 
+    /// A saved meeting keeps whole seconds, so a reloaded session must produce the same text and
+    /// fingerprint as the live one, or its saved summary disappears after a restart.
+    func testFingerprintSurvivesTheWholeSecondRoundTripOfASavedMeeting() {
+        var live = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        live.startedAt = Date(timeIntervalSinceReferenceDate: 700_000_000.7)
+        live.endedAt = Date(timeIntervalSinceReferenceDate: 700_000_180.2)
+        var reloaded = live
+        reloaded.startedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        reloaded.endedAt = Date(timeIntervalSinceReferenceDate: 700_000_180)
+        let liveInput = MeetingSummaryInput.transcript(for: live)
+        XCTAssertTrue(liveInput.contains("Duration: 3 minutes"))
+        XCTAssertEqual(
+            MeetingSummaryInput.fingerprint(liveInput),
+            MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded))
+        )
+    }
+
     @MainActor
     func testSummaryCannotRunOutsideExclusiveModelScope() async {
         do {

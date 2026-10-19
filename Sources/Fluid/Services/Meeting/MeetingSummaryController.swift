@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
-    case executive, detailed, actions, decisions, participants, topics
+    case executive, detailed, actions, decisions, participants, topics, custom
     var id: String { self.rawValue }
     var title: String {
         switch self {
@@ -13,7 +13,13 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .decisions: "Key decisions"
         case .participants: "Participants"
         case .topics: "Topics discussed"
+        case .custom: "Custom prompt"
         }
+    }
+
+    /// The on-device model knows only the built-in styles.
+    static func available(onDevice: Bool) -> [MeetingSummaryKind] {
+        onDevice ? self.allCases.filter { $0 != .custom } : self.allCases
     }
 }
 
@@ -28,7 +34,11 @@ nonisolated enum MeetingSummaryInput {
         formatter.dateStyle = .none
         formatter.timeStyle = .short
         let time = formatter.string(from: session.startedAt)
-        let duration = max(0, (session.endedAt ?? session.startedAt).timeIntervalSince(session.startedAt) / 60)
+        // A saved meeting keeps whole seconds. Count the same way here, so the text (and the fingerprint
+        // that decides whether a saved summary is still shown) is the same before and after a restart.
+        let startSeconds = session.startedAt.timeIntervalSinceReferenceDate.rounded(.down)
+        let endSeconds = (session.endedAt ?? session.startedAt).timeIntervalSinceReferenceDate.rounded(.down)
+        let duration = max(0, (endSeconds - startSeconds) / 60)
         let turns = session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start.seconds < $1.start.seconds }
         return """
         Title: \(session.title)
@@ -160,13 +170,20 @@ final class MeetingSummaryController: ObservableObject {
         return MeetingCloudSummaryRouteResolver.resolve().map { .cloud($0) }
     }
 
-    private nonisolated struct SavedSummary: Codable, Sendable {
+    nonisolated struct SavedSummary: Codable, Sendable {
         let transcriptHash: String
         let modelID: String
         let text: String
+        /// Fingerprint of the custom prompt a Custom prompt summary answered; nil for the built-in types.
+        var promptHash: String?
+
+        /// A custom summary stays visible only while the prompt that produced it is unchanged.
+        func matches(kind: MeetingSummaryKind, customPrompt: String) -> Bool {
+            kind != .custom || self.promptHash == MeetingSummaryCustomPrompt.fingerprint(customPrompt)
+        }
     }
 
-    func refresh(session: MeetingSession?, kind: MeetingSummaryKind) async {
+    func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
@@ -187,6 +204,7 @@ final class MeetingSummaryController: ObservableObject {
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
                   engine.accepts(savedModelID: saved.modelID),
+                  saved.matches(kind: kind, customPrompt: customPrompt),
                   saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
             else { return (installed, "") }
             return (installed, saved.text)
@@ -246,12 +264,12 @@ final class MeetingSummaryController: ObservableObject {
         }
     }
 
-    func summarize(session: MeetingSession, kind: MeetingSummaryKind, asr: ASRService?) {
+    func summarize(session: MeetingSession, kind: MeetingSummaryKind, customPrompt: String = "", asr: ASRService?) {
         if case let .cloud(route) = self.engine {
-            self.summarizeInCloud(session: session, kind: kind, route: route)
+            self.summarizeInCloud(session: session, kind: kind, customPrompt: customPrompt, route: route)
             return
         }
-        guard !self.busy, self.installed, let asr, let model,
+        guard kind != .custom, !self.busy, self.installed, let asr, let model,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
         self.error = nil
@@ -291,7 +309,12 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     /// Cloud requests load no local model, so they skip the residency handoff that pauses dictation.
-    private func summarizeInCloud(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingCloudSummaryRoute) {
+    private func summarizeInCloud(
+        session: MeetingSession,
+        kind: MeetingSummaryKind,
+        customPrompt: String,
+        route: MeetingCloudSummaryRoute
+    ) {
         guard !self.busy, let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         let settings = SettingsStore.shared
         let extraParameters = TextRequestOptions.resolve(
@@ -326,6 +349,7 @@ final class MeetingSummaryController: ObservableObject {
                 let text = try await MeetingCloudSummaryService.summarize(
                     transcript: transcript,
                     kind: kind,
+                    customInstructions: customPrompt,
                     route: route,
                     extraParameters: extraParameters,
                     sendsTemperature: sendsTemperature
@@ -338,7 +362,12 @@ final class MeetingSummaryController: ObservableObject {
                 try Task.checkCancellation()
                 self.output = text
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
-                let saved = SavedSummary(transcriptHash: MeetingSummaryInput.fingerprint(transcript), modelID: route.savedModelID, text: text)
+                let saved = SavedSummary(
+                    transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                    modelID: route.savedModelID,
+                    text: text,
+                    promptHash: kind == .custom ? MeetingSummaryCustomPrompt.fingerprint(customPrompt) : nil
+                )
                 try await Task.detached(priority: .utility) {
                     try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                 }.value

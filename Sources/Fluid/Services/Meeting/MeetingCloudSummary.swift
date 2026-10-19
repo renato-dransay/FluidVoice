@@ -96,7 +96,7 @@ nonisolated enum MeetingCloudSummaryPrompt {
     /// to roughly 100k tokens of transcript.
     static let maximumTranscriptBytes = 400_000
 
-    static func systemPrompt(for kind: MeetingSummaryKind) -> String {
+    static func systemPrompt(for kind: MeetingSummaryKind, customInstructions: String = "") -> String {
         """
         You summarize meeting transcripts. The user message holds a header with the title, date, \
         time, duration and participants, a line of dashes, then the transcript with one speaker \
@@ -110,19 +110,24 @@ nonisolated enum MeetingCloudSummaryPrompt {
         - Respond in Markdown without a surrounding code block, preamble or closing remarks.
         - If the transcript holds too little content for the request, say so in one sentence.
 
-        Task: \(self.task(for: kind))
+        Task: \(self.task(for: kind, customInstructions: customInstructions))
         """
     }
 
-    static func messages(transcript: String, kind: MeetingSummaryKind) -> [[String: Any]] {
+    static func messages(transcript: String, kind: MeetingSummaryKind, customInstructions: String = "") -> [[String: Any]] {
         [
-            ["role": "system", "content": self.systemPrompt(for: kind)],
+            ["role": "system", "content": self.systemPrompt(for: kind, customInstructions: customInstructions)],
             ["role": "user", "content": transcript],
         ]
     }
 
-    private static func task(for kind: MeetingSummaryKind) -> String {
+    private static func task(for kind: MeetingSummaryKind, customInstructions: String) -> String {
         switch kind {
+        case .custom:
+            // The user's text replaces only the task; the source-material rules above stay first.
+            "Follow the user's instructions below. They may change the format, length and language, "
+                + "but never the rule to use only information in the transcript.\n\n"
+                + "User instructions:\n\(customInstructions.trimmingCharacters(in: .whitespacesAndNewlines))"
         case .executive:
             "Write an executive summary: one short paragraph of three to five sentences on the purpose and outcome of the meeting, followed by at most five bullets with the most important points, decisions and next steps."
         case .detailed:
@@ -149,11 +154,42 @@ nonisolated enum MeetingCloudSummaryPrompt {
 
 nonisolated enum MeetingCloudSummaryError: LocalizedError, Equatable {
     case emptyResponse
+    case incompleteResponse
+    case missingCustomPrompt
 
     var errorDescription: String? {
         switch self {
         case .emptyResponse: "The AI provider returned an empty summary. Try again or choose another model in AI Providers."
+        case .incompleteResponse:
+            "The AI provider stopped before the summary was finished, so it was not saved. "
+                + "Try a shorter summary type or a model with a larger output limit."
+        case .missingCustomPrompt: "Write a custom prompt before summarizing."
         }
+    }
+}
+
+/// The text of the Custom prompt summary type. It is content, not a provider choice, so it lives
+/// beside the meeting settings rather than in AI Providers. Upstream uses the same key.
+nonisolated enum MeetingSummaryCustomPrompt {
+    static let defaultsKey = "MeetingSummaryCustomPrompt"
+    static let maximumLength = 4000
+
+    static func load(from defaults: UserDefaults = .standard) -> String {
+        defaults.string(forKey: self.defaultsKey) ?? ""
+    }
+
+    static func save(_ prompt: String, to defaults: UserDefaults = .standard) {
+        let bounded = String(prompt.prefix(self.maximumLength))
+        if bounded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            defaults.removeObject(forKey: self.defaultsKey)
+        } else {
+            defaults.set(bounded, forKey: self.defaultsKey)
+        }
+    }
+
+    /// Identifies the prompt a saved custom summary answered, so editing the prompt hides it.
+    static func fingerprint(_ prompt: String) -> String {
+        MeetingSummaryInput.fingerprint(prompt.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
 
@@ -169,14 +205,18 @@ nonisolated enum MeetingCloudSummaryService {
     static func summarize(
         transcript: String,
         kind: MeetingSummaryKind,
+        customInstructions: String = "",
         route: MeetingCloudSummaryRoute,
         extraParameters: [String: Any],
         sendsTemperature: Bool,
         client: LLMClient = MeetingCloudSummaryService.sharedClient,
         onContentChunk: @escaping @Sendable (String) -> Void
     ) async throws -> String {
+        guard kind != .custom || !customInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw MeetingCloudSummaryError.missingCustomPrompt
+        }
         var config = LLMClient.Config(
-            messages: MeetingCloudSummaryPrompt.messages(transcript: transcript, kind: kind),
+            messages: MeetingCloudSummaryPrompt.messages(transcript: transcript, kind: kind, customInstructions: customInstructions),
             model: route.model,
             baseURL: route.baseURL,
             apiKey: route.apiKey,
@@ -187,6 +227,8 @@ nonisolated enum MeetingCloudSummaryService {
         config.timeoutSeconds = 120
         config.onContentChunk = onContentChunk
         let response = try await client.call(config)
+        // A summary cut off at the output limit reads as complete but silently drops its end.
+        guard !response.isIncomplete else { throw MeetingCloudSummaryError.incompleteResponse }
         let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw MeetingCloudSummaryError.emptyResponse }
         return text

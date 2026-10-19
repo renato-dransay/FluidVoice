@@ -105,7 +105,7 @@ final class MeetingCloudSummaryTests: XCTestCase {
     }
 
     func testEveryKindHasItsOwnTaskAndSharedRules() {
-        let prompts = MeetingSummaryKind.allCases.map(MeetingCloudSummaryPrompt.systemPrompt(for:))
+        let prompts = MeetingSummaryKind.allCases.map { MeetingCloudSummaryPrompt.systemPrompt(for: $0) }
         XCTAssertEqual(Set(prompts).count, MeetingSummaryKind.allCases.count)
         for prompt in prompts {
             XCTAssertTrue(prompt.contains("Never invent names"))
@@ -146,6 +146,124 @@ final class MeetingCloudSummaryTests: XCTestCase {
         XCTAssertEqual(messages.map { $0["role"] }, ["system", "user"])
         XCTAssertEqual(messages.first?["content"], MeetingCloudSummaryPrompt.systemPrompt(for: .decisions))
         XCTAssertEqual(messages.last?["content"], "Title: Planning\n----------\n**Maya**: Ship on Friday.")
+    }
+
+    func testCustomPromptReplacesOnlyTheTask() {
+        let prompt = MeetingCloudSummaryPrompt.systemPrompt(for: .custom, customInstructions: "  List every customer request.\n")
+        XCTAssertTrue(prompt.contains("Never invent names"))
+        XCTAssertTrue(prompt.contains("never the rule to use only information in the transcript"))
+        XCTAssertTrue(prompt.hasSuffix("User instructions:\nList every customer request."))
+    }
+
+    func testCustomSummaryWithoutPromptIsRefusedBeforeAnyRequest() async {
+        MeetingSummaryStreamURLProtocol.lastRequest = nil
+        do {
+            _ = try await MeetingCloudSummaryService.summarize(
+                transcript: "Title: Planning",
+                kind: .custom,
+                customInstructions: " \n",
+                route: self.streamRoute,
+                extraParameters: [:],
+                sendsTemperature: false,
+                client: self.streamClient()
+            ) { _ in }
+            XCTFail("An empty custom prompt must not be sent")
+        } catch {
+            XCTAssertEqual(error as? MeetingCloudSummaryError, .missingCustomPrompt)
+        }
+        XCTAssertNil(MeetingSummaryStreamURLProtocol.lastRequest)
+    }
+
+    func testCustomSummarySendsTheUsersInstructions() async throws {
+        _ = try await MeetingCloudSummaryService.summarize(
+            transcript: "Title: Planning",
+            kind: .custom,
+            customInstructions: "Quote Maya.",
+            route: self.streamRoute,
+            extraParameters: [:],
+            sendsTemperature: false,
+            client: self.streamClient()
+        ) { _ in }
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(MeetingSummaryStreamURLProtocol.lastBody)) as? [String: Any])
+        let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
+        XCTAssertEqual(messages.first?["content"], MeetingCloudSummaryPrompt.systemPrompt(for: .custom, customInstructions: "Quote Maya."))
+    }
+
+    func testSummaryCutOffAtTheOutputLimitIsRejected() async {
+        MeetingSummaryStreamURLProtocol.fixture = MeetingSummaryStreamURLProtocol.truncatedFixture
+        defer { MeetingSummaryStreamURLProtocol.fixture = MeetingSummaryStreamURLProtocol.completeFixture }
+        do {
+            _ = try await MeetingCloudSummaryService.summarize(
+                transcript: "Title: Planning",
+                kind: .detailed,
+                route: self.streamRoute,
+                extraParameters: [:],
+                sendsTemperature: false,
+                client: self.streamClient()
+            ) { _ in }
+            XCTFail("A truncated summary must not be returned as complete")
+        } catch {
+            XCTAssertEqual(error as? MeetingCloudSummaryError, .incompleteResponse)
+        }
+    }
+
+    func testFinishReasonsAndResponsesStatusMarkIncompleteOutput() {
+        XCTAssertTrue(LLMClient.Response.isIncompleteFinishReason("length"))
+        XCTAssertTrue(LLMClient.Response.isIncompleteFinishReason("MAX_TOKENS"))
+        XCTAssertFalse(LLMClient.Response.isIncompleteFinishReason("stop"))
+        XCTAssertTrue(LLMClient.Response.isIncompleteResponsesObject(["status": "incomplete"]))
+        XCTAssertTrue(LLMClient.Response.isIncompleteResponsesObject(["incomplete_details": ["reason": "max_output_tokens"]]))
+        XCTAssertFalse(LLMClient.Response.isIncompleteResponsesObject(["status": "completed", "output": []]))
+    }
+
+    func testSavedCustomSummaryIsHiddenOnceThePromptChanges() {
+        let saved = MeetingSummaryController.SavedSummary(
+            transcriptHash: "t",
+            modelID: "cloud:openrouter:a",
+            text: "x",
+            promptHash: MeetingSummaryCustomPrompt.fingerprint("Quote Maya.")
+        )
+        XCTAssertTrue(saved.matches(kind: .custom, customPrompt: " Quote Maya. "))
+        XCTAssertFalse(saved.matches(kind: .custom, customPrompt: "Quote Sam."))
+        let builtIn = MeetingSummaryController.SavedSummary(transcriptHash: "t", modelID: "cloud:openrouter:a", text: "x")
+        XCTAssertTrue(builtIn.matches(kind: .executive, customPrompt: "anything"))
+        XCTAssertFalse(builtIn.matches(kind: .custom, customPrompt: "Quote Maya."))
+    }
+
+    func testSummariesSavedBeforeCustomPromptsStillDecode() throws {
+        let data = Data(#"{"transcriptHash":"t","modelID":"cloud:openrouter:a","text":"x"}"#.utf8)
+        let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: data)
+        XCTAssertNil(saved.promptHash)
+        XCTAssertTrue(saved.matches(kind: .executive, customPrompt: ""))
+    }
+
+    func testCustomPromptIsStoredBoundedAndClearedWhenBlank() throws {
+        let suite = "MeetingSummaryCustomPromptTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        MeetingSummaryCustomPrompt.save("Quote Maya.", to: defaults)
+        XCTAssertEqual(MeetingSummaryCustomPrompt.load(from: defaults), "Quote Maya.")
+        MeetingSummaryCustomPrompt.save(String(repeating: "a", count: 5000), to: defaults)
+        XCTAssertEqual(MeetingSummaryCustomPrompt.load(from: defaults).count, MeetingSummaryCustomPrompt.maximumLength)
+        MeetingSummaryCustomPrompt.save("  ", to: defaults)
+        XCTAssertNil(defaults.string(forKey: MeetingSummaryCustomPrompt.defaultsKey))
+    }
+
+    func testOnDeviceSummariesOfferOnlyTheBuiltInTypes() {
+        XCTAssertFalse(MeetingSummaryKind.available(onDevice: true).contains(.custom))
+        XCTAssertTrue(MeetingSummaryKind.available(onDevice: false).contains(.custom))
+    }
+
+    private var streamRoute: MeetingCloudSummaryRoute {
+        MeetingCloudSummaryRoute(
+            providerKey: "openrouter", providerName: "OpenRouter", baseURL: "https://meeting-summary.test/api/v1", model: "openai/gpt-oss-20b", apiKey: "secret"
+        )
+    }
+
+    private func streamClient() -> LLMClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryStreamURLProtocol.self]
+        return LLMClient(session: URLSession(configuration: configuration))
     }
 
     /// The key migration filled an empty OpenAI text entry with the Live OpenAI key. Before the update that
@@ -208,12 +326,23 @@ private class MeetingSummaryStreamURLProtocol: URLProtocol {
     nonisolated(unsafe) static var lastRequest: URLRequest?
     nonisolated(unsafe) static var lastBody: Data?
 
-    private static let fixture = #"""
+    nonisolated(unsafe) static var fixture = completeFixture
+
+    static let completeFixture = #"""
     data: {"choices":[{"index":0,"delta":{"reasoning":"Find decisions."}}]}
 
     data: {"choices":[{"index":0,"delta":{"content":"- Ship "}}]}
 
     data: {"choices":[{"index":0,"delta":{"content":"on Friday."},"finish_reason":"stop"}]}
+
+    data: [DONE]
+
+    """#
+
+    static let truncatedFixture = #"""
+    data: {"choices":[{"index":0,"delta":{"content":"## Budget\nThe team agreed"}}]}
+
+    data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}
 
     data: [DONE]
 
