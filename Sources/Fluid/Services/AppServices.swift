@@ -134,10 +134,15 @@ final class AppServices: ObservableObject {
         self.setupMeetingCoordinatorForwarding()
         // The auto-detected episode itself stays consumed until the meeting's own evidence ends
         // (window/URL gone ≥60s) — not merely because our recording stopped — so only the nudge
-        // needs to be dismissed here.
+        // and the end-of-meeting watch are dropped here.
         coordinator.$state
             .receive(on: DispatchQueue.main)
-            .sink { state in
+            .sink { [weak self, weak coordinator] state in
+                // Deliveries are queued, so read the state as it is now before calling a recording over.
+                switch coordinator?.state {
+                case .preparing, .recording, .recordingDegraded: break
+                default: self?._meetingAutoDetector?.recordingStopped()
+                }
                 guard !MeetingOverlayVisibility.isVisible(for: state) else { return }
                 MeetingStillRecordingNudgeController.shared.hide()
             }
@@ -173,7 +178,8 @@ final class AppServices: ObservableObject {
             },
             isScheduledInCalendar: { fragment, date in
                 await MeetingCalendarContext.shared.isConferenceScheduled(fragment, at: date)
-            }
+            },
+            lastSpeechAt: { [weak self] in self?._meetingSessionCoordinator?.lastLiveSpeechAt }
         )
         self._meetingAutoDetector = detector
         self.wireMeetingAutoDetector(detector)
@@ -195,6 +201,9 @@ final class AppServices: ObservableObject {
         detector.onStillRecordingNudge = {
             MeetingStillRecordingNudgeController.shared.present()
         }
+        detector.onStillRecordingNudgeWithdrawn = {
+            MeetingStillRecordingNudgeController.shared.hide()
+        }
         detector.onSuggestDisablingAutoDetect = {
             MeetingAutoDetectDismissalAdvisor.shared.shouldSuggest = true
         }
@@ -215,6 +224,9 @@ final class AppServices: ObservableObject {
         }
         MeetingDetectionPromptController.shared.onTimeout = { [weak self] episodeID in
             self?._meetingAutoDetector?.timeoutDismissed(episodeID: episodeID)
+        }
+        MeetingStillRecordingNudgeController.shared.onDismiss = { [weak self] in
+            self?._meetingAutoDetector?.stillRecordingNudgeDismissed()
         }
         MeetingStillRecordingNudgeController.shared.onStop = { [weak self] in
             guard let self else { return }
@@ -253,6 +265,18 @@ final class AppServices: ObservableObject {
         _ = try await coordinator.startRecording(configuration: configuration)
         detector.adoptStartedEpisode(episodeID: episodeID)
         AppNavigationRouter.shared.request(.meetingTranscription)
+    }
+
+    /// For a recording started without a detection prompt (a calendar reminder, the menu bar, or
+    /// the meeting page): watch the recorded app so "Meeting ended?" can still be asked. Does not
+    /// materialize a detector that is not running.
+    func watchMeetingEnd(for configuration: MeetingCaptureConfiguration) {
+        guard let detector = self._meetingAutoDetector else { return }
+        guard configuration.mode == .onlineCall, let application = configuration.application else {
+            detector.recordingStopped()
+            return
+        }
+        detector.watchRecording(bundleIdentifier: application.bundleIdentifier, pid: application.processID)
     }
 
     /// Read-only meeting check that does not initialize the meeting stack.

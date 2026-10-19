@@ -273,6 +273,8 @@ extension AppServices {
         configuration.calendar = reminder.calendarMatch
         try Task.checkCancellation()
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
+        // No detection prompt adopted this call, so watch the recorded app for "Meeting ended?".
+        self.watchMeetingEnd(for: configuration)
         DebugLogger.shared.info("reminder-recording-started bundle=\(targetBundleIdentifier)", source: "MeetingCalendarReminders")
     }
 

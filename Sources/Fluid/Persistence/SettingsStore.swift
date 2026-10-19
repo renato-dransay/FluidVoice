@@ -2287,13 +2287,20 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    /// Tier 2 browser-tab meeting auto-detection. On unless the user turned it off: Google Meet
+    /// only exists in a browser. It reads the frontmost tab's URL, which is never stored or sent.
     var meetingAutoDetectBrowserEnabled: Bool {
-        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
+        get { Self.meetingAutoDetectBrowserEnabled(in: self.defaults) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
         }
+    }
+
+    /// A stored choice wins; a key that was never written reads as on.
+    static func meetingAutoDetectBrowserEnabled(in defaults: UserDefaults) -> Bool {
+        guard defaults.object(forKey: Keys.meetingAutoDetectBrowserEnabled) != nil else { return true }
+        return defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled)
     }
 
     /// Reminder before a calendar event with a call link starts, offering Open and Open & Transcribe

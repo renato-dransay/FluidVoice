@@ -319,11 +319,11 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) != nil }
+        self.applications.pickerSections.usual
     }
 
     private var otherApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) == nil }
+        self.applications.pickerSections.others
     }
 
     private var selectedApplicationName: String {

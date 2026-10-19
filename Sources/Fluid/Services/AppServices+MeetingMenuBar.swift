@@ -23,6 +23,7 @@ extension AppServices {
             calendar: calendar
         )
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
+        self.watchMeetingEnd(for: configuration)
     }
 
     static func menuBarMeetingConfiguration(
