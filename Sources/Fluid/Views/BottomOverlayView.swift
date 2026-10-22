@@ -3258,6 +3258,7 @@ struct BottomOverlayView: View {
 
     private var textDeliveryFailureView: some View {
         let message = self.contentState.textDeliveryFailureMessage
+        let failureID = self.contentState.textDeliveryFailureID
         return DeliveryFailureCard(
             title: message,
             detail: TextDeliveryFailure.userFacingDetail(forMessage: message),
@@ -3266,9 +3267,10 @@ struct BottomOverlayView: View {
             compact: false,
             maxWidth: self.previewMaxWidth
         ) {
-            self.contentState.clearTextDeliveryFailure()
+            guard self.contentState.clearTextDeliveryFailure(ifPresentationID: failureID) else { return }
             NotchOverlayManager.shared.hide()
         }
+        .id(failureID)
     }
 
     private func scrollablePreviewText(_ previewText: String) -> some View {
