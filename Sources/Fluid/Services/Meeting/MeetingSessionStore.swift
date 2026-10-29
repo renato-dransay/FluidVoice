@@ -117,6 +117,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         let allIDs = Array(Set(indexedIDs).union(discoveredIDs))
 
         var sessions: [MeetingSession] = []
+        var firstLoadError: Error?
         sessions.reserveCapacity(allIDs.count)
         for id in allIDs {
             do {
@@ -124,12 +125,15 @@ actor MeetingSessionStore: MeetingSessionStoring {
                     sessions.append(session)
                 }
             } catch {
+                if firstLoadError == nil { firstLoadError = error }
                 DebugLogger.shared.error(
                     "Failed to load meeting session \(id): \(error.localizedDescription)",
                     source: "MeetingSessionStore"
                 )
             }
         }
+        // Keep partial results, but do not replace history with an empty catalog after a read failure.
+        if sessions.isEmpty, let firstLoadError { throw firstLoadError }
         return sessions.sorted { $0.startedAt > $1.startedAt }
     }
 
