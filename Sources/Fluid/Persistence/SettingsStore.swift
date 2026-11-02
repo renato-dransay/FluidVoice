@@ -3592,10 +3592,14 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether the model rejects the `temperature` parameter.
-    /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
-    func isTemperatureUnsupported(_ model: String) -> Bool {
+    /// Reasoning models never take it. Otherwise a value learned for this endpoint and model
+    /// wins, whether from the provider's `/models` listing or from an HTTP 400 at request time
+    /// (`ModelTemperatureSupport`); then a version check covers Anthropic models that have
+    /// deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and
+    /// older still accept it).
+    func isTemperatureUnsupported(_ model: String, baseURL: String, support: ModelTemperatureSupport = .shared) -> Bool {
         if self.isReasoningModel(model) { return true }
+        if let supported = support.isSupported(model, baseURL: baseURL) { return !supported }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")

@@ -313,7 +313,13 @@ final class ModelRepository {
     ///   - baseURL: The base URL for the API (e.g., "https://api.openai.com/v1")
     ///   - apiKey: Optional API key for authentication
     /// - Returns: Array of model IDs sorted alphabetically
-    func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+    /// - Parameter temperatureSupport: Receives per-model `temperature` support when the listing includes it.
+    func fetchModels(
+        for providerID: String,
+        baseURL: String,
+        apiKey: String?,
+        temperatureSupport: ModelTemperatureSupport = .shared
+    ) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }
@@ -392,6 +398,7 @@ final class ModelRepository {
         // Try OpenAI/Groq/Cerebras format first
         if let dataArray = json["data"] as? [[String: Any]] {
             let models = dataArray.compactMap { $0["id"] as? String }
+            temperatureSupport.record(ModelTemperatureSupport.entries(fromModelsResponse: json), baseURL: baseURL)
             DebugLogger.shared.debug(
                 "fetchModels: Found \(models.count) models for '\(providerID)' (OpenAI format)",
                 source: "ModelRepository"

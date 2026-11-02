@@ -383,7 +383,7 @@ final class MeetingSummaryController: ObservableObject {
             transcript: nil,
             settings: settings
         ).options.extraParameters
-        let sendsTemperature = !settings.isTemperatureUnsupported(route.model)
+        let sendsTemperature = !settings.isTemperatureUnsupported(route.model, baseURL: route.baseURL)
         let generation = UUID()
         self.generation = generation
         self.generating = true

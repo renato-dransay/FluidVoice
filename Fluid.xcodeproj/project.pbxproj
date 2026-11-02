@@ -121,6 +121,7 @@
 		B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */; };
 		C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */; };
 		C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */; };
+		C0DE63900000000000000002 /* ModelTemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63900000000000000001 /* ModelTemperatureSupportTests.swift */; };
 		CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */; };
 		51AB0E0100000000000000B2 /* ProviderKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */; };
 		51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */; };
@@ -282,6 +283,7 @@
 		B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateAIDictationTokenBudgetTests.swift; sourceTree = "<group>"; };
 		C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperLanguageSelectionTests.swift; sourceTree = "<group>"; };
 		C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechLocaleSelectionTests.swift; sourceTree = "<group>"; };
+		C0DE63900000000000000001 /* ModelTemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTemperatureSupportTests.swift; sourceTree = "<group>"; };
 		CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceCacheTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderKeyStoreTests.swift; sourceTree = "<group>"; };
 		51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRegistryTests.swift; sourceTree = "<group>"; };
@@ -553,6 +555,7 @@
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				C0DE63800000000000000001 /* AppleSpeechLocaleSelectionTests.swift */,
+				C0DE63900000000000000001 /* ModelTemperatureSupportTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				51AB0E0100000000000000B1 /* ProviderKeyStoreTests.swift */,
 				51AB0E0100000000000000A1 /* ProviderRegistryTests.swift */,
@@ -962,6 +965,7 @@
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				C0DE63800000000000000002 /* AppleSpeechLocaleSelectionTests.swift in Sources */,
+				C0DE63900000000000000002 /* ModelTemperatureSupportTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				51AB0E0100000000000000B2 /* ProviderKeyStoreTests.swift in Sources */,
 				51AB0E0100000000000000A2 /* ProviderRegistryTests.swift in Sources */,

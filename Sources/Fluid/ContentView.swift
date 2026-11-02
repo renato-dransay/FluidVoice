@@ -2881,7 +2881,7 @@ struct ContentView: View {
         }
 
         // Check if this model doesn't support the temperature parameter
-        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel)
+        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel, baseURL: derivedBaseURL)
 
         // Reasoning parameters and, for a dictation's Cleanup Style, the speed options come from one place.
         let providerKey = self.providerKey(for: currentSelectedProviderID)

@@ -980,7 +980,7 @@ final class CommandModeService: ObservableObject {
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = settings.isReasoningModel(model)
-        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
+        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model, baseURL: baseURL)
 
         // Reasoning parameter for this model (e.g., reasoning_effort, enable_thinking), saved under the provider key
         let extraParams = TextRequestOptions.resolve(
