@@ -342,8 +342,8 @@ final class HotkeyShortcutTests: XCTestCase {
         var starts = 0
         let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: { starts += 1 })
         manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: [])])
-        let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
-        let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        let down = try self.middleMouseEvent(.otherMouseDown)
+        let up = try self.middleMouseEvent(.otherMouseUp)
 
         XCTAssertNil(manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down))
         for _ in 0..<10 {
@@ -371,8 +371,8 @@ final class HotkeyShortcutTests: XCTestCase {
         settings.pasteLastTranscriptionShortcutEnabled = true
         let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: {})
         manager.setPasteLastTranscriptionCallback {}
-        let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
-        let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        let down = try self.middleMouseEvent(.otherMouseDown)
+        let up = try self.middleMouseEvent(.otherMouseUp)
 
         XCTAssertNil(manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down))
         manager.updatePrimaryShortcuts([HotkeyShortcut(keyCode: 3, modifierFlags: [.control, .command])])
@@ -546,8 +546,8 @@ final class HotkeyShortcutTests: XCTestCase {
         var starts = 0
         let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
         manager.updatePrimaryShortcuts([HotkeyShortcut(mouseButton: 2, modifierFlags: .control)])
-        let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
-        let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+        let down = try self.middleMouseEvent(.otherMouseDown)
+        let up = try self.middleMouseEvent(.otherMouseUp)
         down.flags = .maskControl
         _ = manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down)
         down.flags = []
@@ -1438,14 +1438,14 @@ final class HotkeyShortcutTests: XCTestCase {
             let shortcut = mouse ? HotkeyShortcut(mouseButton: 2, modifierFlags: []) : HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])
             manager.updatePrimaryShortcuts([shortcut])
             if mouse {
-                let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                let down = try self.middleMouseEvent(.otherMouseDown)
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
             }
             manager.updatePrimaryShortcuts([shortcut, HotkeyShortcut(keyCode: 3, modifierFlags: .control)])
             if mouse {
-                let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                let up = try self.middleMouseEvent(.otherMouseUp)
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseUp, event: up)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
@@ -1844,7 +1844,7 @@ final class HotkeyShortcutTests: XCTestCase {
             let manager = self.makePrimaryReleaseTestManager(asr: ASRService(), onStart: { starts += 1 })
             manager.updatePrimaryShortcuts([first, modifier])
             if mouse {
-                let down = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center))
+                let down = try self.middleMouseEvent(.otherMouseDown)
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseDown, event: down)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
@@ -1857,7 +1857,7 @@ final class HotkeyShortcutTests: XCTestCase {
             }
             XCTAssertEqual(starts, 0, "A second modifier shortcut must not activate before the owning key/button releases")
             if mouse {
-                let up = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .otherMouseUp, mouseCursorPosition: .zero, mouseButton: .center))
+                let up = try self.middleMouseEvent(.otherMouseUp)
                 _ = manager.handleMouseShortcutEvent(type: .otherMouseUp, event: up)
             } else {
                 _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp, modifiers: []))
@@ -2165,6 +2165,15 @@ final class HotkeyShortcutTests: XCTestCase {
         )
         manager.setHotkeyMode(.toggle)
         return manager
+    }
+
+    /// A middle-button event with no modifiers. An event made without a source inherits the
+    /// machine's current modifier state, so a Command key the system still reports as held (for
+    /// example after an older synthetic paste) would turn Middle Click into Command+Middle Click.
+    private func middleMouseEvent(_ type: CGEventType) throws -> CGEvent {
+        let event = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: .zero, mouseButton: .center))
+        event.flags = []
+        return event
     }
 
     private func primaryReleaseTestEvent(
