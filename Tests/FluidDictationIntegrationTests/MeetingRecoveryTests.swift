@@ -4910,6 +4910,152 @@ final class MeetingRecoveryTests: XCTestCase {
         let reloaded = try await store.load(id: session.id)
         XCTAssertEqual(reloaded, before)
     }
+
+    // MARK: - Renaming keeps saved summaries
+
+    private static let fixtureSummaryEngine = MeetingSummaryEngine.cloud(MeetingCloudSummaryRoute(
+        providerKey: "fixture", providerName: "Fixture provider", baseURL: "https://fixture.test/v1", model: "fixture-model", apiKey: ""
+    ))
+
+    func testRenameSessionPreservesLegacySummaryKindsAcrossReloads() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let prompt = "List risks by owner."
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let legacyHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        for kind in MeetingSummaryKind.allCases {
+            let saved = MeetingSummaryController.SavedSummary(
+                transcriptHash: legacyHash,
+                modelID: Self.fixtureSummaryEngine.savedModelID,
+                text: "Saved \(kind.rawValue) summary",
+                promptHash: kind == .custom ? MeetingSummaryCustomPrompt.fingerprint(prompt) : nil
+            )
+            let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+            try JSONEncoder().encode(saved).write(to: file, options: .atomic)
+            let controller = MeetingSummaryController(store: store, engine: Self.fixtureSummaryEngine)
+            await controller.refresh(session: session, kind: kind, customPrompt: prompt)
+            XCTAssertEqual(controller.output, saved.text, "Legacy \(kind) summary should load before rename")
+        }
+
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        _ = try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync")
+
+        // A new store and controller must recover the summaries from disk, without live state.
+        let reloadedStore = MeetingSessionStore(rootDirectory: dir)
+        let loaded = try await reloadedStore.load(id: session.id)
+        let renamed = try XCTUnwrap(loaded)
+        XCTAssertEqual(renamed.title, "Weekly Sync")
+        let controller = MeetingSummaryController(store: reloadedStore, engine: Self.fixtureSummaryEngine)
+        var upgradedFiles: [MeetingSummaryKind: Data] = [:]
+        for kind in MeetingSummaryKind.allCases {
+            await controller.refresh(session: renamed, kind: kind, customPrompt: prompt)
+            XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary", "\(kind)")
+            let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+            let data = try Data(contentsOf: file)
+            upgradedFiles[kind] = data
+            let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: data)
+            XCTAssertEqual(saved.transcriptHashVersion, MeetingSummaryController.SavedSummary.currentTranscriptHashVersion)
+            XCTAssertEqual(saved.modelID, Self.fixtureSummaryEngine.savedModelID)
+        }
+
+        // Already-upgraded summaries survive another rename without rewriting their files.
+        let secondRename = try await coordinator.renameSession(sessionID: session.id, to: "New Weekly Sync")
+        for kind in MeetingSummaryKind.allCases {
+            await controller.refresh(session: secondRename, kind: kind, customPrompt: prompt)
+            XCTAssertEqual(controller.output, "Saved \(kind.rawValue) summary")
+            let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+            XCTAssertEqual(try Data(contentsOf: file), upgradedFiles[kind])
+        }
+        await controller.refresh(session: secondRename, kind: .custom, customPrompt: "Edited prompt")
+        XCTAssertTrue(controller.output.isEmpty, "Migrating a custom summary must retain its prompt check")
+        var corrected = secondRename
+        corrected.transcriptSegments[0].text += " A transcript correction."
+        await controller.refresh(session: corrected, kind: .detailed)
+        XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable transcript invalidation")
+        corrected = secondRename
+        corrected.speakers[0].displayName = "Corrected speaker"
+        await controller.refresh(session: corrected, kind: .participants)
+        XCTAssertTrue(controller.output.isEmpty, "Renaming must not disable speaker invalidation")
+    }
+
+    func testRenameSessionDoesNotReviveInvalidSavedSummaries() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let hash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        let modelID = Self.fixtureSummaryEngine.savedModelID
+        let stale = MeetingSummaryController.SavedSummary(transcriptHash: "old transcript", modelID: modelID, text: "Stale")
+        let retired = MeetingSummaryController.SavedSummary(transcriptHash: hash, modelID: "on-device-model", text: "Retired")
+        let unknownVersion = MeetingSummaryController.SavedSummary(transcriptHash: hash, modelID: modelID, text: "Future", transcriptHashVersion: 99)
+        let files: [MeetingSummaryKind: Data] = try [
+            .executive: JSONEncoder().encode(stale),
+            .detailed: JSONEncoder().encode(retired),
+            .actions: Data("corrupt summary".utf8),
+            .decisions: JSONEncoder().encode(unknownVersion),
+        ]
+        for (kind, data) in files {
+            try data.write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+        }
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync")
+        let controller = MeetingSummaryController(store: store, engine: Self.fixtureSummaryEngine)
+        for (kind, data) in files {
+            await controller.refresh(session: renamed, kind: kind)
+            XCTAssertTrue(controller.output.isEmpty, "\(kind) must stay hidden")
+            let file = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+            if kind == .detailed {
+                // The retired on-device summary still matched the title-dependent hash, so it is upgraded
+                // like any other legacy file; the engine check keeps it hidden.
+                let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: Data(contentsOf: file))
+                XCTAssertEqual(saved.text, "Retired")
+                XCTAssertEqual(saved.transcriptHash, MeetingSummaryInput.contentFingerprint(for: session))
+            } else {
+                XCTAssertEqual(try Data(contentsOf: file), data, "An invalid file must not be upgraded")
+            }
+        }
+    }
+
+    func testFailedRenameKeepsMigratedSummaryVisibleAndAllowsRetry() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let file = directory.appendingPathComponent("manual-summary-detailed.json")
+        let saved = MeetingSummaryController.SavedSummary(
+            transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+            modelID: Self.fixtureSummaryEngine.savedModelID,
+            text: "Detailed summary"
+        )
+        try JSONEncoder().encode(saved).write(to: file, options: .atomic)
+        let failingStore = GatedThrowingSaveStore(inner: store, recorder: EventRecorder())
+        await failingStore.throwOnNextSave()
+        let coordinator = MeetingSessionCoordinator(
+            store: failingStore, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        await XCTAssertThrowsErrorAsync(try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync"))
+        let loaded = try await store.load(id: session.id)
+        let unchanged = try XCTUnwrap(loaded)
+        XCTAssertEqual(unchanged.title, session.title)
+        let controller = MeetingSummaryController(store: store, engine: Self.fixtureSummaryEngine)
+        await controller.refresh(session: unchanged, kind: .detailed)
+        XCTAssertEqual(controller.output, saved.text)
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: "Weekly Sync")
+        await controller.refresh(session: renamed, kind: .detailed)
+        XCTAssertEqual(controller.output, saved.text)
+    }
 }
 
 /// XCTAssertThrowsError has no async overload; this bridges an async throwing expression.

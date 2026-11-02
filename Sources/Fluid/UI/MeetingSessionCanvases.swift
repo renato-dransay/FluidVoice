@@ -439,7 +439,7 @@ struct MeetingResultCanvas: View {
 
                 if self.documentSection == .summary {
                     MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
-                        .id("\(self.session.id)-\(self.session.updatedAt)")
+                        .id(self.session.id)
                 } else {
                     if !activeSpeakers.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {

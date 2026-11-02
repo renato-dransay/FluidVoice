@@ -55,6 +55,14 @@ nonisolated enum MeetingSummaryInput {
     static func fingerprint(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Identity of what a summary describes. The title stays in the model's input, but renaming
+    /// a meeting must not hide its saved summaries, so the title is left out here.
+    static func contentFingerprint(for session: MeetingSession) -> String {
+        var source = session
+        source.title = ""
+        return self.fingerprint(self.transcript(for: source))
+    }
 }
 
 /// Keeps summary admission separate from ordinary processing, including cloud calls that
@@ -154,16 +162,22 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
+    private let store: any MeetingSessionStoring
+    /// Tests pin an engine; the app resolves one from the registered model or AI Providers.
+    private let engineOverride: MeetingSummaryEngine?
     var busy: Bool { self.downloading || self.generating || self.deleting }
     var model: PrivateAIRegisteredModel? {
         PrivateAIModelRegistry.modelIDs(for: .meetingSummary).first.flatMap { PrivateAIModelRegistry.model(id: $0) }
     }
 
-    init() {
+    init(store: any MeetingSessionStoring = MeetingSessionStore.shared, engine: MeetingSummaryEngine? = nil) {
+        self.store = store
+        self.engineOverride = engine
         self.engine = self.resolveEngine()
     }
 
     private func resolveEngine() -> MeetingSummaryEngine? {
+        if let engineOverride { return engineOverride }
         if let model {
             return .onDevice(modelID: model.id)
         }
@@ -171,15 +185,51 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     nonisolated struct SavedSummary: Codable, Sendable {
-        let transcriptHash: String
+        /// Version 2 hashes the transcript without the meeting title. A missing version is the
+        /// original hash of the whole model input, title included.
+        static let currentTranscriptHashVersion = 2
+
+        var transcriptHash: String
         let modelID: String
         let text: String
         /// Fingerprint of the custom prompt a Custom prompt summary answered; nil for the built-in types.
         var promptHash: String?
+        var transcriptHashVersion: Int?
 
         /// A custom summary stays visible only while the prompt that produced it is unchanged.
         func matches(kind: MeetingSummaryKind, customPrompt: String) -> Bool {
             kind != .custom || self.promptHash == MeetingSummaryCustomPrompt.fingerprint(customPrompt)
+        }
+
+        /// Whether the summary still describes this session's transcript and speakers. A file from
+        /// an unknown future version is never shown.
+        func matchesTranscript(of session: MeetingSession) -> Bool {
+            switch self.transcriptHashVersion {
+            case nil:
+                self.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            case Self.currentTranscriptHashVersion:
+                self.transcriptHash == MeetingSummaryInput.contentFingerprint(for: session)
+            default:
+                false
+            }
+        }
+
+        /// Upgrades title-dependent summary files to the current hash before a rename is saved,
+        /// while the original title can still verify them. Each upgraded file stays valid even if a
+        /// later write (including the rename itself) fails. Files that no longer match are left alone.
+        static func migrateLegacySummaries(in directory: URL, for session: MeetingSession) throws {
+            let legacyHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            let contentHash = MeetingSummaryInput.contentFingerprint(for: session)
+            for kind in MeetingSummaryKind.allCases {
+                let url = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
+                guard var saved = try? JSONDecoder().decode(Self.self, from: Data(contentsOf: url)),
+                      saved.transcriptHashVersion == nil,
+                      saved.transcriptHash == legacyHash
+                else { continue }
+                saved.transcriptHash = contentHash
+                saved.transcriptHashVersion = Self.currentTranscriptHashVersion
+                try JSONEncoder().encode(saved).write(to: url, options: .atomic)
+            }
         }
     }
 
@@ -193,6 +243,7 @@ final class MeetingSummaryController: ObservableObject {
         let engine = self.resolveEngine()
         self.engine = engine
         let model = self.model
+        let store = self.store
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, String) in
             let installed: Bool = switch engine {
             case .cloud: true
@@ -200,12 +251,12 @@ final class MeetingSummaryController: ObservableObject {
             case nil: false
             }
             guard let session, let engine,
-                  let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
+                  let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
                   engine.accepts(savedModelID: saved.modelID),
                   saved.matches(kind: kind, customPrompt: customPrompt),
-                  saved.transcriptHash == MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+                  saved.matchesTranscript(of: session)
             else { return (installed, "") }
             return (installed, saved.text)
         }.value
@@ -281,7 +332,9 @@ final class MeetingSummaryController: ObservableObject {
             }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
-                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                        (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                    }.value
                     guard transcript.utf8.count <= 96_000 else { throw MeetingPostProcessingError.inputTooLarge }
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
@@ -294,8 +347,13 @@ final class MeetingSummaryController: ObservableObject {
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
                     self.output = text
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
-                    let saved = SavedSummary(transcriptHash: MeetingSummaryInput.fingerprint(transcript), modelID: model.id, text: text)
+                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else { return }
+                    let saved = SavedSummary(
+                        transcriptHash: contentHash,
+                        modelID: model.id,
+                        text: text,
+                        transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
+                    )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                     }.value
@@ -338,7 +396,9 @@ final class MeetingSummaryController: ObservableObject {
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(selectionLock)
             }
             do {
-                let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                    (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                }.value
                 guard transcript.utf8.count <= MeetingCloudSummaryPrompt.maximumTranscriptBytes else {
                     throw MeetingPostProcessingError.inputTooLarge
                 }
@@ -361,12 +421,13 @@ final class MeetingSummaryController: ObservableObject {
                 }
                 try Task.checkCancellation()
                 self.output = text
-                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else { return }
+                guard let directory = try await self.store.existingSessionDirectory(for: session.id) else { return }
                 let saved = SavedSummary(
-                    transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                    transcriptHash: contentHash,
                     modelID: route.savedModelID,
                     text: text,
-                    promptHash: kind == .custom ? MeetingSummaryCustomPrompt.fingerprint(customPrompt) : nil
+                    promptHash: kind == .custom ? MeetingSummaryCustomPrompt.fingerprint(customPrompt) : nil,
+                    transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                 )
                 try await Task.detached(priority: .utility) {
                     try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)

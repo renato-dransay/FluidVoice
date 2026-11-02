@@ -15,12 +15,52 @@ final class MeetingSummaryInputTests: XCTestCase {
 
     func testChangedTextOrSpeakerInvalidatesSavedSummary() {
         var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
-        let original = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
         session.transcriptSegments[0].text = "Corrected transcript"
-        let corrected = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        let corrected = MeetingSummaryInput.contentFingerprint(for: session)
         XCTAssertNotEqual(original, corrected)
         session.speakers[0].displayName = "Maya"
-        XCTAssertNotEqual(corrected, MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)))
+        XCTAssertNotEqual(corrected, MeetingSummaryInput.contentFingerprint(for: session))
+    }
+
+    func testRenamingKeepsContentFingerprintButUpdatesModelInput() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let original = MeetingSummaryInput.contentFingerprint(for: session)
+        for title in ["Weekly Sync", "A title\nwith a second line", ""] {
+            session.title = title
+            session.updatedAt = session.updatedAt.addingTimeInterval(1)
+            XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: session), original)
+            XCTAssertTrue(MeetingSummaryInput.transcript(for: session).hasPrefix("Title: \(title)\n"))
+        }
+    }
+
+    func testSavedSummaryMatchesTranscriptByHashVersion() {
+        var session = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        let legacy = MeetingSummaryController.SavedSummary(
+            transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+            modelID: "cloud:openrouter:a",
+            text: "x"
+        )
+        let current = MeetingSummaryController.SavedSummary(
+            transcriptHash: MeetingSummaryInput.contentFingerprint(for: session),
+            modelID: "cloud:openrouter:a",
+            text: "x",
+            transcriptHashVersion: MeetingSummaryController.SavedSummary.currentTranscriptHashVersion
+        )
+        let future = MeetingSummaryController.SavedSummary(
+            transcriptHash: MeetingSummaryInput.contentFingerprint(for: session),
+            modelID: "cloud:openrouter:a",
+            text: "x",
+            transcriptHashVersion: 99
+        )
+        XCTAssertTrue(legacy.matchesTranscript(of: session))
+        XCTAssertTrue(current.matchesTranscript(of: session))
+        XCTAssertFalse(future.matchesTranscript(of: session), "An unknown hash version is never trusted")
+        session.title = "Renamed"
+        XCTAssertFalse(legacy.matchesTranscript(of: session), "A legacy file hashes the title, so a rename hides it until migrated")
+        XCTAssertTrue(current.matchesTranscript(of: session))
+        session.transcriptSegments[0].text = "Corrected transcript"
+        XCTAssertFalse(current.matchesTranscript(of: session))
     }
 
     /// A saved meeting keeps whole seconds, so a reloaded session must produce the same text and
@@ -38,6 +78,7 @@ final class MeetingSummaryInputTests: XCTestCase {
             MeetingSummaryInput.fingerprint(liveInput),
             MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded))
         )
+        XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: live), MeetingSummaryInput.contentFingerprint(for: reloaded))
     }
 
     @MainActor

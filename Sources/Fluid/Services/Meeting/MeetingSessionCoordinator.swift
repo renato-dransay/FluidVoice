@@ -1072,6 +1072,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
         guard target.title != trimmed else { return target }
 
+        // Saved summaries made before the title left the hash still need the old title to verify.
+        if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
+            let snapshot = target
+            try await Task.detached(priority: .utility) {
+                try MeetingSummaryController.SavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
+            }.value
+        }
+
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()
