@@ -842,7 +842,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             meetingRuntimeFactory: { request in
                 spy.requests.append(request)
                 return runtime
-            }
+            },
+            finalConfigurationProvider: { _, language in MeetingFinalProcessingConfiguration(languageCode: language) }
         )
         runtime.asrSession.responses = [
             .init(text: "", words: []), .init(text: "", words: []), .init(text: "", words: []),

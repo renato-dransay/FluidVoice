@@ -22,6 +22,45 @@ final class MeetingProviderOptionsTests: XCTestCase {
         )
     }
 
+    func testPreferredMeetingModelRespectsLanguageAndSupportedModels() throws {
+        let cases: [(SettingsStore.SpeechModel, String, SettingsStore.SpeechModel)] = [
+            (.parakeetTDT, "en", .parakeetTDT),
+            (.parakeetTDT, "nl", .parakeetTDT),
+            (.parakeetTDTv2, "en", .parakeetTDTv2),
+            (.parakeetTDTv2, "fr", .parakeetTDT),
+            (.whisperTiny, "en", .parakeetTDTv2),
+            (.whisperTiny, "de", .parakeetTDT),
+            (.fluidParakeetMini, "en", .parakeetTDTv2),
+        ]
+        for (selected, language, expected) in cases {
+            let configuration = MeetingFinalProcessingConfiguration(preferredASRModel: selected, languageCode: language)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, expected, "\(selected) \(language)")
+            XCTAssertEqual(configuration.languageCode, language)
+        }
+        XCTAssertEqual(MeetingFinalProcessingConfiguration(preferredASRModel: nil, languageCode: "en").asrModel, "parakeet-tdt-v2")
+    }
+
+    func testExplicitMeetingModelRemainsPinnedOverPreference() throws {
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "parakeet-tdt-v2", preferredASRModel: .parakeetTDT)
+        XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, .parakeetTDTv2)
+    }
+
+    @MainActor
+    func testLocalMeetingConfigurationFollowsTheDictationModelOnlyForParakeetNemotron() {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+
+        settings.selectedSpeechModel = .parakeetTDT
+        XCTAssertEqual(settings.meetingFinalConfiguration(backendID: .parakeetNemotron, recordedLanguageCode: "en").asrModel, "parakeet-tdt")
+        XCTAssertEqual(settings.meetingFinalConfiguration(backendID: .parakeetNemotron, recordedLanguageCode: "de").asrModel, "parakeet-tdt")
+        XCTAssertEqual(settings.meetingFinalConfiguration(backendID: .legacyCompatibility, recordedLanguageCode: "en").asrModel, "parakeet-tdt-v2")
+
+        settings.selectedSpeechModel = .fluidParakeetMini
+        XCTAssertEqual(settings.meetingFinalConfiguration(backendID: .parakeetNemotron, recordedLanguageCode: "en").asrModel, "parakeet-tdt-v2")
+        XCTAssertEqual(settings.meetingFinalConfiguration(backendID: .parakeetNemotron, recordedLanguageCode: "de").asrModel, "parakeet-tdt")
+    }
+
     func testResolveRejectsUnsupportedModelsWithoutRelabeling() {
         let unsupportedModels = [
             "parakeet-tdt-v3",

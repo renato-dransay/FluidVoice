@@ -125,6 +125,11 @@ extension SettingsStore {
                 languageCode: self.meetingCloudLanguageCode
             )
         }
-        return MeetingFinalProcessingConfiguration(languageCode: recordedLanguageCode == MeetingCloudLanguage.automatic ? "en" : recordedLanguageCode)
+        // The dictation model is read once here, so a change during processing cannot split one
+        // attempt across two models. Other backends keep their own model policy.
+        return MeetingFinalProcessingConfiguration(
+            preferredASRModel: backendID == .parakeetNemotron ? self.selectedSpeechModel : nil,
+            languageCode: recordedLanguageCode == MeetingCloudLanguage.automatic ? "en" : recordedLanguageCode
+        )
     }
 }
